@@ -16,6 +16,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
@@ -65,6 +67,76 @@ static struct channel_context channels[2] = {0};
 static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
+static int gpio_pin = 18;
+static int gpio_initialized = 0;
+
+int init_gpio_pin(int pin) {
+    char path[64];
+    char value[8];
+    int fd;
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/export");
+    fd = open(path, O_WRONLY);
+    if (fd == -1) {
+        perror("GPIO export failed");
+        return 0;
+    }
+    
+    snprintf(value, sizeof(value), "%d", pin);
+    if (write(fd, value, strlen(value)) == -1) {
+        close(fd);
+    }
+    close(fd);
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
+    fd = open(path, O_WRONLY);
+    if (fd == -1) {
+        perror("GPIO direction failed");
+        return 0;
+    }
+    
+    if (write(fd, "in", 2) == -1) {
+        perror("GPIO direction write failed");
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    
+    printf("GPIO pin %d initialized as input\n", pin);
+    return 1;
+}
+
+int read_gpio_pin(int pin) {
+    char path[64];
+    char value[4];
+    int fd;
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
+    fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        return -1;
+    }
+    
+    if (read(fd, value, 3) == -1) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    
+    return (value[0] == '0') ? 0 : 1;
+}
+
+int is_ptt_active() {
+    if (!gpio_initialized) {
+        if (!init_gpio_pin(gpio_pin)) {
+            return 1;
+        }
+        gpio_initialized = 1;
+    }
+    
+    int pin_state = read_gpio_pin(gpio_pin);
+    return (pin_state == 0);
+}
 
 static void handle_interrupt(int sig) {
     global_interrupted = 1;
@@ -193,7 +265,7 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
-    if (!audio_stream->transmitting || !input) {
+    if (!audio_stream->transmitting || !input || !is_ptt_active()) {
         return paContinue;
     }
     
@@ -416,7 +488,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                 free(buf);
             }
             
-            printf("Starting transmission immediately for channel %s\n", ctx->ws_ctx.channel_id);
+            printf("Channel %s connected, ready for transmission when PTT is active\n", ctx->ws_ctx.channel_id);
             
             const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
             if (!decode_base64(key_b64, ctx->audio.key)) {
@@ -427,22 +499,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
             
             if (setup_udp_for_channel(&ctx->audio, &ctx->config)) {
                 if (start_transmission_for_channel(&ctx->audio)) {
-                    char transmit_msg[512];
-                    time_t now = time(NULL);
-                    
-                    snprintf(transmit_msg, sizeof(transmit_msg),
-                        "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                        ctx->ws_ctx.channel_id, now);
-                    
-                    printf("Sending transmit_started for channel %s: %s\n", ctx->ws_ctx.channel_id, transmit_msg);
-                    
-                    size_t msg_len = strlen(transmit_msg);
-                    unsigned char *buf2 = malloc(LWS_PRE + msg_len);
-                    if (buf2) {
-                        memcpy(&buf2[LWS_PRE], transmit_msg, msg_len);
-                        lws_write(wsi, &buf2[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                        free(buf2);
-                    }
+                    printf("Audio stream ready for channel %s - waiting for PTT activation\n", ctx->ws_ctx.channel_id);
                 }
             }
             break;
@@ -457,36 +514,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                 data[len] = '\0';
                 
                 if (strstr(data, "users_connected") && !ctx->audio.transmitting) {
-                    printf("Channel %s connected, starting transmission...\n", ctx->ws_ctx.channel_id);
-                    
-                    const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
-                    if (!decode_base64(key_b64, ctx->audio.key)) {
-                        fprintf(stderr, "Key decode failed\n");
-                        free(data);
-                        return 0;
-                    }
-                    printf("AES key decoded for channel %s\n", ctx->ws_ctx.channel_id);
-                    
-                    if (setup_udp_for_channel(&ctx->audio, &ctx->config)) {
-                        if (start_transmission_for_channel(&ctx->audio)) {
-                            char transmit_msg[512];
-                            time_t now = time(NULL);
-                            
-                            snprintf(transmit_msg, sizeof(transmit_msg),
-                                "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                                ctx->ws_ctx.channel_id, now);
-                            
-                            printf("Sending transmit_started: %s\n", transmit_msg);
-                            
-                            size_t msg_len = strlen(transmit_msg);
-                            unsigned char *buf = malloc(LWS_PRE + msg_len);
-                            if (buf) {
-                                memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
-                                lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                                free(buf);
-                            }
-                        }
-                    }
+                    printf("Channel %s users connected, ready for transmission when PTT is active\n", ctx->ws_ctx.channel_id);
                 }
                 
                 free(data);
@@ -700,6 +728,11 @@ int main(int argc, char *argv[]) {
     int run_both = 1;
     
     if (argc > 1) {
+        if (argc > 2) {
+            gpio_pin = atoi(argv[2]);
+            printf("Using GPIO pin %d for PTT\n", gpio_pin);
+        }
+        
         int channel = atoi(argv[1]);
         if (channel == 555) {
             run_both = 0;
@@ -711,15 +744,18 @@ int main(int argc, char *argv[]) {
             run_both = 1;
             printf("Running both channels simultaneously\n");
         } else {
-            fprintf(stderr, "Usage: %s [555|666|both]\n", argv[0]);
-            fprintf(stderr, "  555  - Run channel 555 only\n");
-            fprintf(stderr, "  666  - Run channel 666 only\n");
-            fprintf(stderr, "  both - Run both channels simultaneously (default)\n");
+            fprintf(stderr, "Usage: %s [555|666|both] [gpio_pin]\n", argv[0]);
+            fprintf(stderr, "  555       - Run channel 555 only\n");
+            fprintf(stderr, "  666       - Run channel 666 only\n");
+            fprintf(stderr, "  both      - Run both channels simultaneously (default)\n");
+            fprintf(stderr, "  gpio_pin  - GPIO pin number for PTT (default: 18)\n");
             return 1;
         }
     } else {
         printf("Running both channels simultaneously (default)\n");
     }
+    
+    printf("PTT GPIO pin: %d (transmission active when grounded)\n", gpio_pin);
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
