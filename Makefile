@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -I/opt/homebrew/include -I/opt/homebrew/opt/curl/include -I/opt/homebrew/opt/openssl/include
-LIBS = -L/opt/homebrew/lib -L/opt/homebrew/opt/curl/lib -L/opt/homebrew/opt/openssl/lib -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto
+CFLAGS = -Wall -Wextra
+LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread
 
 all: api_call
 
