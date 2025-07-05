@@ -67,8 +67,10 @@ static struct channel_context channels[2] = {0};
 static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
-static int gpio_pin = 18;
-static int gpio_initialized = 0;
+static int gpio_pin_555 = 18;
+static int gpio_pin_666 = 19;
+static int gpio_initialized_555 = 0;
+static int gpio_initialized_666 = 0;
 
 int init_gpio_pin(int pin) {
     char path[64];
@@ -126,15 +128,28 @@ int read_gpio_pin(int pin) {
     return (value[0] == '0') ? 0 : 1;
 }
 
-int is_ptt_active() {
-    if (!gpio_initialized) {
-        if (!init_gpio_pin(gpio_pin)) {
-            return 1;
-        }
-        gpio_initialized = 1;
+int is_ptt_active_for_channel(const char* channel_id) {
+    int pin = 0;
+    int *initialized = NULL;
+    
+    if (strcmp(channel_id, "555") == 0) {
+        pin = gpio_pin_555;
+        initialized = &gpio_initialized_555;
+    } else if (strcmp(channel_id, "666") == 0) {
+        pin = gpio_pin_666;
+        initialized = &gpio_initialized_666;
+    } else {
+        return 0;
     }
     
-    int pin_state = read_gpio_pin(gpio_pin);
+    if (!*initialized) {
+        if (!init_gpio_pin(pin)) {
+            return 1;
+        }
+        *initialized = 1;
+    }
+    
+    int pin_state = read_gpio_pin(pin);
     return (pin_state == 0);
 }
 
@@ -265,7 +280,7 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
-    if (!audio_stream->transmitting || !input || !is_ptt_active()) {
+    if (!audio_stream->transmitting || !input || !is_ptt_active_for_channel(audio_stream->channel_id)) {
         return paContinue;
     }
     
@@ -729,8 +744,12 @@ int main(int argc, char *argv[]) {
     
     if (argc > 1) {
         if (argc > 2) {
-            gpio_pin = atoi(argv[2]);
-            printf("Using GPIO pin %d for PTT\n", gpio_pin);
+            gpio_pin_555 = atoi(argv[2]);
+            printf("Using GPIO pin %d for channel 555 PTT\n", gpio_pin_555);
+        }
+        if (argc > 3) {
+            gpio_pin_666 = atoi(argv[3]);
+            printf("Using GPIO pin %d for channel 666 PTT\n", gpio_pin_666);
         }
         
         int channel = atoi(argv[1]);
@@ -744,18 +763,19 @@ int main(int argc, char *argv[]) {
             run_both = 1;
             printf("Running both channels simultaneously\n");
         } else {
-            fprintf(stderr, "Usage: %s [555|666|both] [gpio_pin]\n", argv[0]);
-            fprintf(stderr, "  555       - Run channel 555 only\n");
-            fprintf(stderr, "  666       - Run channel 666 only\n");
-            fprintf(stderr, "  both      - Run both channels simultaneously (default)\n");
-            fprintf(stderr, "  gpio_pin  - GPIO pin number for PTT (default: 18)\n");
+            fprintf(stderr, "Usage: %s [555|666|both] [gpio_pin_555] [gpio_pin_666]\n", argv[0]);
+            fprintf(stderr, "  555            - Run channel 555 only\n");
+            fprintf(stderr, "  666            - Run channel 666 only\n");
+            fprintf(stderr, "  both           - Run both channels simultaneously (default)\n");
+            fprintf(stderr, "  gpio_pin_555   - GPIO pin number for channel 555 PTT (default: 18)\n");
+            fprintf(stderr, "  gpio_pin_666   - GPIO pin number for channel 666 PTT (default: 19)\n");
             return 1;
         }
     } else {
         printf("Running both channels simultaneously (default)\n");
     }
     
-    printf("PTT GPIO pin: %d (transmission active when grounded)\n", gpio_pin);
+    printf("PTT GPIO pins: Channel 555 -> pin %d, Channel 666 -> pin %d (transmission active when grounded)\n", gpio_pin_555, gpio_pin_666);
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
