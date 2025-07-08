@@ -13,6 +13,8 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 #include <sys/socket.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -72,58 +74,75 @@ static struct shared_connection shared_conn = {0};
 static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
-static int gpio_pin_555 = 18;
-static int gpio_pin_666 = 19;
+static int gpio_pin_555 = 589;  // GPIO 20 (physical pin 38) on RPi5
+static int gpio_pin_666 = 590;  // GPIO 21 (physical pin 40) on RPi5
 static int gpio_initialized_555 = 0;
 static int gpio_initialized_666 = 0;
 
 int init_gpio_pin(int pin) {
-    char path[64];
-    char value[8];
+    char path[64], value[8];
     int fd;
     
-    snprintf(path, sizeof(path), "/sys/class/gpio/export");
-    fd = open(path, O_WRONLY);
-    if (fd == -1) {
-        // GPIO system not available, fail silently
-        return 0;
+    // First try to unexport the pin in case it's already exported
+    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
+    if ((fd = open(path, O_WRONLY)) != -1) {
+        snprintf(value, sizeof(value), "%d", pin);
+        write(fd, value, strlen(value));  // Ignore errors - pin might not be exported
+        close(fd);
     }
     
+    // Small delay
+    usleep(100000);
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/export");
+    if ((fd = open(path, O_WRONLY)) == -1) {
+        printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
+        return 0;
+    }
     snprintf(value, sizeof(value), "%d", pin);
     if (write(fd, value, strlen(value)) == -1) {
+        printf("ERROR: Cannot export GPIO pin %d: %s\n", pin, strerror(errno));
         close(fd);
+        return 0;
     }
     close(fd);
+    
+    // Small delay to allow GPIO to be exported
+    usleep(100000);
     
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-    fd = open(path, O_WRONLY);
-    if (fd == -1) {
-        // GPIO pin not available, fail silently
+    if ((fd = open(path, O_WRONLY)) == -1) {
+        printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
         return 0;
     }
-    
     if (write(fd, "in", 2) == -1) {
+        printf("ERROR: Cannot set GPIO pin %d direction: %s\n", pin, strerror(errno));
         close(fd);
         return 0;
     }
     close(fd);
     
-    printf("GPIO pin %d initialized as input\n", pin);
+    // Enable pull-up resistor using pinctrl command for Pi 5
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin - 569);
+    system(cmd);
+    
+    printf("GPIO pin %d initialized successfully\n", pin);
     return 1;
 }
 
 int read_gpio_pin(int pin) {
-    char path[64];
-    char value[4];
+    char path[64], value[4];
     int fd;
     
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
-    fd = open(path, O_RDONLY);
-    if (fd == -1) {
+    if ((fd = open(path, O_RDONLY)) == -1) {
+        printf("ERROR: Cannot open GPIO value file %s: %s\n", path, strerror(errno));
         return -1;
     }
     
     if (read(fd, value, 3) == -1) {
+        printf("ERROR: Cannot read GPIO pin %d value: %s\n", pin, strerror(errno));
         close(fd);
         return -1;
     }
@@ -133,33 +152,34 @@ int read_gpio_pin(int pin) {
 }
 
 int is_ptt_active_for_channel(const char* channel_id) {
-    int pin = 0;
-    int *initialized = NULL;
-    
-    if (strcmp(channel_id, "555") == 0) {
-        pin = gpio_pin_555;
-        initialized = &gpio_initialized_555;
-    } else if (strcmp(channel_id, "666") == 0) {
-        pin = gpio_pin_666;
-        initialized = &gpio_initialized_666;
-    } else {
-        return 0;
-    }
+    int pin = (strcmp(channel_id, "555") == 0) ? gpio_pin_555 : gpio_pin_666;
+    int *initialized = (strcmp(channel_id, "555") == 0) ? &gpio_initialized_555 : &gpio_initialized_666;
+    static int last_ptt_state_555 = -1;
+    static int last_ptt_state_666 = -1;
+    int *last_state = (strcmp(channel_id, "555") == 0) ? &last_ptt_state_555 : &last_ptt_state_666;
     
     if (!*initialized) {
-        if (!init_gpio_pin(pin)) {
-            *initialized = -1; // Mark as failed, don't try again
-            return 1; // Default to active when GPIO not available
+        *initialized = init_gpio_pin(pin) ? 1 : -1;
+        if (*initialized == -1) {
+            printf("ERROR: GPIO initialization failed for pin %d\n", pin);
+            return 1;
         }
-        *initialized = 1;
     }
     
     if (*initialized == -1) {
-        return 1; // GPIO failed, default to active
+        return 1;
     }
     
-    int pin_state = read_gpio_pin(pin);
-    return (pin_state == 0);
+    int pin_value = read_gpio_pin(pin);
+    int ptt_active = (pin_value == 0);
+    
+    // Only log when PTT state changes
+    if (ptt_active != *last_state) {
+        printf("PTT Channel %s: %s\n", channel_id, ptt_active ? "ACTIVE" : "INACTIVE");
+        *last_state = ptt_active;
+    }
+    
+    return ptt_active;
 }
 
 static void handle_interrupt(int sig) {
@@ -174,62 +194,48 @@ static void handle_interrupt(int sig) {
 }
 
 char* encode_base64(const unsigned char* data, size_t len) {
-    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    static const int padding[] = {0, 2, 1};
-    
-    size_t output_len = 4 * ((len + 2) / 3);
-    char* encoded = malloc(output_len + 1);
+    char* encoded = malloc(len * 2 + 16); // Simple overallocation
     if (!encoded) return NULL;
     
-    for (size_t i = 0, j = 0; i < len;) {
-        uint32_t a = i < len ? data[i++] : 0;
-        uint32_t b = i < len ? data[i++] : 0;
-        uint32_t c = i < len ? data[i++] : 0;
-        uint32_t triple = (a << 0x10) + (b << 0x08) + c;
-        
-        encoded[j++] = table[(triple >> 3 * 6) & 0x3F];
-        encoded[j++] = table[(triple >> 2 * 6) & 0x3F];
-        encoded[j++] = table[(triple >> 1 * 6) & 0x3F];
-        encoded[j++] = table[(triple >> 0 * 6) & 0x3F];
+    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t i = 0, j = 0;
+    
+    for (; i + 2 < len; i += 3) {
+        uint32_t v = (data[i] << 16) | (data[i+1] << 8) | data[i+2];
+        encoded[j++] = t[v >> 18]; encoded[j++] = t[(v >> 12) & 63];
+        encoded[j++] = t[(v >> 6) & 63]; encoded[j++] = t[v & 63];
     }
     
-    for (int i = 0; i < padding[len % 3]; i++)
-        encoded[output_len - 1 - i] = '=';
+    if (i < len) {
+        uint32_t v = data[i] << 16;
+        if (i + 1 < len) v |= data[i+1] << 8;
+        encoded[j++] = t[v >> 18]; encoded[j++] = t[(v >> 12) & 63];
+        encoded[j++] = (i + 1 < len) ? t[(v >> 6) & 63] : '=';
+        encoded[j++] = '=';
+    }
     
-    encoded[output_len] = '\0';
+    encoded[j] = '\0';
     return encoded;
 }
 
 int decode_base64(const char* input, unsigned char* output) {
-    static const int table[] = {
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
-        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
-        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
-        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
-        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1
-    };
+    const char* key = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t len = strlen(input);
+    if (len % 4) return 0;
     
-    size_t input_len = strlen(input);
-    if (input_len % 4 != 0) return 0;
-    
-    size_t output_len = input_len / 4 * 3;
-    if (input[input_len - 1] == '=') output_len--;
-    if (input[input_len - 2] == '=') output_len--;
-    
-    for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+    for (size_t i = 0, j = 0; i < len; i += 4) {
+        uint32_t v = 0;
+        for (int k = 0; k < 4; k++) {
+            char c = input[i + k];
+            if (c == '=') break;
+            char* p = strchr(key, c);
+            if (!p) return 0;
+            v = (v << 6) | (p - key);
+        }
         
-        uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
-        
-        if (j < output_len) output[j++] = (triple >> 2 * 8) & 0xFF;
-        if (j < output_len) output[j++] = (triple >> 1 * 8) & 0xFF;
-        if (j < output_len) output[j++] = (triple >> 0 * 8) & 0xFF;
+        if (j < len) output[j++] = v >> 16;
+        if (j < len && input[i + 2] != '=') output[j++] = v >> 8;
+        if (j < len && input[i + 3] != '=') output[j++] = v;
     }
     
     return 1;
@@ -237,45 +243,16 @@ int decode_base64(const char* input, unsigned char* output) {
 
 unsigned char* encrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len) {
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return NULL;
+    unsigned char iv[12], *encrypted = malloc(data_len + 28);
+    int len, ciphertext_len;
     
-    unsigned char iv[12];
-    if (RAND_bytes(iv, 12) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return NULL;
-    }
-    
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return NULL;
-    }
-    
-    unsigned char* encrypted = malloc(data_len + 12 + 16);
-    if (!encrypted) {
-        EVP_CIPHER_CTX_free(ctx);
-        return NULL;
-    }
-    
-    memcpy(encrypted, iv, 12);
-    
-    int len;
-    if (EVP_EncryptUpdate(ctx, encrypted + 12, &len, data, data_len) != 1) {
+    if (!ctx || !encrypted || RAND_bytes(iv, 12) != 1 || 
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv) != 1 ||
+        (memcpy(encrypted, iv, 12), EVP_EncryptUpdate(ctx, encrypted + 12, &len, data, data_len) != 1) ||
+        (ciphertext_len = len, EVP_EncryptFinal_ex(ctx, encrypted + 12 + len, &len) != 1) ||
+        (ciphertext_len += len, EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, encrypted + 12 + ciphertext_len) != 1)) {
         free(encrypted);
-        EVP_CIPHER_CTX_free(ctx);
-        return NULL;
-    }
-    
-    int ciphertext_len = len;
-    if (EVP_EncryptFinal_ex(ctx, encrypted + 12 + len, &len) != 1) {
-        free(encrypted);
-        EVP_CIPHER_CTX_free(ctx);
-        return NULL;
-    }
-    ciphertext_len += len;
-    
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, encrypted + 12 + ciphertext_len) != 1) {
-        free(encrypted);
-        EVP_CIPHER_CTX_free(ctx);
+        if (ctx) EVP_CIPHER_CTX_free(ctx);
         return NULL;
     }
     
@@ -290,7 +267,9 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
-    if (!audio_stream->transmitting || !input || !is_ptt_active_for_channel(audio_stream->channel_id)) {
+    int ptt_active = is_ptt_active_for_channel(audio_stream->channel_id);
+    
+    if (!audio_stream->transmitting || !input || !ptt_active) {
         return paContinue;
     }
     
@@ -635,115 +614,61 @@ void* shared_websocket_thread(void* arg) {
 void auto_assign_usb_devices() {
     if (device_assigned) return;
     
-    int num_devices = Pa_GetDeviceCount();
     int usb_count = 0;
-    
-    printf("Scanning for USB audio devices...\n");
-    
-    for (int i = 0; i < num_devices && usb_count < 2; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-        if (device_info && device_info->maxInputChannels > 0) {
-            const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-            if (host_info && host_info->type == paALSA) {
-                const char* name = device_info->name;
-                if (strstr(name, "USB") || strstr(name, "usb") || 
-                    strstr(name, "Audio Device") || strstr(name, "Headset")) {
-                    usb_devices[usb_count] = i;
-                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
-                    usb_count++;
-                }
-            }
+    for (int i = 0; i < Pa_GetDeviceCount() && usb_count < 2; i++) {
+        const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+        if (info && info->maxInputChannels > 0 && 
+            (strstr(info->name, "USB") || strstr(info->name, "Audio Device"))) {
+            usb_devices[usb_count++] = i;
+            printf("USB Device %d: %s\n", i, info->name);
         }
     }
     
-    if (usb_count == 0) {
-        printf("No USB audio devices found, using default input device\n");
-        usb_devices[0] = Pa_GetDefaultInputDevice();
-        usb_devices[1] = Pa_GetDefaultInputDevice();
-    } else if (usb_count == 1) {
-        printf("Only one USB device found, both channels will use the same device\n");
-        usb_devices[1] = usb_devices[0];
-    }
+    if (!usb_count) usb_devices[0] = usb_devices[1] = Pa_GetDefaultInputDevice();
+    else if (usb_count == 1) usb_devices[1] = usb_devices[0];
     
-    printf("Channel 555 -> Device %d\n", usb_devices[0]);
-    printf("Channel 666 -> Device %d\n", usb_devices[1]);
-    
+    printf("Channels 555/666 -> Devices %d/%d\n", usb_devices[0], usb_devices[1]);
     device_assigned = 1;
 }
 
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
-    
-    if (strcmp(channel, "555") == 0) {
-        return usb_devices[0];
-    } else if (strcmp(channel, "666") == 0) {
-        return usb_devices[1];
-    }
-    
-    return usb_devices[0];
+    return usb_devices[strcmp(channel, "666") == 0 ? 1 : 0];
 }
 
 int setup_channel(struct channel_context *ctx, const char *channel_id) {
     strcpy(ctx->audio.channel_id, channel_id);
-    
     if (!setup_audio_for_channel(&ctx->audio)) {
         fprintf(stderr, "Audio setup failed for channel %s\n", channel_id);
         return 0;
     }
-    
     ctx->active = 1;
     return 1;
 }
 
 int setup_shared_connection() {
-    if (shared_conn.active) {
-        return 1; // Already setup
-    }
+    if (shared_conn.active) return 1;
     
-    CURL *curl;
-    CURLcode res;
-    struct response_data resp = {0};
-    
-    resp.data = malloc(1);
-    if (resp.data == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 0;
-    }
+    CURL *curl = curl_easy_init();
+    struct response_data resp = {malloc(1), 0};
+    if (!resp.data) return 0;
     resp.data[0] = '\0';
-    resp.size = 0;
     
-    curl = curl_easy_init();
-    if(curl) {
+    if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, "https://audio-1.redenes.org/audio-server-port");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
         
-        res = curl_easy_perform(curl);
-        
-        if(res != CURLE_OK) {
-            fprintf(stderr, "curl failed for shared connection: %s\n", curl_easy_strerror(res));
-            free(resp.data);
-            curl_easy_cleanup(curl);
-            return 0;
-        }
-        
-        printf("Raw Response for shared connection: %s\n", resp.data);
-        
-        if (parse_server_response(resp.data, &shared_conn.config)) {
-            curl_easy_cleanup(curl);
-            free(resp.data);
-            
-            if (!connect_shared_websocket(&shared_conn.config)) {
-                fprintf(stderr, "Shared WebSocket connection failed\n");
-                return 0;
-            }
-            
+        if (curl_easy_perform(curl) == CURLE_OK && 
+            parse_server_response(resp.data, &shared_conn.config) &&
+            connect_shared_websocket(&shared_conn.config)) {
             shared_conn.active = 1;
+            curl_easy_cleanup(curl);
+            free(resp.data);
             return 1;
         }
-        
         curl_easy_cleanup(curl);
     }
     
@@ -752,53 +677,29 @@ int setup_shared_connection() {
 }
 
 int main(int argc, char *argv[]) {
-    printf("Starting main function...\n");
-    fflush(stdout);
     int run_both = 1;
     
     if (argc > 1) {
-        if (argc > 2) {
-            gpio_pin_555 = atoi(argv[2]);
-            printf("Using GPIO pin %d for channel 555 PTT\n", gpio_pin_555);
-        }
-        if (argc > 3) {
-            gpio_pin_666 = atoi(argv[3]);
-            printf("Using GPIO pin %d for channel 666 PTT\n", gpio_pin_666);
-        }
+        if (argc > 2) gpio_pin_555 = atoi(argv[2]);
+        if (argc > 3) gpio_pin_666 = atoi(argv[3]);
         
         int channel = atoi(argv[1]);
-        if (channel == 555) {
+        if (channel == 555 || channel == 666) {
             run_both = 0;
-            printf("Running channel 555 only\n");
-        } else if (channel == 666) {
-            run_both = 0;
-            printf("Running channel 666 only\n");
-        } else if (strcmp(argv[1], "both") == 0) {
-            run_both = 1;
-            printf("Running both channels simultaneously\n");
-        } else {
+            printf("Running channel %d only\n", channel);
+        } else if (strcmp(argv[1], "both") != 0) {
             fprintf(stderr, "Usage: %s [555|666|both] [gpio_pin_555] [gpio_pin_666]\n", argv[0]);
-            fprintf(stderr, "  555            - Run channel 555 only\n");
-            fprintf(stderr, "  666            - Run channel 666 only\n");
-            fprintf(stderr, "  both           - Run both channels simultaneously (default)\n");
-            fprintf(stderr, "  gpio_pin_555   - GPIO pin number for channel 555 PTT (default: 18)\n");
-            fprintf(stderr, "  gpio_pin_666   - GPIO pin number for channel 666 PTT (default: 19)\n");
             return 1;
         }
-    } else {
-        printf("Running both channels simultaneously (default)\n");
     }
     
-    printf("PTT GPIO pins: Channel 555 -> pin %d, Channel 666 -> pin %d (transmission active when grounded)\n", gpio_pin_555, gpio_pin_666);
+    printf("GPIO pins: 555->%d, 666->%d | Mode: %s\n", gpio_pin_555, gpio_pin_666, 
+           run_both ? "both channels" : "single channel");
     
-    printf("About to initialize PortAudio...\n");
-    fflush(stdout);
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
         return 1;
     }
-    printf("PortAudio initialized successfully\n");
-    fflush(stdout);
     
     curl_global_init(CURL_GLOBAL_DEFAULT);
     
