@@ -544,6 +544,17 @@ int setup_global_udp(struct server_config* config) {
         printf("UDP socket local binding info unavailable\n");
     }
     
+    // Send immediate heartbeat to establish connection
+    const char* heartbeat_msg = "{\"type\":\"KEEP_ALIVE\"}";
+    int result = sendto(global_udp_socket, heartbeat_msg, strlen(heartbeat_msg), 0,
+                       (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
+    
+    if (result >= 0) {
+        printf("Initial heartbeat sent immediately upon UDP connection\n");
+    } else {
+        printf("Initial heartbeat error: %s\n", strerror(errno));
+    }
+    
     static int heartbeat_started = 0;
     if (!heartbeat_started) {
         if (pthread_create(&heartbeat_thread, NULL, heartbeat_worker, NULL)) {

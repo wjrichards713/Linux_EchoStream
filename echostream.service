@@ -1,0 +1,16 @@
+[Unit]
+Description=EchoStream Audio Communication
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=naveen
+WorkingDirectory=/home/naveen/Linux_EchoStream
+ExecStart=/home/naveen/Linux_EchoStream/api_call
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
