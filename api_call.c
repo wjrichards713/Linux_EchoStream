@@ -13,16 +13,19 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 #include <sys/socket.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <fcntl.h>
-#include <sys/stat.h>
+#include <errno.h>
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
+int init_gpio_pin(int pin);
+int read_gpio_pin(int pin);
+void cleanup_gpio(int pin);
+void* heartbeat_worker(void* arg);
+void* gpio_monitor_worker(void* arg);
 
 struct response_data {
     char *data;
@@ -48,6 +51,7 @@ struct audio_stream {
     OpusEncoder *encoder;
     unsigned char key[32];
     int transmitting;
+    int gpio_active;
     float *buffer;
     int buffer_size;
     int buffer_pos;
@@ -56,186 +60,110 @@ struct audio_stream {
 };
 
 struct channel_context {
-    struct audio_stream audio;
-    int active;
-};
-
-struct shared_connection {
     struct websocket_ctx ws_ctx;
-    struct server_config config;
+    struct audio_stream audio;
     pthread_t thread;
-    int udp_socket;
-    struct sockaddr_in server_addr;
     int active;
 };
 
 static struct channel_context channels[2] = {0};
-static struct shared_connection shared_conn = {0};
 static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
-static int gpio_pin_555 = 589;  // GPIO 20 (physical pin 38) on RPi5
-static int gpio_pin_666 = 590;  // GPIO 21 (physical pin 40) on RPi5
-static int gpio_initialized_555 = 0;
-static int gpio_initialized_666 = 0;
-
-int init_gpio_pin(int pin) {
-    char path[64], value[8];
-    int fd;
-    
-    // First try to unexport the pin in case it's already exported
-    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
-    if ((fd = open(path, O_WRONLY)) != -1) {
-        snprintf(value, sizeof(value), "%d", pin);
-        write(fd, value, strlen(value));  // Ignore errors - pin might not be exported
-        close(fd);
-    }
-    
-    // Small delay
-    usleep(100000);
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/export");
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    snprintf(value, sizeof(value), "%d", pin);
-    if (write(fd, value, strlen(value)) == -1) {
-        printf("ERROR: Cannot export GPIO pin %d: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-    
-    // Small delay to allow GPIO to be exported
-    usleep(100000);
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    if (write(fd, "in", 2) == -1) {
-        printf("ERROR: Cannot set GPIO pin %d direction: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-    
-    // Enable pull-up resistor using pinctrl command for Pi 5
-    char cmd[64];
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin - 569);
-    system(cmd);
-    
-    printf("GPIO pin %d initialized successfully\n", pin);
-    return 1;
-}
-
-int read_gpio_pin(int pin) {
-    char path[64], value[4];
-    int fd;
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
-    if ((fd = open(path, O_RDONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO value file %s: %s\n", path, strerror(errno));
-        return -1;
-    }
-    
-    if (read(fd, value, 3) == -1) {
-        printf("ERROR: Cannot read GPIO pin %d value: %s\n", pin, strerror(errno));
-        close(fd);
-        return -1;
-    }
-    close(fd);
-    
-    return (value[0] == '0') ? 0 : 1;
-}
-
-int is_ptt_active_for_channel(const char* channel_id) {
-    int pin = (strcmp(channel_id, "555") == 0) ? gpio_pin_555 : gpio_pin_666;
-    int *initialized = (strcmp(channel_id, "555") == 0) ? &gpio_initialized_555 : &gpio_initialized_666;
-    static int last_ptt_state_555 = -1;
-    static int last_ptt_state_666 = -1;
-    int *last_state = (strcmp(channel_id, "555") == 0) ? &last_ptt_state_555 : &last_ptt_state_666;
-    
-    if (!*initialized) {
-        *initialized = init_gpio_pin(pin) ? 1 : -1;
-        if (*initialized == -1) {
-            printf("ERROR: GPIO initialization failed for pin %d\n", pin);
-            return 1;
-        }
-    }
-    
-    if (*initialized == -1) {
-        return 1;
-    }
-    
-    int pin_value = read_gpio_pin(pin);
-    int ptt_active = (pin_value == 0);
-    
-    // Only log when PTT state changes
-    if (ptt_active != *last_state) {
-        printf("PTT Channel %s: %s\n", channel_id, ptt_active ? "ACTIVE" : "INACTIVE");
-        *last_state = ptt_active;
-    }
-    
-    return ptt_active;
-}
+static int global_udp_socket = -1;
+static struct sockaddr_in global_server_addr;
+static pthread_t heartbeat_thread;
+static int gpio_38_state = 0;
+static int gpio_40_state = 0;
+static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct server_config global_config = {0};
+static struct lws_context *global_ws_context = NULL;
+static int global_config_initialized = 0;
 
 static void handle_interrupt(int sig) {
-    (void)sig; // Mark parameter as used
+    printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
-    shared_conn.ws_ctx.interrupted = 1;
+    
     for (int i = 0; i < 2; i++) {
         if (channels[i].active) {
+            channels[i].ws_ctx.interrupted = 1;
             channels[i].audio.transmitting = 0;
+            
+            if (channels[i].audio.stream) {
+                Pa_AbortStream(channels[i].audio.stream);
+                Pa_CloseStream(channels[i].audio.stream);
+                channels[i].audio.stream = NULL;
+            }
+            
+            if (channels[i].ws_ctx.client_wsi) {
+                lws_close_reason(channels[i].ws_ctx.client_wsi, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+            }
         }
+    }
+    
+    if (global_udp_socket >= 0) {
+        close(global_udp_socket);
+        global_udp_socket = -1;
     }
 }
 
 char* encode_base64(const unsigned char* data, size_t len) {
-    char* encoded = malloc(len * 2 + 16); // Simple overallocation
+    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static const int padding[] = {0, 2, 1};
+    
+    size_t output_len = 4 * ((len + 2) / 3);
+    char* encoded = malloc(output_len + 1);
     if (!encoded) return NULL;
     
-    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    size_t i = 0, j = 0;
-    
-    for (; i + 2 < len; i += 3) {
-        uint32_t v = (data[i] << 16) | (data[i+1] << 8) | data[i+2];
-        encoded[j++] = t[v >> 18]; encoded[j++] = t[(v >> 12) & 63];
-        encoded[j++] = t[(v >> 6) & 63]; encoded[j++] = t[v & 63];
+    for (size_t i = 0, j = 0; i < len;) {
+        uint32_t a = i < len ? data[i++] : 0;
+        uint32_t b = i < len ? data[i++] : 0;
+        uint32_t c = i < len ? data[i++] : 0;
+        uint32_t triple = (a << 0x10) + (b << 0x08) + c;
+        
+        encoded[j++] = table[(triple >> 3 * 6) & 0x3F];
+        encoded[j++] = table[(triple >> 2 * 6) & 0x3F];
+        encoded[j++] = table[(triple >> 1 * 6) & 0x3F];
+        encoded[j++] = table[(triple >> 0 * 6) & 0x3F];
     }
     
-    if (i < len) {
-        uint32_t v = data[i] << 16;
-        if (i + 1 < len) v |= data[i+1] << 8;
-        encoded[j++] = t[v >> 18]; encoded[j++] = t[(v >> 12) & 63];
-        encoded[j++] = (i + 1 < len) ? t[(v >> 6) & 63] : '=';
-        encoded[j++] = '=';
-    }
+    for (int i = 0; i < padding[len % 3]; i++)
+        encoded[output_len - 1 - i] = '=';
     
-    encoded[j] = '\0';
+    encoded[output_len] = '\0';
     return encoded;
 }
 
 int decode_base64(const char* input, unsigned char* output) {
-    const char* key = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    size_t len = strlen(input);
-    if (len % 4) return 0;
+    static const int table[] = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
+        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
+        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1
+    };
     
-    for (size_t i = 0, j = 0; i < len; i += 4) {
-        uint32_t v = 0;
-        for (int k = 0; k < 4; k++) {
-            char c = input[i + k];
-            if (c == '=') break;
-            char* p = strchr(key, c);
-            if (!p) return 0;
-            v = (v << 6) | (p - key);
-        }
+    size_t input_len = strlen(input);
+    if (input_len % 4 != 0) return 0;
+    
+    size_t output_len = input_len / 4 * 3;
+    if (input[input_len - 1] == '=') output_len--;
+    if (input[input_len - 2] == '=') output_len--;
+    
+    for (size_t i = 0, j = 0; i < input_len;) {
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
         
-        if (j < len) output[j++] = v >> 16;
-        if (j < len && input[i + 2] != '=') output[j++] = v >> 8;
-        if (j < len && input[i + 3] != '=') output[j++] = v;
+        uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
+        
+        if (j < output_len) output[j++] = (triple >> 2 * 8) & 0xFF;
+        if (j < output_len) output[j++] = (triple >> 1 * 8) & 0xFF;
+        if (j < output_len) output[j++] = (triple >> 0 * 8) & 0xFF;
     }
     
     return 1;
@@ -243,16 +171,45 @@ int decode_base64(const char* input, unsigned char* output) {
 
 unsigned char* encrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len) {
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    unsigned char iv[12], *encrypted = malloc(data_len + 28);
-    int len, ciphertext_len;
+    if (!ctx) return NULL;
     
-    if (!ctx || !encrypted || RAND_bytes(iv, 12) != 1 || 
-        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv) != 1 ||
-        (memcpy(encrypted, iv, 12), EVP_EncryptUpdate(ctx, encrypted + 12, &len, data, data_len) != 1) ||
-        (ciphertext_len = len, EVP_EncryptFinal_ex(ctx, encrypted + 12 + len, &len) != 1) ||
-        (ciphertext_len += len, EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, encrypted + 12 + ciphertext_len) != 1)) {
+    unsigned char iv[12];
+    if (RAND_bytes(iv, 12) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    unsigned char* encrypted = malloc(data_len + 12 + 16);
+    if (!encrypted) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    memcpy(encrypted, iv, 12);
+    
+    int len;
+    if (EVP_EncryptUpdate(ctx, encrypted + 12, &len, data, data_len) != 1) {
         free(encrypted);
-        if (ctx) EVP_CIPHER_CTX_free(ctx);
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    int ciphertext_len = len;
+    if (EVP_EncryptFinal_ex(ctx, encrypted + 12 + len, &len) != 1) {
+        free(encrypted);
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    ciphertext_len += len;
+    
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, encrypted + 12 + ciphertext_len) != 1) {
+        free(encrypted);
+        EVP_CIPHER_CTX_free(ctx);
         return NULL;
     }
     
@@ -267,9 +224,7 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
-    int ptt_active = is_ptt_active_for_channel(audio_stream->channel_id);
-    
-    if (!audio_stream->transmitting || !input || !ptt_active) {
+    if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
         return paContinue;
     }
     
@@ -302,8 +257,8 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
                         snprintf(msg, sizeof(msg),
                                 "{\"channel_id\":\"%s\",\"type\":\"audio\",\"data\":\"%s\"}", audio_stream->channel_id, b64_data);
                         
-                        sendto(shared_conn.udp_socket, msg, strlen(msg), 0,
-                               (struct sockaddr*)&shared_conn.server_addr, sizeof(shared_conn.server_addr));
+                        sendto(global_udp_socket, msg, strlen(msg), 0,
+                               (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
                         
                         free(b64_data);
                     }
@@ -332,6 +287,7 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
     audio_stream->buffer_size = 4800;
     audio_stream->buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->buffer_pos = 0;
+    audio_stream->gpio_active = 0;
     
     return 1;
 }
@@ -350,28 +306,40 @@ int initialize_portaudio() {
     return 1;
 }
 
-int setup_shared_udp(struct server_config* config) {
-    if (shared_conn.udp_socket > 0) {
-        return 1; // Already setup
+int setup_global_udp(struct server_config* config) {
+    if (global_udp_socket >= 0) {
+        printf("UDP socket already configured for %s:%d\n", config->udp_host, config->udp_port);
+        return 1;
     }
     
-    shared_conn.udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (shared_conn.udp_socket < 0) {
+    global_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+    if (global_udp_socket < 0) {
         perror("socket failed");
         return 0;
     }
     
-    memset(&shared_conn.server_addr, 0, sizeof(shared_conn.server_addr));
-    shared_conn.server_addr.sin_family = AF_INET;
-    shared_conn.server_addr.sin_port = htons(config->udp_port);
+    memset(&global_server_addr, 0, sizeof(global_server_addr));
+    global_server_addr.sin_family = AF_INET;
+    global_server_addr.sin_port = htons(config->udp_port);
     
-    if (inet_aton(config->udp_host, &shared_conn.server_addr.sin_addr) == 0) {
+    if (inet_aton(config->udp_host, &global_server_addr.sin_addr) == 0) {
         fprintf(stderr, "Invalid UDP host\n");
-        close(shared_conn.udp_socket);
+        close(global_udp_socket);
+        global_udp_socket = -1;
         return 0;
     }
     
-    printf("Shared UDP configured for %s:%d\n", config->udp_host, config->udp_port);
+    printf("Global UDP socket configured for %s:%d\n", config->udp_host, config->udp_port);
+    
+    static int heartbeat_started = 0;
+    if (!heartbeat_started) {
+        if (pthread_create(&heartbeat_thread, NULL, heartbeat_worker, NULL)) {
+            fprintf(stderr, "Failed to create heartbeat thread\n");
+        } else {
+            heartbeat_started = 1;
+        }
+    }
+    
     return 1;
 }
 
@@ -464,46 +432,109 @@ int parse_server_response(const char *json_str, struct server_config *cfg) {
 
 static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                              void *user, void *in, size_t len) {
-    if (shared_conn.ws_ctx.client_wsi != wsi) {
-        return 0;
+    struct channel_context *ctx = NULL;
+    
+    for (int i = 0; i < 2; i++) {
+        if (channels[i].ws_ctx.client_wsi == wsi) {
+            ctx = &channels[i];
+            break;
+        }
     }
+    
+    if (!ctx) return 0;
     
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-            printf("Shared WebSocket connection established\n");
+            printf("WebSocket connection established for channel %s\n", ctx->ws_ctx.channel_id);
             
-            // Setup both channels
-            const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
-            for (int i = 0; i < 2; i++) {
-                if (channels[i].active) {
-                    if (!decode_base64(key_b64, channels[i].audio.key)) {
-                        fprintf(stderr, "Key decode failed for channel %s\n", channels[i].audio.channel_id);
-                        continue;
-                    }
-                    printf("AES key decoded for channel %s\n", channels[i].audio.channel_id);
-                    
-                    if (start_transmission_for_channel(&channels[i].audio)) {
-                        printf("Audio stream ready for channel %s - waiting for PTT activation\n", channels[i].audio.channel_id);
-                    }
-                }
+            char connect_msg[512];
+            time_t now = time(NULL);
+            
+            snprintf(connect_msg, sizeof(connect_msg),
+                "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                ctx->ws_ctx.channel_id, now);
+            
+            printf("Sending connect message: %s\n", connect_msg);
+            
+            size_t msg_len = strlen(connect_msg);
+            unsigned char *buf = malloc(LWS_PRE + msg_len);
+            if (buf) {
+                memcpy(&buf[LWS_PRE], connect_msg, msg_len);
+                lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                free(buf);
             }
             
-            if (setup_shared_udp(&shared_conn.config)) {
-                printf("Shared connection ready for both channels\n");
+            printf("Starting transmission immediately for channel %s\n", ctx->ws_ctx.channel_id);
+            
+            const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
+            if (!decode_base64(key_b64, ctx->audio.key)) {
+                fprintf(stderr, "Key decode failed for channel %s\n", ctx->ws_ctx.channel_id);
+                break;
+            }
+            printf("AES key decoded for channel %s\n", ctx->ws_ctx.channel_id);
+            
+            if (setup_global_udp(&global_config)) {
+                if (start_transmission_for_channel(&ctx->audio)) {
+                    char transmit_msg[512];
+                    time_t now = time(NULL);
+                    
+                    snprintf(transmit_msg, sizeof(transmit_msg),
+                        "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                        ctx->ws_ctx.channel_id, now);
+                    
+                    printf("Sending transmit_started for channel %s: %s\n", ctx->ws_ctx.channel_id, transmit_msg);
+                    
+                    size_t msg_len = strlen(transmit_msg);
+                    unsigned char *buf2 = malloc(LWS_PRE + msg_len);
+                    if (buf2) {
+                        memcpy(&buf2[LWS_PRE], transmit_msg, msg_len);
+                        lws_write(wsi, &buf2[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                        free(buf2);
+                    }
+                }
             }
             break;
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("Received shared message: %.*s\n", (int)len, (char *)in);
+            printf("Received on channel %s: %.*s\n", ctx->ws_ctx.channel_id, (int)len, (char *)in);
             
             char *data = malloc(len + 1);
             if (data) {
                 memcpy(data, in, len);
                 data[len] = '\0';
                 
-                if (strstr(data, "users_connected")) {
-                    printf("Both channels ready for transmission when PTT is active\n");
+                if (strstr(data, "users_connected") && !ctx->audio.transmitting) {
+                    printf("Channel %s connected, starting transmission...\n", ctx->ws_ctx.channel_id);
+                    
+                    const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
+                    if (!decode_base64(key_b64, ctx->audio.key)) {
+                        fprintf(stderr, "Key decode failed\n");
+                        free(data);
+                        return 0;
+                    }
+                    printf("AES key decoded for channel %s\n", ctx->ws_ctx.channel_id);
+                    
+                    if (setup_global_udp(&global_config)) {
+                        if (start_transmission_for_channel(&ctx->audio)) {
+                            char transmit_msg[512];
+                            time_t now = time(NULL);
+                            
+                            snprintf(transmit_msg, sizeof(transmit_msg),
+                                "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                                ctx->ws_ctx.channel_id, now);
+                            
+                            printf("Sending transmit_started: %s\n", transmit_msg);
+                            
+                            size_t msg_len = strlen(transmit_msg);
+                            unsigned char *buf = malloc(LWS_PRE + msg_len);
+                            if (buf) {
+                                memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
+                                lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                                free(buf);
+                            }
+                        }
+                    }
                 }
                 
                 free(data);
@@ -512,13 +543,13 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_CLOSED:
-            printf("Shared WebSocket connection closed\n");
-            shared_conn.ws_ctx.client_wsi = NULL;
+            printf("WebSocket closed for channel %s\n", ctx->ws_ctx.channel_id);
+            ctx->ws_ctx.client_wsi = NULL;
             break;
             
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-            printf("Shared WebSocket error: %.*s\n", (int)len, (char *)in);
-            shared_conn.ws_ctx.client_wsi = NULL;
+            printf("WebSocket error for channel %s: %.*s\n", ctx->ws_ctx.channel_id, (int)len, (char *)in);
+            ctx->ws_ctx.client_wsi = NULL;
             break;
             
         default:
@@ -538,22 +569,23 @@ static struct lws_protocols protocols[] = {
     { NULL, NULL, 0, 0 }
 };
 
-int connect_shared_websocket(struct server_config* config) {
-    if (shared_conn.ws_ctx.context) {
-        return 1; // Already connected
+int connect_global_websocket() {
+    if (global_ws_context) {
+        printf("WebSocket already connected\n");
+        return 1;
     }
     
     struct lws_context_creation_info info;
     char ws_url[256];
     
-    snprintf(ws_url, sizeof(ws_url), "wss://audio-1.redenes.org/ws/?websocket_id=%d", config->websocket_id);
-    printf("Connecting to shared WebSocket: %s\n", ws_url);
+    snprintf(ws_url, sizeof(ws_url), "wss://audio-1.redenes.org/ws/?websocket_id=%d", global_config.websocket_id);
+    printf("Connecting to: %s for both channels\n", ws_url);
     
     char address[128] = "audio-1.redenes.org";
     char path[256];
     int port = 443;
     
-    snprintf(path, sizeof(path), "/ws/?websocket_id=%d", config->websocket_id);
+    snprintf(path, sizeof(path), "/ws/?websocket_id=%d", global_config.websocket_id);
     
     memset(&info, 0, sizeof(info));
     info.port = CONTEXT_PORT_NO_LISTEN;
@@ -561,114 +593,338 @@ int connect_shared_websocket(struct server_config* config) {
     info.gid = -1;
     info.uid = -1;
     info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
-    info.ssl_cert_filepath = NULL;
-    info.ssl_private_key_filepath = NULL;
-    info.ssl_ca_filepath = NULL;
     
-    shared_conn.ws_ctx.context = lws_create_context(&info);
-    if (!shared_conn.ws_ctx.context) {
-        fprintf(stderr, "Shared WebSocket context failed\n");
+    global_ws_context = lws_create_context(&info);
+    if (!global_ws_context) {
+        fprintf(stderr, "WebSocket context failed\n");
         return 0;
     }
     
-    struct lws_client_connect_info connect_info;
-    memset(&connect_info, 0, sizeof(connect_info));
-    connect_info.context = shared_conn.ws_ctx.context;
-    connect_info.address = address;
-    connect_info.port = port;
-    connect_info.path = path;
-    connect_info.host = connect_info.address;
-    connect_info.origin = connect_info.address;
-    connect_info.ssl_connection = LCCSCF_USE_SSL | LCCSCF_ALLOW_SELFSIGNED | LCCSCF_SKIP_SERVER_CERT_HOSTNAME_CHECK;
-    connect_info.protocol = protocols[0].name;
-    connect_info.pwsi = &shared_conn.ws_ctx.client_wsi;
-    
-    shared_conn.ws_ctx.client_wsi = lws_client_connect_via_info(&connect_info);
-    if (shared_conn.ws_ctx.client_wsi == NULL) {
-        fprintf(stderr, "Shared WebSocket connect failed\n");
-        return 0;
+    // Connect both channels to the same WebSocket
+    for (int i = 0; i < 2; i++) {
+        if (channels[i].active) {
+            struct lws_client_connect_info connect_info;
+            memset(&connect_info, 0, sizeof(connect_info));
+            connect_info.context = global_ws_context;
+            connect_info.address = address;
+            connect_info.port = port;
+            connect_info.path = path;
+            connect_info.host = connect_info.address;
+            connect_info.origin = connect_info.address;
+            connect_info.ssl_connection = LCCSCF_USE_SSL;
+            connect_info.protocol = protocols[0].name;
+            connect_info.pwsi = &channels[i].ws_ctx.client_wsi;
+            
+            channels[i].ws_ctx.client_wsi = lws_client_connect_via_info(&connect_info);
+            channels[i].ws_ctx.context = global_ws_context;
+            
+            if (channels[i].ws_ctx.client_wsi == NULL) {
+                fprintf(stderr, "WebSocket connect failed for channel %s\n", channels[i].ws_ctx.channel_id);
+                return 0;
+            }
+        }
     }
     
     return 1;
 }
 
-void* shared_websocket_thread(void* arg) {
-    (void)arg; // Unused parameter
+void* global_websocket_thread(void* arg) {
+    printf("Starting global WebSocket thread\n");
     
-    printf("Starting shared WebSocket thread\n");
-    
-    shared_conn.ws_ctx.interrupted = 0;
-    while (!shared_conn.ws_ctx.interrupted && !global_interrupted && shared_conn.ws_ctx.client_wsi) {
-        lws_service(shared_conn.ws_ctx.context, 100);
+    while (!global_interrupted && global_ws_context) {
+        lws_service(global_ws_context, 10);
     }
     
-    if (shared_conn.ws_ctx.context) {
-        lws_context_destroy(shared_conn.ws_ctx.context);
-        shared_conn.ws_ctx.context = NULL;
+    // Cleanup all channels
+    for (int i = 0; i < 2; i++) {
+        if (channels[i].active) {
+            if (channels[i].audio.stream && !global_interrupted) {
+                Pa_AbortStream(channels[i].audio.stream);
+                Pa_CloseStream(channels[i].audio.stream);
+                channels[i].audio.stream = NULL;
+            }
+            
+            if (channels[i].audio.encoder) {
+                opus_encoder_destroy(channels[i].audio.encoder);
+                channels[i].audio.encoder = NULL;
+            }
+            
+            if (channels[i].audio.buffer) {
+                free(channels[i].audio.buffer);
+                channels[i].audio.buffer = NULL;
+            }
+            
+            channels[i].active = 0;
+        }
     }
     
-    printf("Shared WebSocket thread terminated\n");
+    if (global_ws_context) {
+        lws_context_destroy(global_ws_context);
+        global_ws_context = NULL;
+    }
+    
+    printf("Global WebSocket thread terminated\n");
     return NULL;
 }
 
 void auto_assign_usb_devices() {
     if (device_assigned) return;
     
+    int num_devices = Pa_GetDeviceCount();
     int usb_count = 0;
-    for (int i = 0; i < Pa_GetDeviceCount() && usb_count < 2; i++) {
-        const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
-        if (info && info->maxInputChannels > 0 && 
-            (strstr(info->name, "USB") || strstr(info->name, "Audio Device"))) {
-            usb_devices[usb_count++] = i;
-            printf("USB Device %d: %s\n", i, info->name);
+    
+    printf("Scanning for USB audio devices...\n");
+    
+    for (int i = 0; i < num_devices && usb_count < 2; i++) {
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+        if (device_info && device_info->maxInputChannels > 0) {
+            const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
+            if (host_info && host_info->type == paALSA) {
+                const char* name = device_info->name;
+                if (strstr(name, "USB") || strstr(name, "usb") || 
+                    strstr(name, "Audio Device") || strstr(name, "Headset")) {
+                    usb_devices[usb_count] = i;
+                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
+                    usb_count++;
+                }
+            }
         }
     }
     
-    if (!usb_count) usb_devices[0] = usb_devices[1] = Pa_GetDefaultInputDevice();
-    else if (usb_count == 1) usb_devices[1] = usb_devices[0];
+    if (usb_count == 0) {
+        printf("No USB audio devices found, using default input device\n");
+        usb_devices[0] = Pa_GetDefaultInputDevice();
+        usb_devices[1] = Pa_GetDefaultInputDevice();
+    } else if (usb_count == 1) {
+        printf("Only one USB device found, both channels will use the same device\n");
+        usb_devices[1] = usb_devices[0];
+    }
     
-    printf("Channels 555/666 -> Devices %d/%d\n", usb_devices[0], usb_devices[1]);
+    printf("Channel 555 -> Device %d\n", usb_devices[0]);
+    printf("Channel 666 -> Device %d\n", usb_devices[1]);
+    
     device_assigned = 1;
 }
 
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
-    return usb_devices[strcmp(channel, "666") == 0 ? 1 : 0];
+    
+    if (strcmp(channel, "555") == 0) {
+        return usb_devices[0];
+    } else if (strcmp(channel, "666") == 0) {
+        return usb_devices[1];
+    }
+    
+    return usb_devices[0];
 }
 
-int setup_channel(struct channel_context *ctx, const char *channel_id) {
-    strcpy(ctx->audio.channel_id, channel_id);
-    if (!setup_audio_for_channel(&ctx->audio)) {
-        fprintf(stderr, "Audio setup failed for channel %s\n", channel_id);
+int init_gpio_pin(int pin) {
+    char path[64], value[8];
+    int fd;
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
+    if ((fd = open(path, O_WRONLY)) != -1) {
+        snprintf(value, sizeof(value), "%d", pin);
+        write(fd, value, strlen(value));
+        close(fd);
+    }
+    
+    usleep(100000);
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/export");
+    if ((fd = open(path, O_WRONLY)) == -1) {
+        printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
         return 0;
     }
-    ctx->active = 1;
+    snprintf(value, sizeof(value), "%d", pin);
+    if (write(fd, value, strlen(value)) == -1) {
+        printf("ERROR: Cannot export GPIO pin %d: %s\n", pin, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    
+    usleep(100000);
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
+    if ((fd = open(path, O_WRONLY)) == -1) {
+        printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
+        return 0;
+    }
+    if (write(fd, "in", 2) == -1) {
+        printf("ERROR: Cannot set GPIO pin %d direction: %s\n", pin, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin - 569);
+    system(cmd);
+    
+    printf("GPIO pin %d initialized successfully\n", pin);
     return 1;
 }
 
-int setup_shared_connection() {
-    if (shared_conn.active) return 1;
+int read_gpio_pin(int pin) {
+    char path[64], value[4];
+    int fd;
     
-    CURL *curl = curl_easy_init();
-    struct response_data resp = {malloc(1), 0};
-    if (!resp.data) return 0;
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
+    if ((fd = open(path, O_RDONLY)) == -1) {
+        return -1;
+    }
+    
+    if (read(fd, value, 3) == -1) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    
+    return (value[0] == '0') ? 0 : 1;
+}
+
+void cleanup_gpio(int pin) {
+    char path[64], value[8];
+    int fd;
+    
+    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
+    if ((fd = open(path, O_WRONLY)) != -1) {
+        snprintf(value, sizeof(value), "%d", pin);
+        write(fd, value, strlen(value));
+        close(fd);
+    }
+}
+
+void* heartbeat_worker(void* arg) {
+    printf("Heartbeat worker started\n");
+    
+    while (!global_interrupted) {
+        if (global_udp_socket >= 0) {
+            const char* heartbeat_msg = "{\"type\":\"KEEP_ALIVE\"}";
+            int result = sendto(global_udp_socket, heartbeat_msg, strlen(heartbeat_msg), 0,
+                               (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
+            
+            if (result >= 0) {
+                printf("Heartbeat sent to keep NAT mapping active\n");
+            } else {
+                printf("Heartbeat error: %s\n", strerror(errno));
+            }
+        }
+        
+        for (int i = 0; i < 100 && !global_interrupted; i++) {
+            usleep(100000);
+        }
+    }
+    
+    printf("Heartbeat worker stopped\n");
+    return NULL;
+}
+
+void* gpio_monitor_worker(void* arg) {
+    int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
+    int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
+    
+    printf("GPIO monitor worker started\n");
+    
+    if (!init_gpio_pin(gpio_pin_38)) {
+        printf("Failed to initialize GPIO pin 38\n");
+        return NULL;
+    }
+    
+    if (!init_gpio_pin(gpio_pin_40)) {
+        printf("Failed to initialize GPIO pin 40\n");
+        cleanup_gpio(gpio_pin_38);
+        return NULL;
+    }
+    
+    printf("GPIO pins initialized. Monitoring for changes...\n");
+    
+    while (!global_interrupted) {
+        int curr_val_38 = read_gpio_pin(gpio_pin_38);
+        int curr_val_40 = read_gpio_pin(gpio_pin_40);
+        
+        pthread_mutex_lock(&gpio_mutex);
+        
+        if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
+            gpio_38_state = curr_val_38;
+            printf("PIN 38 (Channel 555): %s\n", 
+                   curr_val_38 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            
+            for (int i = 0; i < 2; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, "555") == 0) {
+                    channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
+                    break;
+                }
+            }
+        }
+        
+        if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
+            gpio_40_state = curr_val_40;
+            printf("PIN 40 (Channel 666): %s\n", 
+                   curr_val_40 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            
+            for (int i = 0; i < 2; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, "666") == 0) {
+                    channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
+                    break;
+                }
+            }
+        }
+        
+        pthread_mutex_unlock(&gpio_mutex);
+        
+        usleep(100000);
+    }
+    
+    printf("GPIO monitor worker stopped\n");
+    cleanup_gpio(gpio_pin_38);
+    cleanup_gpio(gpio_pin_40);
+    
+    return NULL;
+}
+
+int setup_global_config() {
+    if (global_config_initialized) {
+        return 1;
+    }
+    
+    CURL *curl;
+    CURLcode res;
+    struct response_data resp = {0};
+    
+    resp.data = malloc(1);
+    if (resp.data == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return 0;
+    }
     resp.data[0] = '\0';
+    resp.size = 0;
     
-    if (curl) {
+    curl = curl_easy_init();
+    if(curl) {
         curl_easy_setopt(curl, CURLOPT_URL, "https://audio-1.redenes.org/audio-server-port");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
         
-        if (curl_easy_perform(curl) == CURLE_OK && 
-            parse_server_response(resp.data, &shared_conn.config) &&
-            connect_shared_websocket(&shared_conn.config)) {
-            shared_conn.active = 1;
+        res = curl_easy_perform(curl);
+        
+        if(res != CURLE_OK) {
+            fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res));
+            free(resp.data);
+            curl_easy_cleanup(curl);
+            return 0;
+        }
+        
+        printf("Server config response: %s\n", resp.data);
+        
+        if (parse_server_response(resp.data, &global_config)) {
             curl_easy_cleanup(curl);
             free(resp.data);
+            global_config_initialized = 1;
             return 1;
         }
+        
         curl_easy_cleanup(curl);
     }
     
@@ -676,25 +932,43 @@ int setup_shared_connection() {
     return 0;
 }
 
+int setup_channel(struct channel_context *ctx, const char *channel_id) {
+    strcpy(ctx->ws_ctx.channel_id, channel_id);
+    strcpy(ctx->audio.channel_id, channel_id);
+    
+    if (!setup_audio_for_channel(&ctx->audio)) {
+        fprintf(stderr, "Audio setup failed for channel %s\n", channel_id);
+        return 0;
+    }
+    
+    ctx->active = 1;
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
     int run_both = 1;
     
     if (argc > 1) {
-        if (argc > 2) gpio_pin_555 = atoi(argv[2]);
-        if (argc > 3) gpio_pin_666 = atoi(argv[3]);
-        
         int channel = atoi(argv[1]);
-        if (channel == 555 || channel == 666) {
+        if (channel == 555) {
             run_both = 0;
-            printf("Running channel %d only\n", channel);
-        } else if (strcmp(argv[1], "both") != 0) {
-            fprintf(stderr, "Usage: %s [555|666|both] [gpio_pin_555] [gpio_pin_666]\n", argv[0]);
+            printf("Running channel 555 only\n");
+        } else if (channel == 666) {
+            run_both = 0;
+            printf("Running channel 666 only\n");
+        } else if (strcmp(argv[1], "both") == 0) {
+            run_both = 1;
+            printf("Running both channels simultaneously\n");
+        } else {
+            fprintf(stderr, "Usage: %s [555|666|both]\n", argv[0]);
+            fprintf(stderr, "  555  - Run channel 555 only\n");
+            fprintf(stderr, "  666  - Run channel 666 only\n");
+            fprintf(stderr, "  both - Run both channels simultaneously (default)\n");
             return 1;
         }
+    } else {
+        printf("Running both channels simultaneously (default)\n");
     }
-    
-    printf("GPIO pins: 555->%d, 666->%d | Mode: %s\n", gpio_pin_555, gpio_pin_666, 
-           run_both ? "both channels" : "single channel");
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
@@ -705,9 +979,29 @@ int main(int argc, char *argv[]) {
     
     signal(SIGINT, handle_interrupt);
     
+    pthread_t gpio_thread;
+    if (pthread_create(&gpio_thread, NULL, gpio_monitor_worker, NULL)) {
+        fprintf(stderr, "Failed to create GPIO monitor thread\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    // Setup global server configuration
+    if (!setup_global_config()) {
+        fprintf(stderr, "Failed to get server configuration\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    // Setup global UDP socket
+    if (!setup_global_udp(&global_config)) {
+        fprintf(stderr, "Failed to setup UDP socket\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
     if (run_both) {
         printf("Setting up both channels...\n");
-        fflush(stdout);
         
         if (!setup_channel(&channels[0], "555")) {
             fprintf(stderr, "Failed to setup channel 555\n");
@@ -721,21 +1015,34 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         
-        if (!setup_shared_connection()) {
-            fprintf(stderr, "Failed to setup shared connection\n");
+        // Connect global WebSocket for both channels
+        if (!connect_global_websocket()) {
+            fprintf(stderr, "Failed to connect WebSocket\n");
             curl_global_cleanup();
             return 1;
         }
         
-        if (pthread_create(&shared_conn.thread, NULL, shared_websocket_thread, NULL)) {
-            fprintf(stderr, "Failed to create shared WebSocket thread\n");
+        pthread_t ws_thread;
+        if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
+            fprintf(stderr, "Failed to create WebSocket thread\n");
             curl_global_cleanup();
             return 1;
         }
         
-        printf("Both channels running with shared connection. Press Ctrl+C to stop.\n");
+        printf("Both channels running with single WebSocket. Press Ctrl+C to stop.\n");
         
-        pthread_join(shared_conn.thread, NULL);
+        if (global_interrupted) {
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += 2;
+            
+            if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
+                printf("Forcing termination of WebSocket thread\n");
+                pthread_cancel(ws_thread);
+            }
+        } else {
+            pthread_join(ws_thread, NULL);
+        }
         
     } else {
         int channel_idx = (argc > 1 && atoi(argv[1]) == 666) ? 1 : 0;
@@ -747,13 +1054,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         
-        if (!setup_shared_connection()) {
-            fprintf(stderr, "Failed to setup shared connection\n");
+        if (!connect_global_websocket()) {
+            fprintf(stderr, "Failed to connect WebSocket\n");
             curl_global_cleanup();
             return 1;
         }
         
-        shared_websocket_thread(NULL);
+        global_websocket_thread(NULL);
     }
     
     curl_global_cleanup();
