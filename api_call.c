@@ -26,6 +26,9 @@ int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
 void* heartbeat_worker(void* arg);
 void* gpio_monitor_worker(void* arg);
+void* udp_listener_worker(void* arg);
+unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
+int decode_base64(const char* input, unsigned char* output);
 
 struct response_data {
     char *data;
@@ -47,16 +50,22 @@ struct websocket_ctx {
 };
 
 struct audio_stream {
-    PaStream *stream;
+    PaStream *input_stream;
+    PaStream *output_stream;
     OpusEncoder *encoder;
+    OpusDecoder *decoder;
     unsigned char key[32];
     int transmitting;
     int gpio_active;
-    float *buffer;
+    float *input_buffer;
+    float *output_buffer;
     int buffer_size;
-    int buffer_pos;
+    int input_buffer_pos;
+    int output_buffer_pos;
+    int output_buffer_ready;
     PaDeviceIndex device_index;
     char channel_id[16];
+    pthread_mutex_t output_mutex;
 };
 
 struct channel_context {
@@ -73,6 +82,7 @@ static int global_interrupted = 0;
 static int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
+static pthread_t udp_listener_thread;
 static int gpio_38_state = 0;
 static int gpio_40_state = 0;
 static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -89,10 +99,16 @@ static void handle_interrupt(int sig) {
             channels[i].ws_ctx.interrupted = 1;
             channels[i].audio.transmitting = 0;
             
-            if (channels[i].audio.stream) {
-                Pa_AbortStream(channels[i].audio.stream);
-                Pa_CloseStream(channels[i].audio.stream);
-                channels[i].audio.stream = NULL;
+            if (channels[i].audio.input_stream) {
+                Pa_AbortStream(channels[i].audio.input_stream);
+                Pa_CloseStream(channels[i].audio.input_stream);
+                channels[i].audio.input_stream = NULL;
+            }
+            
+            if (channels[i].audio.output_stream) {
+                Pa_AbortStream(channels[i].audio.output_stream);
+                Pa_CloseStream(channels[i].audio.output_stream);
+                channels[i].audio.output_stream = NULL;
             }
             
             if (channels[i].ws_ctx.client_wsi) {
@@ -218,9 +234,59 @@ unsigned char* encrypt_data(const unsigned char* data, size_t data_len, const un
     return encrypted;
 }
 
-static int audio_callback(const void *input, void *output, unsigned long frames,
-                         const PaStreamCallbackTimeInfo* time_info,
-                         PaStreamCallbackFlags flags, void *user_data) {
+unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len) {
+    if (data_len < 28) return NULL; // IV(12) + TAG(16) minimum
+    
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return NULL;
+    
+    const unsigned char* iv = data;
+    const unsigned char* ciphertext = data + 12;
+    const unsigned char* tag = data + data_len - 16;
+    size_t ciphertext_len = data_len - 28;
+    
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    unsigned char* decrypted = malloc(ciphertext_len);
+    if (!decrypted) {
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    int len;
+    if (EVP_DecryptUpdate(ctx, decrypted, &len, ciphertext, ciphertext_len) != 1) {
+        free(decrypted);
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    int plaintext_len = len;
+    
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1) {
+        free(decrypted);
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    if (EVP_DecryptFinal_ex(ctx, decrypted + len, &len) != 1) {
+        free(decrypted);
+        EVP_CIPHER_CTX_free(ctx);
+        return NULL;
+    }
+    
+    plaintext_len += len;
+    *out_len = plaintext_len;
+    
+    EVP_CIPHER_CTX_free(ctx);
+    return decrypted;
+}
+
+static int audio_input_callback(const void *input, void *output, unsigned long frames,
+                                const PaStreamCallbackTimeInfo* time_info,
+                                PaStreamCallbackFlags flags, void *user_data) {
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
@@ -231,12 +297,12 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
     const float *samples = (const float*)input;
     
     for (unsigned long i = 0; i < frames; i++) {
-        audio_stream->buffer[audio_stream->buffer_pos++] = samples[i];
+        audio_stream->input_buffer[audio_stream->input_buffer_pos++] = samples[i];
         
-        if (audio_stream->buffer_pos >= 1920) {
+        if (audio_stream->input_buffer_pos >= 1920) {
             short pcm[1920];
             for (int j = 0; j < 1920; j++) {
-                float sample = audio_stream->buffer[j];
+                float sample = audio_stream->input_buffer[j];
                 if (sample > 1.0f) sample = 1.0f;
                 if (sample < -1.0f) sample = -1.0f;
                 pcm[j] = (short)(sample * 32767.0f);
@@ -266,15 +332,58 @@ static int audio_callback(const void *input, void *output, unsigned long frames,
                 }
             }
             
-            audio_stream->buffer_pos = 0;
+            audio_stream->input_buffer_pos = 0;
         }
     }
     
     return paContinue;
 }
 
+static int audio_output_callback(const void *input, void *output, unsigned long frames,
+                                const PaStreamCallbackTimeInfo* time_info,
+                                PaStreamCallbackFlags flags, void *user_data) {
+    
+    struct audio_stream* audio_stream = (struct audio_stream*)user_data;
+    float *out = (float*)output;
+    
+    pthread_mutex_lock(&audio_stream->output_mutex);
+    
+    if (audio_stream->output_buffer_ready && audio_stream->output_buffer_pos < 1920) {
+        unsigned long frames_to_copy = frames;
+        unsigned long remaining = 1920 - audio_stream->output_buffer_pos;
+        
+        if (frames_to_copy > remaining) {
+            frames_to_copy = remaining;
+        }
+        
+        for (unsigned long i = 0; i < frames_to_copy; i++) {
+            out[i] = audio_stream->output_buffer[audio_stream->output_buffer_pos++];
+        }
+        
+        // Fill remaining frames with silence
+        for (unsigned long i = frames_to_copy; i < frames; i++) {
+            out[i] = 0.0f;
+        }
+        
+        if (audio_stream->output_buffer_pos >= 1920) {
+            audio_stream->output_buffer_ready = 0;
+            audio_stream->output_buffer_pos = 0;
+        }
+    } else {
+        // No audio data, output silence
+        for (unsigned long i = 0; i < frames; i++) {
+            out[i] = 0.0f;
+        }
+    }
+    
+    pthread_mutex_unlock(&audio_stream->output_mutex);
+    return paContinue;
+}
+
 int setup_audio_for_channel(struct audio_stream* audio_stream) {
     int error;
+    
+    // Setup encoder
     audio_stream->encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
     if (error != OPUS_OK) {
         fprintf(stderr, "Opus encoder error: %s\n", opus_strerror(error));
@@ -284,10 +393,25 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
     opus_encoder_ctl(audio_stream->encoder, OPUS_SET_BITRATE(64000));
     opus_encoder_ctl(audio_stream->encoder, OPUS_SET_VBR(1));
     
+    // Setup decoder
+    audio_stream->decoder = opus_decoder_create(48000, 1, &error);
+    if (error != OPUS_OK) {
+        fprintf(stderr, "Opus decoder error: %s\n", opus_strerror(error));
+        opus_encoder_destroy(audio_stream->encoder);
+        return 0;
+    }
+    
+    // Setup buffers
     audio_stream->buffer_size = 4800;
-    audio_stream->buffer = malloc(audio_stream->buffer_size * sizeof(float));
-    audio_stream->buffer_pos = 0;
+    audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
+    audio_stream->output_buffer = malloc(1920 * sizeof(float));
+    audio_stream->input_buffer_pos = 0;
+    audio_stream->output_buffer_pos = 0;
+    audio_stream->output_buffer_ready = 0;
     audio_stream->gpio_active = 0;
+    
+    // Initialize mutex
+    pthread_mutex_init(&audio_stream->output_mutex, NULL);
     
     return 1;
 }
@@ -331,6 +455,15 @@ int setup_global_udp(struct server_config* config) {
     
     printf("Global UDP socket configured for %s:%d\n", config->udp_host, config->udp_port);
     
+    // Add socket info for debugging
+    struct sockaddr_in local_addr;
+    socklen_t addr_len = sizeof(local_addr);
+    if (getsockname(global_udp_socket, (struct sockaddr*)&local_addr, &addr_len) == 0) {
+        printf("UDP socket bound to local port: %d\n", ntohs(local_addr.sin_port));
+    } else {
+        printf("UDP socket local binding info unavailable\n");
+    }
+    
     static int heartbeat_started = 0;
     if (!heartbeat_started) {
         if (pthread_create(&heartbeat_thread, NULL, heartbeat_worker, NULL)) {
@@ -344,9 +477,11 @@ int setup_global_udp(struct server_config* config) {
 }
 
 int start_transmission_for_channel(struct audio_stream* audio_stream) {
-    PaStreamParameters input_params;
+    PaStreamParameters input_params, output_params;
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
+    
+    // Setup input stream
     input_params.device = audio_stream->device_index;
     if (input_params.device == paNoDevice) {
         fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
@@ -358,23 +493,49 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
     
-    PaError err = Pa_OpenStream(&audio_stream->stream, &input_params, NULL, 48000, 1024, 
-                                paClipOff, audio_callback, audio_stream);
+    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                paClipOff, audio_input_callback, audio_stream);
     
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio stream error: %s\n", Pa_GetErrorText(err));
+        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
         return 0;
     }
     
-    err = Pa_StartStream(audio_stream->stream);
+    // Setup output stream
+    output_params.device = audio_stream->device_index;
+    output_params.channelCount = 1;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                        paClipOff, audio_output_callback, audio_stream);
+    
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->stream);
+        fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        return 0;
+    }
+    
+    // Start both streams
+    err = Pa_StartStream(audio_stream->input_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->output_stream);
+        return 0;
+    }
+    
+    err = Pa_StartStream(audio_stream->output_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->output_stream);
         return 0;
     }
     
     audio_stream->transmitting = 1;
-    printf("Audio transmission started for channel %s\n", audio_stream->channel_id);
+    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
     return 1;
 }
 
@@ -638,10 +799,16 @@ void* global_websocket_thread(void* arg) {
     // Cleanup all channels
     for (int i = 0; i < 2; i++) {
         if (channels[i].active) {
-            if (channels[i].audio.stream && !global_interrupted) {
-                Pa_AbortStream(channels[i].audio.stream);
-                Pa_CloseStream(channels[i].audio.stream);
-                channels[i].audio.stream = NULL;
+            if (channels[i].audio.input_stream && !global_interrupted) {
+                Pa_AbortStream(channels[i].audio.input_stream);
+                Pa_CloseStream(channels[i].audio.input_stream);
+                channels[i].audio.input_stream = NULL;
+            }
+            
+            if (channels[i].audio.output_stream && !global_interrupted) {
+                Pa_AbortStream(channels[i].audio.output_stream);
+                Pa_CloseStream(channels[i].audio.output_stream);
+                channels[i].audio.output_stream = NULL;
             }
             
             if (channels[i].audio.encoder) {
@@ -649,10 +816,22 @@ void* global_websocket_thread(void* arg) {
                 channels[i].audio.encoder = NULL;
             }
             
-            if (channels[i].audio.buffer) {
-                free(channels[i].audio.buffer);
-                channels[i].audio.buffer = NULL;
+            if (channels[i].audio.decoder) {
+                opus_decoder_destroy(channels[i].audio.decoder);
+                channels[i].audio.decoder = NULL;
             }
+            
+            if (channels[i].audio.input_buffer) {
+                free(channels[i].audio.input_buffer);
+                channels[i].audio.input_buffer = NULL;
+            }
+            
+            if (channels[i].audio.output_buffer) {
+                free(channels[i].audio.output_buffer);
+                channels[i].audio.output_buffer = NULL;
+            }
+            
+            pthread_mutex_destroy(&channels[i].audio.output_mutex);
             
             channels[i].active = 0;
         }
@@ -884,6 +1063,165 @@ void* gpio_monitor_worker(void* arg) {
     return NULL;
 }
 
+void* udp_listener_worker(void* arg) {
+    printf("UDP listener worker started\n");
+    
+    if (global_udp_socket < 0) {
+        printf("UDP Listener: ERROR - Invalid socket %d\n", global_udp_socket);
+        return NULL;
+    }
+    
+    printf("Listening on UDP socket %d...\n", global_udp_socket);
+    
+    char buffer[8192];
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    
+    while (!global_interrupted) {
+        printf("UDP Listener: Waiting for data...\n");
+        int bytes_received = recvfrom(global_udp_socket, buffer, sizeof(buffer) - 1, 0,
+                                    (struct sockaddr*)&client_addr, &client_len);
+        
+        if (bytes_received > 0) {
+            buffer[bytes_received] = '\0';
+            printf("UDP Listener: Received %d bytes from %s:%d\n", 
+                   bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+            printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
+            
+            // Parse JSON message
+            struct json_object *json = json_tokener_parse(buffer);
+            if (json == NULL) {
+                printf("UDP Listener: Failed to parse JSON\n");
+                continue;
+            }
+            
+            printf("UDP Listener: JSON parsed successfully\n");
+            
+            struct json_object *channel_id_obj, *type_obj, *data_obj;
+            
+            if (json_object_object_get_ex(json, "channel_id", &channel_id_obj) &&
+                json_object_object_get_ex(json, "type", &type_obj) &&
+                json_object_object_get_ex(json, "data", &data_obj)) {
+                
+                const char* channel_id = json_object_get_string(channel_id_obj);
+                const char* type = json_object_get_string(type_obj);
+                const char* data = json_object_get_string(data_obj);
+                
+                printf("UDP Listener: Parsed - channel_id='%s', type='%s', data_length=%zu\n", 
+                       channel_id, type, strlen(data));
+                
+                if (strcmp(type, "audio") == 0) {
+                    printf("UDP Listener: Processing audio message for channel %s\n", channel_id);
+                    
+                    // Find the channel
+                    struct audio_stream* target_stream = NULL;
+                    for (int i = 0; i < 2; i++) {
+                        if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
+                            target_stream = &channels[i].audio;
+                            printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
+                            break;
+                        }
+                    }
+                    
+                    if (!target_stream) {
+                        printf("UDP Listener: No active channel found for '%s'\n", channel_id);
+                        printf("UDP Listener: Active channels: ");
+                        for (int i = 0; i < 2; i++) {
+                            if (channels[i].active) {
+                                printf("'%s' ", channels[i].audio.channel_id);
+                            }
+                        }
+                        printf("\n");
+                    }
+                    
+                    if (target_stream) {
+                        printf("UDP Listener: Decoding base64 data (length=%zu)\n", strlen(data));
+                        
+                        // Decode base64 data
+                        unsigned char encrypted_data[4000];
+                        size_t encrypted_len = strlen(data) * 3 / 4;
+                        
+                        if (decode_base64(data, encrypted_data)) {
+                            printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
+                            
+                            // Decrypt the data
+                            size_t decrypted_len;
+                            unsigned char* decrypted = decrypt_data(encrypted_data, encrypted_len, 
+                                                                  target_stream->key, &decrypted_len);
+                            
+                            if (decrypted) {
+                                printf("UDP Listener: Data decrypted successfully (%zu bytes)\n", decrypted_len);
+                                
+                                // Decode Opus audio
+                                short pcm_data[1920];
+                                int samples = opus_decode(target_stream->decoder, decrypted, decrypted_len, 
+                                                        pcm_data, 1920, 0);
+                                
+                                if (samples > 0) {
+                                    printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
+                                    
+                                    // Convert to float and add to output buffer
+                                    pthread_mutex_lock(&target_stream->output_mutex);
+                                    
+                                    if (!target_stream->output_buffer_ready) {
+                                        for (int j = 0; j < samples && j < 1920; j++) {
+                                            target_stream->output_buffer[j] = (float)pcm_data[j] / 32767.0f;
+                                        }
+                                        target_stream->output_buffer_ready = 1;
+                                        target_stream->output_buffer_pos = 0;
+                                        
+                                        printf("UDP Listener: Audio queued for playback on channel %s\n", channel_id);
+                                    } else {
+                                        // Force replace old buffer with new audio for real-time performance
+                                        for (int j = 0; j < samples && j < 1920; j++) {
+                                            target_stream->output_buffer[j] = (float)pcm_data[j] / 32767.0f;
+                                        }
+                                        target_stream->output_buffer_pos = 0;
+                                        
+                                        printf("UDP Listener: Replaced old audio with new for channel %s\n", channel_id);
+                                    }
+                                    
+                                    pthread_mutex_unlock(&target_stream->output_mutex);
+                                } else {
+                                    printf("UDP Listener: Opus decode failed: %s\n", opus_strerror(samples));
+                                }
+                                
+                                free(decrypted);
+                            } else {
+                                printf("UDP Listener: Decryption failed\n");
+                            }
+                        } else {
+                            printf("UDP Listener: Base64 decode failed\n");
+                        }
+                    }
+                } else {
+                    printf("UDP Listener: Non-audio message type '%s', ignoring\n", type);
+                }
+            } else {
+                printf("UDP Listener: JSON missing required fields (channel_id, type, data)\n");
+            }
+            
+            json_object_put(json);
+        } else if (bytes_received < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("UDP Listener: No data available (would block)\n");
+                usleep(100000); // Wait 100ms before trying again
+            } else {
+                if (!global_interrupted) {
+                    printf("UDP Listener: Receive error - %s (errno=%d)\n", strerror(errno), errno);
+                    perror("UDP receive error");
+                }
+                break;
+            }
+        } else if (bytes_received == 0) {
+            printf("UDP Listener: Received 0 bytes (connection closed?)\n");
+        }
+    }
+    
+    printf("UDP listener worker stopped\n");
+    return NULL;
+}
+
 int setup_global_config() {
     if (global_config_initialized) {
         return 1;
@@ -996,6 +1334,13 @@ int main(int argc, char *argv[]) {
     // Setup global UDP socket
     if (!setup_global_udp(&global_config)) {
         fprintf(stderr, "Failed to setup UDP socket\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    // Now start UDP listener thread AFTER socket is configured
+    if (pthread_create(&udp_listener_thread, NULL, udp_listener_worker, NULL)) {
+        fprintf(stderr, "Failed to create UDP listener thread\n");
         curl_global_cleanup();
         return 1;
     }
