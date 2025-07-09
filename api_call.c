@@ -29,6 +29,7 @@ void* gpio_monitor_worker(void* arg);
 void* udp_listener_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
 int decode_base64(const char* input, unsigned char* output);
+size_t decode_base64_len(const char* input, unsigned char* output);
 
 struct response_data {
     char *data;
@@ -49,6 +50,23 @@ struct websocket_ctx {
     char channel_id[16];
 };
 
+#define JITTER_BUFFER_SIZE 8
+#define SAMPLES_PER_FRAME 1920
+
+struct audio_frame {
+    float samples[SAMPLES_PER_FRAME];
+    int sample_count;
+    int valid;
+};
+
+struct jitter_buffer {
+    struct audio_frame frames[JITTER_BUFFER_SIZE];
+    int write_index;
+    int read_index;
+    int frame_count;
+    pthread_mutex_t mutex;
+};
+
 struct audio_stream {
     PaStream *input_stream;
     PaStream *output_stream;
@@ -58,14 +76,12 @@ struct audio_stream {
     int transmitting;
     int gpio_active;
     float *input_buffer;
-    float *output_buffer;
+    struct jitter_buffer output_jitter;
     int buffer_size;
     int input_buffer_pos;
-    int output_buffer_pos;
-    int output_buffer_ready;
+    int current_output_frame_pos;
     PaDeviceIndex device_index;
     char channel_id[16];
-    pthread_mutex_t output_mutex;
 };
 
 struct channel_context {
@@ -183,6 +199,41 @@ int decode_base64(const char* input, unsigned char* output) {
     }
     
     return 1;
+}
+
+size_t decode_base64_len(const char* input, unsigned char* output) {
+    static const int table[] = {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,
+        -1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
+        -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1
+    };
+    
+    size_t input_len = strlen(input);
+    if (input_len % 4 != 0) return 0;
+    
+    size_t output_len = input_len / 4 * 3;
+    if (input_len > 0 && input[input_len - 1] == '=') output_len--;
+    if (input_len > 1 && input[input_len - 2] == '=') output_len--;
+    
+    for (size_t i = 0, j = 0; i < input_len;) {
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        
+        uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
+        
+        if (j < output_len) output[j++] = (triple >> 2 * 8) & 0xFF;
+        if (j < output_len) output[j++] = (triple >> 1 * 8) & 0xFF;
+        if (j < output_len) output[j++] = (triple >> 0 * 8) & 0xFF;
+    }
+    
+    return output_len;
 }
 
 unsigned char* encrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len) {
@@ -345,38 +396,63 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     float *out = (float*)output;
+    struct jitter_buffer *jitter = &audio_stream->output_jitter;
     
-    pthread_mutex_lock(&audio_stream->output_mutex);
+    static int callback_count = 0;
+    if (callback_count++ % 100 == 0) {
+        printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
+    }
     
-    if (audio_stream->output_buffer_ready && audio_stream->output_buffer_pos < 1920) {
-        unsigned long frames_to_copy = frames;
-        unsigned long remaining = 1920 - audio_stream->output_buffer_pos;
-        
-        if (frames_to_copy > remaining) {
-            frames_to_copy = remaining;
-        }
-        
-        for (unsigned long i = 0; i < frames_to_copy; i++) {
-            out[i] = audio_stream->output_buffer[audio_stream->output_buffer_pos++];
-        }
-        
-        // Fill remaining frames with silence
-        for (unsigned long i = frames_to_copy; i < frames; i++) {
-            out[i] = 0.0f;
-        }
-        
-        if (audio_stream->output_buffer_pos >= 1920) {
-            audio_stream->output_buffer_ready = 0;
-            audio_stream->output_buffer_pos = 0;
-        }
-    } else {
-        // No audio data, output silence
-        for (unsigned long i = 0; i < frames; i++) {
-            out[i] = 0.0f;
+    pthread_mutex_lock(&jitter->mutex);
+    
+    unsigned long frames_filled = 0;
+    
+    while (frames_filled < frames) {
+        // Check if we have a current frame to read from
+        if (jitter->frame_count > 0) {
+            struct audio_frame *current_frame = &jitter->frames[jitter->read_index];
+            
+            if (current_frame->valid) {
+                // Calculate how many samples we can copy from current frame
+                int remaining_in_frame = current_frame->sample_count - audio_stream->current_output_frame_pos;
+                unsigned long frames_to_copy = frames - frames_filled;
+                
+                if (frames_to_copy > remaining_in_frame) {
+                    frames_to_copy = remaining_in_frame;
+                }
+                
+                // Copy samples from current frame
+                for (unsigned long i = 0; i < frames_to_copy; i++) {
+                    out[frames_filled + i] = current_frame->samples[audio_stream->current_output_frame_pos + i];
+                }
+                
+                frames_filled += frames_to_copy;
+                audio_stream->current_output_frame_pos += frames_to_copy;
+                
+                // Check if we finished this frame
+                if (audio_stream->current_output_frame_pos >= current_frame->sample_count) {
+                    // Mark frame as consumed
+                    current_frame->valid = 0;
+                    jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
+                    jitter->frame_count--;
+                    audio_stream->current_output_frame_pos = 0;
+                }
+            } else {
+                // Frame is invalid, skip it
+                jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
+                jitter->frame_count--;
+                audio_stream->current_output_frame_pos = 0;
+            }
+        } else {
+            // No frames available, fill with silence
+            for (unsigned long i = frames_filled; i < frames; i++) {
+                out[i] = 0.0f;
+            }
+            frames_filled = frames;
         }
     }
     
-    pthread_mutex_unlock(&audio_stream->output_mutex);
+    pthread_mutex_unlock(&jitter->mutex);
     return paContinue;
 }
 
@@ -404,14 +480,18 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
     // Setup buffers
     audio_stream->buffer_size = 4800;
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
-    audio_stream->output_buffer = malloc(1920 * sizeof(float));
     audio_stream->input_buffer_pos = 0;
-    audio_stream->output_buffer_pos = 0;
-    audio_stream->output_buffer_ready = 0;
+    audio_stream->current_output_frame_pos = 0;
     audio_stream->gpio_active = 0;
     
-    // Initialize mutex
-    pthread_mutex_init(&audio_stream->output_mutex, NULL);
+    // Initialize jitter buffer
+    memset(&audio_stream->output_jitter, 0, sizeof(struct jitter_buffer));
+    pthread_mutex_init(&audio_stream->output_jitter.mutex, NULL);
+    
+    for (int i = 0; i < JITTER_BUFFER_SIZE; i++) {
+        audio_stream->output_jitter.frames[i].valid = 0;
+        audio_stream->output_jitter.frames[i].sample_count = 0;
+    }
     
     return 1;
 }
@@ -532,6 +612,19 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         Pa_CloseStream(audio_stream->input_stream);
         Pa_CloseStream(audio_stream->output_stream);
         return 0;
+    }
+    
+    // Check if streams are actually running
+    if (Pa_IsStreamActive(audio_stream->input_stream)) {
+        printf("Input stream is active for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
+    }
+    
+    if (Pa_IsStreamActive(audio_stream->output_stream)) {
+        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
     audio_stream->transmitting = 1;
@@ -826,12 +919,7 @@ void* global_websocket_thread(void* arg) {
                 channels[i].audio.input_buffer = NULL;
             }
             
-            if (channels[i].audio.output_buffer) {
-                free(channels[i].audio.output_buffer);
-                channels[i].audio.output_buffer = NULL;
-            }
-            
-            pthread_mutex_destroy(&channels[i].audio.output_mutex);
+            pthread_mutex_destroy(&channels[i].audio.output_jitter.mutex);
             
             channels[i].active = 0;
         }
@@ -1078,15 +1166,14 @@ void* udp_listener_worker(void* arg) {
     socklen_t client_len = sizeof(client_addr);
     
     while (!global_interrupted) {
-        printf("UDP Listener: Waiting for data...\n");
         int bytes_received = recvfrom(global_udp_socket, buffer, sizeof(buffer) - 1, 0,
                                     (struct sockaddr*)&client_addr, &client_len);
         
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
-            printf("UDP Listener: Received %d bytes from %s:%d\n", 
-                   bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-            printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
+            // printf("UDP Listener: Received %d bytes from %s:%d\n", 
+            //        bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+            // printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
             
             // Parse JSON message
             struct json_object *json = json_tokener_parse(buffer);
@@ -1095,7 +1182,7 @@ void* udp_listener_worker(void* arg) {
                 continue;
             }
             
-            printf("UDP Listener: JSON parsed successfully\n");
+            // printf("UDP Listener: JSON parsed successfully\n");
             
             struct json_object *channel_id_obj, *type_obj, *data_obj;
             
@@ -1107,18 +1194,18 @@ void* udp_listener_worker(void* arg) {
                 const char* type = json_object_get_string(type_obj);
                 const char* data = json_object_get_string(data_obj);
                 
-                printf("UDP Listener: Parsed - channel_id='%s', type='%s', data_length=%zu\n", 
-                       channel_id, type, strlen(data));
+                // printf("UDP Listener: Parsed - channel_id='%s', type='%s', data_length=%zu\n", 
+                //        channel_id, type, strlen(data));
                 
                 if (strcmp(type, "audio") == 0) {
-                    printf("UDP Listener: Processing audio message for channel %s\n", channel_id);
+                    // printf("UDP Listener: Processing audio message for channel %s\n", channel_id);
                     
                     // Find the channel
                     struct audio_stream* target_stream = NULL;
                     for (int i = 0; i < 2; i++) {
                         if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
                             target_stream = &channels[i].audio;
-                            printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
+                            // printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
                             break;
                         }
                     }
@@ -1135,14 +1222,27 @@ void* udp_listener_worker(void* arg) {
                     }
                     
                     if (target_stream) {
-                        printf("UDP Listener: Decoding base64 data (length=%zu)\n", strlen(data));
+                        // printf("UDP Listener: Decoding base64 data (length=%zu)\n", strlen(data));
                         
                         // Decode base64 data
                         unsigned char encrypted_data[4000];
-                        size_t encrypted_len = strlen(data) * 3 / 4;
+                        size_t encrypted_len = decode_base64_len(data, encrypted_data);
                         
-                        if (decode_base64(data, encrypted_data)) {
+                        if (encrypted_len > 0) {
                             printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
+                            
+                            // Debug: Print first few bytes of encrypted data and key
+                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
+                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
+                                printf("%02x ", encrypted_data[k]);
+                            }
+                            printf("\n");
+                            
+                            printf("UDP Listener: Using key (first 16 bytes): ");
+                            for (int k = 0; k < 16; k++) {
+                                printf("%02x ", target_stream->key[k]);
+                            }
+                            printf("\n");
                             
                             // Decrypt the data
                             size_t decrypted_len;
@@ -1160,28 +1260,67 @@ void* udp_listener_worker(void* arg) {
                                 if (samples > 0) {
                                     printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
                                     
-                                    // Convert to float and add to output buffer
-                                    pthread_mutex_lock(&target_stream->output_mutex);
+                                    // Debug: Check audio levels
+                                    short max_sample = 0;
+                                    for (int s = 0; s < samples; s++) {
+                                        if (abs(pcm_data[s]) > max_sample) {
+                                            max_sample = abs(pcm_data[s]);
+                                        }
+                                    }
+                                    printf("UDP Listener: Audio level check - max sample: %d (%.2f%%)\n", 
+                                           max_sample, (float)max_sample / 32767.0f * 100.0f);
                                     
-                                    if (!target_stream->output_buffer_ready) {
-                                        for (int j = 0; j < samples && j < 1920; j++) {
-                                            target_stream->output_buffer[j] = (float)pcm_data[j] / 32767.0f;
-                                        }
-                                        target_stream->output_buffer_ready = 1;
-                                        target_stream->output_buffer_pos = 0;
+                                    // Add audio frame to jitter buffer
+                                    struct jitter_buffer *jitter = &target_stream->output_jitter;
+                                    pthread_mutex_lock(&jitter->mutex);
+                                    
+                                    if (jitter->frame_count < JITTER_BUFFER_SIZE) {
+                                        // Add new frame to buffer
+                                        struct audio_frame *frame = &jitter->frames[jitter->write_index];
                                         
-                                        printf("UDP Listener: Audio queued for playback on channel %s\n", channel_id);
+                                        // Convert PCM to float and copy to frame (with gain boost)
+                                        for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
+                                            float sample = (float)pcm_data[j] / 32767.0f;
+                                            // Apply 10x gain boost for very quiet audio
+                                            sample *= 10.0f;
+                                            // Clamp to prevent distortion
+                                            if (sample > 1.0f) sample = 1.0f;
+                                            if (sample < -1.0f) sample = -1.0f;
+                                            frame->samples[j] = sample;
+                                        }
+                                        frame->sample_count = samples;
+                                        frame->valid = 1;
+                                        
+                                        jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
+                                        jitter->frame_count++;
+                                        
+                                        printf("UDP: Audio queued for %s (buffer=%d)\n", 
+                                               channel_id, jitter->frame_count);
                                     } else {
-                                        // Force replace old buffer with new audio for real-time performance
-                                        for (int j = 0; j < samples && j < 1920; j++) {
-                                            target_stream->output_buffer[j] = (float)pcm_data[j] / 32767.0f;
-                                        }
-                                        target_stream->output_buffer_pos = 0;
+                                        // Buffer full, drop oldest frame and add new one
+                                        jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
+                                        jitter->frame_count--;
                                         
-                                        printf("UDP Listener: Replaced old audio with new for channel %s\n", channel_id);
+                                        struct audio_frame *frame = &jitter->frames[jitter->write_index];
+                                        for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
+                                            float sample = (float)pcm_data[j] / 32767.0f;
+                                            // Apply 10x gain boost for very quiet audio
+                                            sample *= 10.0f;
+                                            // Clamp to prevent distortion
+                                            if (sample > 1.0f) sample = 1.0f;
+                                            if (sample < -1.0f) sample = -1.0f;
+                                            frame->samples[j] = sample;
+                                        }
+                                        frame->sample_count = samples;
+                                        frame->valid = 1;
+                                        
+                                        jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
+                                        jitter->frame_count++;
+                                        
+                                        printf("UDP: Buffer full, dropped frame for %s\n", channel_id);
                                     }
                                     
-                                    pthread_mutex_unlock(&target_stream->output_mutex);
+                                    pthread_mutex_unlock(&jitter->mutex);
                                 } else {
                                     printf("UDP Listener: Opus decode failed: %s\n", opus_strerror(samples));
                                 }
