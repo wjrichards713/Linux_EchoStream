@@ -31,16 +31,10 @@ unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const un
 int decode_base64(const char* input, unsigned char* output);
 size_t decode_base64_len(const char* input, unsigned char* output);
 
-struct response_data {
-    char *data;
-    size_t size;
-};
-
 struct server_config {
     int udp_port;
     char udp_host[128];
     int websocket_id;
-    char aes_key[256];
 };
 
 struct websocket_ctx {
@@ -85,7 +79,6 @@ struct audio_stream {
 };
 
 struct channel_context {
-    struct websocket_ctx ws_ctx;
     struct audio_stream audio;
     pthread_t thread;
     int active;
@@ -104,15 +97,20 @@ static int gpio_40_state = 0;
 static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
+static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
 
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
     
+    // Close the single WebSocket connection
+    if (global_ws_client) {
+        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+    }
+    
     for (int i = 0; i < 2; i++) {
         if (channels[i].active) {
-            channels[i].ws_ctx.interrupted = 1;
             channels[i].audio.transmitting = 0;
             
             if (channels[i].audio.input_stream) {
@@ -125,10 +123,6 @@ static void handle_interrupt(int sig) {
                 Pa_AbortStream(channels[i].audio.output_stream);
                 Pa_CloseStream(channels[i].audio.output_stream);
                 channels[i].audio.output_stream = NULL;
-            }
-            
-            if (channels[i].ws_ctx.client_wsi) {
-                lws_close_reason(channels[i].ws_ctx.client_wsi, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
             }
         }
     }
@@ -564,6 +558,16 @@ int setup_global_udp(struct server_config* config) {
         }
     }
     
+    // Start UDP listener thread now that UDP socket is configured
+    static int udp_listener_started = 0;
+    if (!udp_listener_started) {
+        if (pthread_create(&udp_listener_thread, NULL, udp_listener_worker, NULL)) {
+            fprintf(stderr, "Failed to create UDP listener thread\n");
+        } else {
+            udp_listener_started = 1;
+        }
+    }
+    
     return 1;
 }
 
@@ -643,27 +647,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     return 1;
 }
 
-size_t response_callback(char *ptr, size_t size, size_t nmemb, void *userdata) {
-    size_t real_size = size * nmemb;
-    struct response_data *resp = (struct response_data *)userdata;
-    
-    char *new_data = realloc(resp->data, resp->size + real_size + 1);
-    if (new_data == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 0;
-    }
-    
-    resp->data = new_data;
-    memcpy(&(resp->data[resp->size]), ptr, real_size);
-    resp->size += real_size;
-    resp->data[resp->size] = '\0';
-    
-    return real_size;
-}
-
-int parse_server_response(const char *json_str, struct server_config *cfg) {
+int parse_websocket_config(const char *json_str, struct server_config *cfg) {
     struct json_object *json;
-    struct json_object *udp_port, *udp_host, *websocket_id, *aes_key;
+    struct json_object *udp_port, *udp_host, *websocket_id;
     
     json = json_tokener_parse(json_str);
     if (json == NULL) {
@@ -673,18 +659,15 @@ int parse_server_response(const char *json_str, struct server_config *cfg) {
     
     if (json_object_object_get_ex(json, "udp_port", &udp_port) &&
         json_object_object_get_ex(json, "udp_host", &udp_host) &&
-        json_object_object_get_ex(json, "websocket_id", &websocket_id) &&
-        json_object_object_get_ex(json, "aes_key", &aes_key)) {
+        json_object_object_get_ex(json, "websocket_id", &websocket_id)) {
         
         cfg->udp_port = json_object_get_int(udp_port);
         strncpy(cfg->udp_host, json_object_get_string(udp_host), sizeof(cfg->udp_host) - 1);
         cfg->websocket_id = json_object_get_int(websocket_id);
-        strncpy(cfg->aes_key, json_object_get_string(aes_key), sizeof(cfg->aes_key) - 1);
         
         printf("UDP Port: %d\n", cfg->udp_port);
         printf("UDP Host: %s\n", cfg->udp_host);
         printf("WebSocket ID: %d\n", cfg->websocket_id);
-        printf("AES Key: %s\n", cfg->aes_key);
         
         json_object_put(json);
         return 1;
@@ -697,109 +680,97 @@ int parse_server_response(const char *json_str, struct server_config *cfg) {
 
 static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                              void *user, void *in, size_t len) {
-    struct channel_context *ctx = NULL;
-    
-    for (int i = 0; i < 2; i++) {
-        if (channels[i].ws_ctx.client_wsi == wsi) {
-            ctx = &channels[i];
-            break;
-        }
+    // Single WebSocket connection handles both channels
+    if (wsi != global_ws_client) {
+        return 0;
     }
-    
-    if (!ctx) return 0;
     
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-            printf("WebSocket connection established for channel %s\n", ctx->ws_ctx.channel_id);
+            printf("WebSocket connection established for both channels\n");
             
-            char connect_msg[512];
-            time_t now = time(NULL);
-            
-            snprintf(connect_msg, sizeof(connect_msg),
-                "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                ctx->ws_ctx.channel_id, now);
-            
-            printf("Sending connect message: %s\n", connect_msg);
-            
-            size_t msg_len = strlen(connect_msg);
-            unsigned char *buf = malloc(LWS_PRE + msg_len);
-            if (buf) {
-                memcpy(&buf[LWS_PRE], connect_msg, msg_len);
-                lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                free(buf);
-            }
-            
-            printf("Starting transmission immediately for channel %s\n", ctx->ws_ctx.channel_id);
-            
-            const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
-            if (!decode_base64(key_b64, ctx->audio.key)) {
-                fprintf(stderr, "Key decode failed for channel %s\n", ctx->ws_ctx.channel_id);
-                break;
-            }
-            printf("AES key decoded for channel %s\n", ctx->ws_ctx.channel_id);
-            
-            if (setup_global_udp(&global_config)) {
-                if (start_transmission_for_channel(&ctx->audio)) {
-                    char transmit_msg[512];
+            // Send connect message for both active channels
+            for (int i = 0; i < 2; i++) {
+                if (channels[i].active) {
+                    char connect_msg[512];
                     time_t now = time(NULL);
                     
-                    snprintf(transmit_msg, sizeof(transmit_msg),
-                        "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                        ctx->ws_ctx.channel_id, now);
+                    snprintf(connect_msg, sizeof(connect_msg),
+                        "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                        channels[i].audio.channel_id, now);
                     
-                    printf("Sending transmit_started for channel %s: %s\n", ctx->ws_ctx.channel_id, transmit_msg);
+                    printf("Sending connect message for channel %s: %s\n", channels[i].audio.channel_id, connect_msg);
                     
-                    size_t msg_len = strlen(transmit_msg);
-                    unsigned char *buf2 = malloc(LWS_PRE + msg_len);
-                    if (buf2) {
-                        memcpy(&buf2[LWS_PRE], transmit_msg, msg_len);
-                        lws_write(wsi, &buf2[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                        free(buf2);
+                    size_t msg_len = strlen(connect_msg);
+                    unsigned char *buf = malloc(LWS_PRE + msg_len);
+                    if (buf) {
+                        memcpy(&buf[LWS_PRE], connect_msg, msg_len);
+                        lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                        free(buf);
                     }
                 }
             }
+            
+            printf("Waiting for UDP connection info from WebSocket\n");
             break;
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("Received on channel %s: %.*s\n", ctx->ws_ctx.channel_id, (int)len, (char *)in);
+            printf("Received WebSocket message: %.*s\n", (int)len, (char *)in);
             
             char *data = malloc(len + 1);
             if (data) {
                 memcpy(data, in, len);
                 data[len] = '\0';
                 
-                if (strstr(data, "users_connected") && !ctx->audio.transmitting) {
-                    printf("Channel %s connected, starting transmission...\n", ctx->ws_ctx.channel_id);
+                // Check if this is the UDP connection info message
+                if (strstr(data, "udp_host") && strstr(data, "udp_port") && strstr(data, "websocket_id")) {
+                    printf("Received UDP connection info: %s\n", data);
                     
-                    const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
-                    if (!decode_base64(key_b64, ctx->audio.key)) {
-                        fprintf(stderr, "Key decode failed\n");
-                        free(data);
-                        return 0;
-                    }
-                    printf("AES key decoded for channel %s\n", ctx->ws_ctx.channel_id);
-                    
-                    if (setup_global_udp(&global_config)) {
-                        if (start_transmission_for_channel(&ctx->audio)) {
-                            char transmit_msg[512];
-                            time_t now = time(NULL);
+                    // Parse the WebSocket configuration
+                    if (parse_websocket_config(data, &global_config)) {
+                        printf("Successfully parsed UDP connection info\n");
+                        global_config_initialized = 1;
+                        
+                        // Setup UDP connection
+                        if (setup_global_udp(&global_config)) {
+                            printf("UDP connection established\n");
                             
-                            snprintf(transmit_msg, sizeof(transmit_msg),
-                                "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                                ctx->ws_ctx.channel_id, now);
-                            
-                            printf("Sending transmit_started: %s\n", transmit_msg);
-                            
-                            size_t msg_len = strlen(transmit_msg);
-                            unsigned char *buf = malloc(LWS_PRE + msg_len);
-                            if (buf) {
-                                memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
-                                lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                                free(buf);
+                            // Start transmission for all active channels
+                            for (int i = 0; i < 2; i++) {
+                                if (channels[i].active) {
+                                    const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
+                                    if (!decode_base64(key_b64, channels[i].audio.key)) {
+                                        fprintf(stderr, "Key decode failed for channel %s\n", channels[i].audio.channel_id);
+                                        continue;
+                                    }
+                                    printf("AES key decoded for channel %s\n", channels[i].audio.channel_id);
+                                    
+                                    if (start_transmission_for_channel(&channels[i].audio)) {
+                                        char transmit_msg[512];
+                                        time_t now = time(NULL);
+                                        
+                                        snprintf(transmit_msg, sizeof(transmit_msg),
+                                            "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                                            channels[i].audio.channel_id, now);
+                                        
+                                        printf("Sending transmit_started for channel %s: %s\n", channels[i].audio.channel_id, transmit_msg);
+                                        
+                                        size_t msg_len = strlen(transmit_msg);
+                                        unsigned char *buf = malloc(LWS_PRE + msg_len);
+                                        if (buf) {
+                                            memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
+                                            lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                                            free(buf);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                }
+                else if (strstr(data, "users_connected")) {
+                    printf("Users connected message received, but UDP not yet configured\n");
                 }
                 
                 free(data);
@@ -808,13 +779,13 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_CLOSED:
-            printf("WebSocket closed for channel %s\n", ctx->ws_ctx.channel_id);
-            ctx->ws_ctx.client_wsi = NULL;
+            printf("WebSocket closed for both channels\n");
+            global_ws_client = NULL;
             break;
             
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-            printf("WebSocket error for channel %s: %.*s\n", ctx->ws_ctx.channel_id, (int)len, (char *)in);
-            ctx->ws_ctx.client_wsi = NULL;
+            printf("WebSocket error: %.*s\n", (int)len, (char *)in);
+            global_ws_client = NULL;
             break;
             
         default:
@@ -835,22 +806,19 @@ static struct lws_protocols protocols[] = {
 };
 
 int connect_global_websocket() {
-    if (global_ws_context) {
+    if (global_ws_context && global_ws_client) {
         printf("WebSocket already connected\n");
         return 1;
     }
     
     struct lws_context_creation_info info;
-    char ws_url[256];
+    char ws_url[256] = "wss://audio.redenes.org/ws/";
     
-    snprintf(ws_url, sizeof(ws_url), "wss://audio-1.redenes.org/ws/?websocket_id=%d", global_config.websocket_id);
     printf("Connecting to: %s for both channels\n", ws_url);
     
-    char address[128] = "audio-1.redenes.org";
-    char path[256];
+    char address[128] = "audio.redenes.org";
+    char path[256] = "/ws/";
     int port = 443;
-    
-    snprintf(path, sizeof(path), "/ws/?websocket_id=%d", global_config.websocket_id);
     
     memset(&info, 0, sizeof(info));
     info.port = CONTEXT_PORT_NO_LISTEN;
@@ -865,31 +833,27 @@ int connect_global_websocket() {
         return 0;
     }
     
-    // Connect both channels to the same WebSocket
-    for (int i = 0; i < 2; i++) {
-        if (channels[i].active) {
-            struct lws_client_connect_info connect_info;
-            memset(&connect_info, 0, sizeof(connect_info));
-            connect_info.context = global_ws_context;
-            connect_info.address = address;
-            connect_info.port = port;
-            connect_info.path = path;
-            connect_info.host = connect_info.address;
-            connect_info.origin = connect_info.address;
-            connect_info.ssl_connection = LCCSCF_USE_SSL;
-            connect_info.protocol = protocols[0].name;
-            connect_info.pwsi = &channels[i].ws_ctx.client_wsi;
-            
-            channels[i].ws_ctx.client_wsi = lws_client_connect_via_info(&connect_info);
-            channels[i].ws_ctx.context = global_ws_context;
-            
-            if (channels[i].ws_ctx.client_wsi == NULL) {
-                fprintf(stderr, "WebSocket connect failed for channel %s\n", channels[i].ws_ctx.channel_id);
-                return 0;
-            }
-        }
+    // Create a single WebSocket connection for both channels
+    struct lws_client_connect_info connect_info;
+    memset(&connect_info, 0, sizeof(connect_info));
+    connect_info.context = global_ws_context;
+    connect_info.address = address;
+    connect_info.port = port;
+    connect_info.path = path;
+    connect_info.host = connect_info.address;
+    connect_info.origin = connect_info.address;
+    connect_info.ssl_connection = LCCSCF_USE_SSL;
+    connect_info.protocol = protocols[0].name;
+    connect_info.pwsi = &global_ws_client;
+    
+    global_ws_client = lws_client_connect_via_info(&connect_info);
+    
+    if (global_ws_client == NULL) {
+        fprintf(stderr, "WebSocket connect failed\n");
+        return 0;
     }
     
+    printf("Single WebSocket connection established for both channels\n");
     return 1;
 }
 
@@ -898,6 +862,12 @@ void* global_websocket_thread(void* arg) {
     
     while (!global_interrupted && global_ws_context) {
         lws_service(global_ws_context, 10);
+    }
+    
+    // Close the single WebSocket connection
+    if (global_ws_client) {
+        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        global_ws_client = NULL;
     }
     
     // Cleanup all channels
@@ -1372,56 +1342,8 @@ void* udp_listener_worker(void* arg) {
     return NULL;
 }
 
-int setup_global_config() {
-    if (global_config_initialized) {
-        return 1;
-    }
-    
-    CURL *curl;
-    CURLcode res;
-    struct response_data resp = {0};
-    
-    resp.data = malloc(1);
-    if (resp.data == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 0;
-    }
-    resp.data[0] = '\0';
-    resp.size = 0;
-    
-    curl = curl_easy_init();
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, "https://audio-1.redenes.org/audio-server-port");
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
-        
-        res = curl_easy_perform(curl);
-        
-        if(res != CURLE_OK) {
-            fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res));
-            free(resp.data);
-            curl_easy_cleanup(curl);
-            return 0;
-        }
-        
-        printf("Server config response: %s\n", resp.data);
-        
-        if (parse_server_response(resp.data, &global_config)) {
-            curl_easy_cleanup(curl);
-            free(resp.data);
-            global_config_initialized = 1;
-            return 1;
-        }
-        
-        curl_easy_cleanup(curl);
-    }
-    
-    free(resp.data);
-    return 0;
-}
 
 int setup_channel(struct channel_context *ctx, const char *channel_id) {
-    strcpy(ctx->ws_ctx.channel_id, channel_id);
     strcpy(ctx->audio.channel_id, channel_id);
     
     if (!setup_audio_for_channel(&ctx->audio)) {
@@ -1474,26 +1396,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Setup global server configuration
-    if (!setup_global_config()) {
-        fprintf(stderr, "Failed to get server configuration\n");
-        curl_global_cleanup();
-        return 1;
-    }
-    
-    // Setup global UDP socket
-    if (!setup_global_udp(&global_config)) {
-        fprintf(stderr, "Failed to setup UDP socket\n");
-        curl_global_cleanup();
-        return 1;
-    }
-    
-    // Now start UDP listener thread AFTER socket is configured
-    if (pthread_create(&udp_listener_thread, NULL, udp_listener_worker, NULL)) {
-        fprintf(stderr, "Failed to create UDP listener thread\n");
-        curl_global_cleanup();
-        return 1;
-    }
+    // UDP configuration will be received via WebSocket
+    // UDP listener thread will be started after UDP connection is established
     
     if (run_both) {
         printf("Setting up both channels...\n");
