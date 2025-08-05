@@ -31,6 +31,26 @@ void* udp_listener_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
 int decode_base64(const char* input, unsigned char* output);
 size_t decode_base64_len(const char* input, unsigned char* output);
+void start_wav_recording(struct audio_stream* audio_stream);
+void stop_wav_recording(struct audio_stream* audio_stream);
+void write_wav_header(FILE* file, int sample_rate, int channels);
+void update_wav_header(FILE* file, int data_size);
+
+struct wav_header {
+    char riff[4];
+    uint32_t file_size;
+    char wave[4];
+    char fmt[4];
+    uint32_t fmt_size;
+    uint16_t audio_format;
+    uint16_t channels;
+    uint32_t sample_rate;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint16_t bits_per_sample;
+    char data[4];
+    uint32_t data_size;
+};
 
 struct server_config {
     int udp_port;
@@ -77,6 +97,9 @@ struct audio_stream {
     int current_output_frame_pos;
     PaDeviceIndex device_index;
     char channel_id[16];
+    FILE *wav_file;
+    int recording;
+    int wav_samples_written;
 };
 
 struct channel_context {
@@ -330,6 +353,86 @@ unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const un
     return decrypted;
 }
 
+void write_wav_header(FILE* file, int sample_rate, int channels) {
+    struct wav_header header;
+    
+    memcpy(header.riff, "RIFF", 4);
+    header.file_size = 36; // Will be updated later
+    memcpy(header.wave, "WAVE", 4);
+    memcpy(header.fmt, "fmt ", 4);
+    header.fmt_size = 16;
+    header.audio_format = 1; // PCM
+    header.channels = channels;
+    header.sample_rate = sample_rate;
+    header.bits_per_sample = 16;
+    header.byte_rate = sample_rate * channels * header.bits_per_sample / 8;
+    header.block_align = channels * header.bits_per_sample / 8;
+    memcpy(header.data, "data", 4);
+    header.data_size = 0; // Will be updated later
+    
+    fwrite(&header, sizeof(header), 1, file);
+    fflush(file);
+}
+
+void update_wav_header(FILE* file, int data_size) {
+    if (!file) return;
+    
+    // Update file size (total file size - 8)
+    fseek(file, 4, SEEK_SET);
+    uint32_t file_size = data_size + 36;
+    fwrite(&file_size, 4, 1, file);
+    
+    // Update data size
+    fseek(file, 40, SEEK_SET);
+    fwrite(&data_size, 4, 1, file);
+    
+    fflush(file);
+}
+
+void start_wav_recording(struct audio_stream* audio_stream) {
+    if (audio_stream->recording || !audio_stream->gpio_active) {
+        return;
+    }
+    
+    // Generate filename with timestamp
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char filename[256];
+    snprintf(filename, sizeof(filename), "recording_channel_%s_%04d%02d%02d_%02d%02d%02d.wav",
+             audio_stream->channel_id,
+             tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
+             tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+    
+    audio_stream->wav_file = fopen(filename, "wb");
+    if (!audio_stream->wav_file) {
+        printf("Failed to create WAV file: %s\n", filename);
+        return;
+    }
+    
+    write_wav_header(audio_stream->wav_file, 48000, 1);
+    audio_stream->recording = 1;
+    audio_stream->wav_samples_written = 0;
+    
+    printf("Started WAV recording for channel %s: %s\n", audio_stream->channel_id, filename);
+}
+
+void stop_wav_recording(struct audio_stream* audio_stream) {
+    if (!audio_stream->recording || !audio_stream->wav_file) {
+        return;
+    }
+    
+    // Update WAV header with actual data size
+    int data_size = audio_stream->wav_samples_written * 2; // 16-bit samples
+    update_wav_header(audio_stream->wav_file, data_size);
+    
+    fclose(audio_stream->wav_file);
+    audio_stream->wav_file = NULL;
+    audio_stream->recording = 0;
+    
+    printf("Stopped WAV recording for channel %s (%d samples written)\n", 
+           audio_stream->channel_id, audio_stream->wav_samples_written);
+}
+
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo* time_info,
                                 PaStreamCallbackFlags flags, void *user_data) {
@@ -352,6 +455,13 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                 if (sample > 1.0f) sample = 1.0f;
                 if (sample < -1.0f) sample = -1.0f;
                 pcm[j] = (short)(sample * 32767.0f);
+            }
+            
+            // Write to WAV file if recording
+            if (audio_stream->recording && audio_stream->wav_file) {
+                fwrite(pcm, sizeof(short), 1920, audio_stream->wav_file);
+                audio_stream->wav_samples_written += 1920;
+                fflush(audio_stream->wav_file);
             }
             
             unsigned char opus_data[4000];
@@ -478,6 +588,9 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
     audio_stream->gpio_active = 0;
+    audio_stream->wav_file = NULL;
+    audio_stream->recording = 0;
+    audio_stream->wav_samples_written = 0;
     
     // Initialize jitter buffer
     memset(&audio_stream->output_jitter, 0, sizeof(struct jitter_buffer));
@@ -886,6 +999,11 @@ void* global_websocket_thread(void* arg) {
                 channels[i].audio.input_buffer = NULL;
             }
             
+            // Close WAV recording if active
+            if (channels[i].audio.recording) {
+                stop_wav_recording(&channels[i].audio);
+            }
+            
             pthread_mutex_destroy(&channels[i].audio.output_jitter.mutex);
             
             channels[i].active = 0;
@@ -1131,6 +1249,13 @@ void* gpio_monitor_worker(void* arg) {
             for (int i = 0; i < 2; i++) {
                 if (channels[i].active && strcmp(channels[i].audio.channel_id, "555") == 0) {
                     channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
+                    
+                    // Start/stop WAV recording based on GPIO state
+                    if (curr_val_38 == 0) {
+                        start_wav_recording(&channels[i].audio);
+                    } else {
+                        stop_wav_recording(&channels[i].audio);
+                    }
                     break;
                 }
             }
@@ -1147,6 +1272,13 @@ void* gpio_monitor_worker(void* arg) {
             for (int i = 0; i < 2; i++) {
                 if (channels[i].active && strcmp(channels[i].audio.channel_id, "666") == 0) {
                     channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
+                    
+                    // Start/stop WAV recording based on GPIO state
+                    if (curr_val_40 == 0) {
+                        start_wav_recording(&channels[i].audio);
+                    } else {
+                        stop_wav_recording(&channels[i].audio);
+                    }
                     break;
                 }
             }
