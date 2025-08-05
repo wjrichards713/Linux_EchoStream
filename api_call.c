@@ -25,6 +25,7 @@ int init_gpio_pin(int pin);
 int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
 void* heartbeat_worker(void* arg);
+void send_websocket_transmit_event(const char* channel_id, int is_started);
 void* gpio_monitor_worker(void* arg);
 void* udp_listener_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
@@ -747,22 +748,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                                     printf("AES key decoded for channel %s\n", channels[i].audio.channel_id);
                                     
                                     if (start_transmission_for_channel(&channels[i].audio)) {
-                                        char transmit_msg[512];
-                                        time_t now = time(NULL);
-                                        
-                                        snprintf(transmit_msg, sizeof(transmit_msg),
-                                            "{\"transmit_started\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                                            channels[i].audio.channel_id, now);
-                                        
-                                        printf("Sending transmit_started for channel %s: %s\n", channels[i].audio.channel_id, transmit_msg);
-                                        
-                                        size_t msg_len = strlen(transmit_msg);
-                                        unsigned char *buf = malloc(LWS_PRE + msg_len);
-                                        if (buf) {
-                                            memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
-                                            lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                                            free(buf);
-                                        }
+                                        printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
                                     }
                                 }
                             }
@@ -1069,6 +1055,31 @@ void* heartbeat_worker(void* arg) {
     return NULL;
 }
 
+void send_websocket_transmit_event(const char* channel_id, int is_started) {
+    if (!global_ws_client) {
+        printf("WebSocket not connected, cannot send transmit event\n");
+        return;
+    }
+    
+    char transmit_msg[512];
+    time_t now = time(NULL);
+    const char* event_type = is_started ? "transmit_started" : "transmit_ended";
+    
+    snprintf(transmit_msg, sizeof(transmit_msg),
+        "{\"%s\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
+        event_type, channel_id, now);
+    
+    printf("Sending %s for channel %s: %s\n", event_type, channel_id, transmit_msg);
+    
+    size_t msg_len = strlen(transmit_msg);
+    unsigned char *buf = malloc(LWS_PRE + msg_len);
+    if (buf) {
+        memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
+        lws_write(global_ws_client, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+        free(buf);
+    }
+}
+
 void* gpio_monitor_worker(void* arg) {
     int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
     int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
@@ -1084,6 +1095,24 @@ void* gpio_monitor_worker(void* arg) {
         printf("Failed to initialize GPIO pin 40\n");
         cleanup_gpio(gpio_pin_38);
         return NULL;
+    }
+    
+    printf("GPIO pins initialized. Reading initial states...\n");
+    
+    // Read initial states without sending WebSocket events
+    pthread_mutex_lock(&gpio_mutex);
+    gpio_38_state = read_gpio_pin(gpio_pin_38);
+    gpio_40_state = read_gpio_pin(gpio_pin_40);
+    pthread_mutex_unlock(&gpio_mutex);
+    
+    if (gpio_38_state != -1) {
+        printf("PIN 38 (Channel 555) initial state: %s\n", 
+               gpio_38_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+    }
+    
+    if (gpio_40_state != -1) {
+        printf("PIN 40 (Channel 666) initial state: %s\n", 
+               gpio_40_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
     }
     
     printf("GPIO pins initialized. Monitoring for changes...\n");
@@ -1105,6 +1134,9 @@ void* gpio_monitor_worker(void* arg) {
                     break;
                 }
             }
+            
+            // Send WebSocket transmit event
+            send_websocket_transmit_event("555", (curr_val_38 == 0) ? 1 : 0);
         }
         
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
@@ -1118,6 +1150,9 @@ void* gpio_monitor_worker(void* arg) {
                     break;
                 }
             }
+            
+            // Send WebSocket transmit event
+            send_websocket_transmit_event("666", (curr_val_40 == 0) ? 1 : 0);
         }
         
         pthread_mutex_unlock(&gpio_mutex);
