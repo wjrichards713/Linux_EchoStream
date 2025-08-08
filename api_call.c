@@ -29,6 +29,7 @@ void* heartbeat_worker(void* arg);
 void send_websocket_transmit_event(const char* channel_id, int is_started);
 void* gpio_monitor_worker(void* arg);
 void* udp_listener_worker(void* arg);
+void* mqtt_reconnect_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
 int decode_base64(const char* input, unsigned char* output);
 size_t decode_base64_len(const char* input, unsigned char* output);
@@ -107,7 +108,6 @@ static MQTTClient mqtt_client = NULL;
 static MQTTClient_connectOptions mqtt_conn_opts = MQTTClient_connectOptions_initializer;
 static int mqtt_connected = 0;
 static pthread_mutex_t mqtt_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t mqtt_thread;
 
 // MQTT Configuration
 #define MQTT_BROKER_ADDRESS "tcp://localhost:1883"
@@ -145,6 +145,8 @@ static void publish_MQTT_message(const char* topic, const char* payload) {
 }
 
 static int mqtt_message_arrived(void *context, char *topicName, int topicLen, MQTTClient_message *message) {
+    (void)context;  // Suppress unused parameter warning
+    (void)topicLen; // Suppress unused parameter warning
     printf("MQTT: Message received on topic '%s'\n", topicName);
     
     if (message->payloadlen > 0) {
@@ -173,6 +175,7 @@ static int mqtt_message_arrived(void *context, char *topicName, int topicLen, MQ
 }
 
 static void mqtt_connection_lost(void *context, char *cause) {
+    (void)context; // Suppress unused parameter warning
     printf("MQTT: Connection lost. Cause: %s\n", cause ? cause : "Unknown");
     mqtt_connected = 0;
     
@@ -252,6 +255,7 @@ static void mqtt_disconnect() {
 }
 
 void* mqtt_reconnect_worker(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     printf("MQTT: Starting reconnection worker\n");
     
     while (!global_interrupted && !mqtt_connected) {
@@ -271,6 +275,7 @@ void* mqtt_reconnect_worker(void* arg) {
 }
 
 void* mqtt_worker(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     printf("MQTT: Starting MQTT worker thread\n");
     
     // Initial connection
@@ -305,6 +310,7 @@ void* mqtt_worker(void* arg) {
 }
 
 static void handle_interrupt(int sig) {
+    (void)sig; // Suppress unused parameter warning
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
     
@@ -540,6 +546,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                                 const PaStreamCallbackTimeInfo* time_info,
                                 PaStreamCallbackFlags flags, void *user_data) {
     
+    (void)output;    // Suppress unused parameter warning
+    (void)time_info; // Suppress unused parameter warning
+    (void)flags;     // Suppress unused parameter warning
+    
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
     if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
@@ -601,6 +611,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 static int audio_output_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo* time_info,
                                 PaStreamCallbackFlags flags, void *user_data) {
+    
+    (void)input;     // Suppress unused parameter warning
+    (void)time_info; // Suppress unused parameter warning
+    (void)flags;     // Suppress unused parameter warning
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     float *out = (float*)output;
@@ -894,6 +908,7 @@ int parse_websocket_config(const char *json_str, struct server_config *cfg) {
 
 static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                              void *user, void *in, size_t len) {
+    (void)user; // Suppress unused parameter warning
     // Single WebSocket connection handles both channels
     if (wsi != global_ws_client) {
         return 0;
@@ -1000,8 +1015,9 @@ static struct lws_protocols protocols[] = {
         websocket_callback,
         0,
         4096,
+        0, NULL, NULL
     },
-    { NULL, NULL, 0, 0 }
+    { NULL, NULL, 0, 0, 0, NULL, NULL }
 };
 
 int connect_global_websocket() {
@@ -1057,6 +1073,7 @@ int connect_global_websocket() {
 }
 
 void* global_websocket_thread(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     printf("Starting global WebSocket thread\n");
     
     while (!global_interrupted && global_ws_context) {
@@ -1244,6 +1261,7 @@ void cleanup_gpio(int pin) {
 }
 
 void* heartbeat_worker(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     printf("Heartbeat worker started\n");
     
     while (!global_interrupted) {
@@ -1294,6 +1312,7 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
 }
 
 void* gpio_monitor_worker(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
     int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
     
@@ -1395,6 +1414,7 @@ void* gpio_monitor_worker(void* arg) {
 }
 
 void* udp_listener_worker(void* arg) {
+    (void)arg; // Suppress unused parameter warning
     printf("UDP listener worker started\n");
     
     if (global_udp_socket < 0) {
