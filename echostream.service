@@ -5,9 +5,9 @@ Wants=mosquitto.service
 
 [Service]
 Type=simple
-User=naveen
-WorkingDirectory=/home/naveen/Linux_EchoStream
-ExecStart=/home/naveen/Linux_EchoStream/api_call
+User=will
+WorkingDirectory=/home/will/Linux_EchoStream
+ExecStart=/home/will/Linux_EchoStream/api_call
 Restart=always
 RestartSec=10
 StandardOutput=journal
