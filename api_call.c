@@ -1014,10 +1014,9 @@ static struct lws_protocols protocols[] = {
         "audio-protocol",
         websocket_callback,
         0,
-        4096,
-        0, NULL, NULL
+        4096
     },
-    { NULL, NULL, 0, 0, 0, NULL, NULL }
+    { NULL, NULL, 0, 0 }
 };
 
 int connect_global_websocket() {
