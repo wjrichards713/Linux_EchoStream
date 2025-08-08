@@ -280,9 +280,22 @@ void* mqtt_worker(void* arg) {
     }
     
     // Main MQTT loop
+    time_t last_test_message = 0;
     while (!global_interrupted && mqtt_connected) {
         // Process MQTT messages
         MQTTClient_yield();
+        
+        // Send periodic test message every 10 seconds
+        time_t current_time = time(NULL);
+        if (current_time - last_test_message >= 10) {
+            char test_msg[256];
+            snprintf(test_msg, sizeof(test_msg),
+                     "{\"message\":\"This is the test MQTT message\",\"timestamp\":%ld,\"client_id\":\"%s\"}",
+                     current_time, MQTT_CLIENT_ID);
+            publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, test_msg);
+            last_test_message = current_time;
+        }
+        
         usleep(100000); // 100ms delay
     }
     
