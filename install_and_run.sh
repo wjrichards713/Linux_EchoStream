@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # EchoStream Installation and Run Script for Raspberry Pi 5
-# This script installs all dependencies and runs the EchoStream audio application
+# This script uses the comprehensive Makefile for installation
 
 set -e  # Exit on any error
 
@@ -44,74 +44,6 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-# Update package manager
-print_status "Updating package manager..."
-sudo apt update -y
-
-print_status "Upgrading system packages..."
-sudo apt upgrade -y
-
-# Install essential build tools
-print_status "Installing build essentials..."
-sudo apt install -y \
-    build-essential \
-    cmake \
-    git \
-    pkg-config \
-    wget \
-    curl
-
-# Install audio dependencies
-print_status "Installing audio libraries..."
-sudo apt install -y \
-    libportaudio2 \
-    libportaudiocpp0 \
-    portaudio19-dev \
-    alsa-utils \
-    pulseaudio \
-    pulseaudio-utils
-
-# Install Opus codec
-print_status "Installing Opus codec..."
-sudo apt install -y \
-    libopus-dev \
-    libopus0
-
-# Install OpenSSL for encryption
-print_status "Installing OpenSSL..."
-sudo apt install -y \
-    libssl-dev \
-    openssl
-
-# Install JSON-C library
-print_status "Installing JSON-C library..."
-sudo apt install -y \
-    libjson-c-dev \
-    libjson-c5
-
-# Install cURL library
-print_status "Installing cURL library..."
-sudo apt install -y \
-    libcurl4-openssl-dev \
-    curl
-
-# Install WebSockets library
-print_status "Installing WebSockets library..."
-sudo apt install -y \
-    libwebsockets-dev
-
-# Install pthread library (usually included with build-essential)
-print_status "Ensuring pthread support..."
-sudo apt install -y \
-    libc6-dev
-
-# Install pinctrl for GPIO control on RPi 5
-print_status "Installing GPIO utilities for RPi 5..."
-sudo apt install -y \
-    raspi-gpio \
-    gpiod \
-    libgpiod-dev
-
 # Check if api_call.c exists
 if [ ! -f "api_call.c" ]; then
     print_error "api_call.c not found in current directory!"
@@ -119,18 +51,16 @@ if [ ! -f "api_call.c" ]; then
     exit 1
 fi
 
-print_success "All dependencies installed successfully!"
+print_status "Starting EchoStream installation using Makefile..."
 
-# Compile the application
-print_status "Compiling EchoStream application..."
-gcc -Wall -Wextra -std=c99 -D_GNU_SOURCE -o api_call api_call.c \
-    $(pkg-config --cflags --libs libcurl json-c libwebsockets portaudio-2.0 opus openssl) \
-    -lpthread
+# Use the comprehensive Makefile for installation
+print_status "Installing dependencies and building application..."
+make all
 
 if [ $? -eq 0 ]; then
-    print_success "Compilation successful!"
+    print_success "Installation and build successful!"
 else
-    print_error "Compilation failed!"
+    print_error "Installation failed!"
     exit 1
 fi
 
@@ -151,64 +81,35 @@ if [ -w /sys/class/gpio/export ]; then
     print_success "GPIO permissions OK"
 else
     print_warning "GPIO permissions may need adjustment"
-    print_status "Adding user to gpio group..."
-    sudo usermod -a -G gpio $USER
-    print_warning "Please log out and log back in for GPIO permissions to take effect"
 fi
 
-# Create systemd service file (optional)
-print_status "Creating systemd service file..."
-cat > echostream.service << EOF
-[Unit]
-Description=EchoStream Audio Communication
-After=network.target sound.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/api_call
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-print_success "Service file created: echostream.service"
-print_status "To install as system service, run: sudo cp echostream.service /etc/systemd/system/"
-
-# Display usage information
-echo ""
-echo "=========================================="
-echo "Installation Complete!"
-echo "=========================================="
-echo ""
-echo "Usage:"
-echo "  Run both channels: ./api_call"
-echo "  Run channel 555:  ./api_call 555"
-echo "  Run channel 666:  ./api_call 666"
-echo ""
-echo "GPIO Connections:"
-echo "  Pin 38 (GPIO 20) - Channel 555 PTT (connect to GND to transmit)"
-echo "  Pin 40 (GPIO 21) - Channel 666 PTT (connect to GND to transmit)"
-echo ""
-echo "Audio Devices:"
-echo "  Channel 555 - First USB audio device"
-echo "  Channel 666 - Second USB audio device"
-echo ""
-
-# Ask user if they want to run now
-echo -n "Do you want to run EchoStream now? (y/n): "
-read -r response
-if [[ "$response" =~ ^[Yy]$ ]]; then
-    print_status "Starting EchoStream..."
-    echo "Press Ctrl+C to stop"
-    echo ""
-    ./api_call
+# Check MQTT broker status
+print_status "Checking MQTT broker status..."
+if systemctl is-active --quiet mosquitto; then
+    print_success "Mosquitto MQTT broker is running"
 else
-    print_success "EchoStream is ready to run!"
-    print_status "Run './api_call' when you're ready to start"
+    print_warning "Mosquitto MQTT broker is not running"
+    print_status "Starting Mosquitto broker..."
+    sudo systemctl start mosquitto
 fi
+
+print_success "Installation complete!"
+echo ""
+echo "=========================================="
+echo "EchoStream is ready to run!"
+echo "=========================================="
+echo ""
+echo "Available commands:"
+echo "  ./api_call        - Run the application"
+echo "  make run          - Build and run"
+echo "  make install      - Install to system"
+echo "  make clean        - Clean build files"
+echo "  make help         - Show all options"
+echo ""
+echo "To start the application:"
+echo "  ./api_call"
+echo ""
+echo "To install as a system service:"
+echo "  make install"
+echo "  sudo systemctl start echostream.service"
+echo ""

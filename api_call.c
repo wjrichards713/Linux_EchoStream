@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <MQTTClient.h>
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
@@ -101,6 +102,195 @@ static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
 
+// MQTT Client variables
+static MQTTClient mqtt_client = NULL;
+static MQTTClient_connectOptions mqtt_conn_opts = MQTTClient_connectOptions_initializer;
+static int mqtt_connected = 0;
+static pthread_mutex_t mqtt_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t mqtt_thread;
+
+// MQTT Configuration
+#define MQTT_BROKER_ADDRESS "tcp://localhost:1883"
+#define MQTT_CLIENT_ID "EchoStream_Client"
+#define MQTT_KEEP_ALIVE_INTERVAL 60
+#define MQTT_CLEAN_SESSION 1
+#define MQTT_QOS 1
+
+// MQTT Topics
+#define MQTT_TOPIC_AUDIO_STATUS "echostream/audio/status"
+#define MQTT_TOPIC_GPIO_STATUS "echostream/gpio/status"
+#define MQTT_TOPIC_SYSTEM_STATUS "echostream/status"
+#define MQTT_TOPIC_COMMANDS "echostream/command"
+#define MQTT_TOPIC_AUDIO_DATA "echostream/audio/data"
+
+static void publish_MQTT_message(const char* topic, const char* payload) {
+    if (!mqtt_connected || !mqtt_client) {
+        printf("MQTT not connected, cannot publish message\n");
+        return;
+    }
+    
+    pthread_mutex_lock(&mqtt_mutex);
+    
+    MQTTClient_deliveryToken token;
+    int rc = MQTTClient_publish(mqtt_client, topic, strlen(payload), payload, 
+                                MQTT_QOS, 0, &token);
+    
+    if (rc == MQTTCLIENT_SUCCESS) {
+        printf("MQTT: Published message to topic '%s': %s\n", topic, payload);
+    } else {
+        printf("MQTT: Failed to publish message to topic '%s': %d\n", topic, rc);
+    }
+    
+    pthread_mutex_unlock(&mqtt_mutex);
+}
+
+static int mqtt_message_arrived(void *context, char *topicName, int topicLen, MQTTClient_message *message) {
+    printf("MQTT: Message received on topic '%s'\n", topicName);
+    
+    if (message->payloadlen > 0) {
+        char* payload = malloc(message->payloadlen + 1);
+        if (payload) {
+            memcpy(payload, message->payload, message->payloadlen);
+            payload[message->payloadlen] = '\0';
+            
+            printf("MQTT: Message payload: %s\n", payload);
+            
+            // Handle different command types
+            if (strstr(payload, "\"command\"") || strstr(payload, "\"action\"")) {
+                printf("MQTT: Processing command message\n");
+                // Parse and handle commands here
+                // You can add specific command handling logic
+            }
+            
+            free(payload);
+        }
+    }
+    
+    MQTTClient_freeMessage(&message);
+    MQTTClient_free(topicName);
+    
+    return 1;
+}
+
+static void mqtt_connection_lost(void *context, char *cause) {
+    printf("MQTT: Connection lost. Cause: %s\n", cause ? cause : "Unknown");
+    mqtt_connected = 0;
+    
+    // Attempt to reconnect
+    pthread_t reconnect_thread;
+    pthread_create(&reconnect_thread, NULL, mqtt_reconnect_worker, NULL);
+    pthread_detach(reconnect_thread);
+}
+
+static int mqtt_connect() {
+    if (mqtt_connected) {
+        printf("MQTT: Already connected\n");
+        return 1;
+    }
+    
+    int rc;
+    
+    // Create MQTT client
+    rc = MQTTClient_create(&mqtt_client, MQTT_BROKER_ADDRESS, MQTT_CLIENT_ID,
+                           MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    if (rc != MQTTCLIENT_SUCCESS) {
+        printf("MQTT: Failed to create client, return code %d\n", rc);
+        return 0;
+    }
+    
+    // Set callbacks
+    rc = MQTTClient_setCallbacks(mqtt_client, NULL, mqtt_connection_lost, 
+                                 mqtt_message_arrived, NULL);
+    if (rc != MQTTCLIENT_SUCCESS) {
+        printf("MQTT: Failed to set callbacks, return code %d\n", rc);
+        MQTTClient_destroy(&mqtt_client);
+        return 0;
+    }
+    
+    // Setup connection options
+    mqtt_conn_opts.keepAliveInterval = MQTT_KEEP_ALIVE_INTERVAL;
+    mqtt_conn_opts.cleansession = MQTT_CLEAN_SESSION;
+    mqtt_conn_opts.connectTimeout = 10;
+    
+    // Connect to broker
+    printf("MQTT: Connecting to broker at %s\n", MQTT_BROKER_ADDRESS);
+    rc = MQTTClient_connect(mqtt_client, &mqtt_conn_opts);
+    if (rc != MQTTCLIENT_SUCCESS) {
+        printf("MQTT: Failed to connect, return code %d\n", rc);
+        MQTTClient_destroy(&mqtt_client);
+        return 0;
+    }
+    
+    mqtt_connected = 1;
+    printf("MQTT: Connected successfully to broker\n");
+    
+    // Subscribe to topics
+    rc = MQTTClient_subscribe(mqtt_client, MQTT_TOPIC_COMMANDS, MQTT_QOS);
+    if (rc != MQTTCLIENT_SUCCESS) {
+        printf("MQTT: Failed to subscribe to commands topic, return code %d\n", rc);
+    } else {
+        printf("MQTT: Subscribed to topic: %s\n", MQTT_TOPIC_COMMANDS);
+    }
+    
+    // Publish initial status
+    char status_msg[256];
+    snprintf(status_msg, sizeof(status_msg), 
+             "{\"status\":\"connected\",\"client_id\":\"%s\",\"timestamp\":%ld}",
+             MQTT_CLIENT_ID, time(NULL));
+    publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, status_msg);
+    
+    return 1;
+}
+
+static void mqtt_disconnect() {
+    if (mqtt_client && mqtt_connected) {
+        MQTTClient_disconnect(mqtt_client, 1000);
+        MQTTClient_destroy(&mqtt_client);
+        mqtt_connected = 0;
+        printf("MQTT: Disconnected from broker\n");
+    }
+}
+
+void* mqtt_reconnect_worker(void* arg) {
+    printf("MQTT: Starting reconnection worker\n");
+    
+    while (!global_interrupted && !mqtt_connected) {
+        printf("MQTT: Attempting to reconnect...\n");
+        
+        if (mqtt_connect()) {
+            printf("MQTT: Reconnection successful\n");
+            break;
+        }
+        
+        printf("MQTT: Reconnection failed, waiting 5 seconds before retry\n");
+        sleep(5);
+    }
+    
+    printf("MQTT: Reconnection worker stopped\n");
+    return NULL;
+}
+
+void* mqtt_worker(void* arg) {
+    printf("MQTT: Starting MQTT worker thread\n");
+    
+    // Initial connection
+    if (!mqtt_connect()) {
+        printf("MQTT: Initial connection failed\n");
+        return NULL;
+    }
+    
+    // Main MQTT loop
+    while (!global_interrupted && mqtt_connected) {
+        // Process MQTT messages
+        MQTTClient_yield();
+        usleep(100000); // 100ms delay
+    }
+    
+    mqtt_disconnect();
+    printf("MQTT: Worker thread stopped\n");
+    return NULL;
+}
+
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
@@ -109,6 +299,9 @@ static void handle_interrupt(int sig) {
     if (global_ws_client) {
         lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
     }
+    
+    // Disconnect MQTT client
+    mqtt_disconnect();
     
     for (int i = 0; i < 2; i++) {
         if (channels[i].active) {
@@ -177,8 +370,8 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input_len % 4 != 0) return 0;
     
     size_t output_len = input_len / 4 * 3;
-    if (input[input_len - 1] == '=') output_len--;
-    if (input[input_len - 2] == '=') output_len--;
+    if (input_len > 0 && input[input_len - 1] == '=') output_len--;
+    if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
         uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
@@ -371,6 +564,13 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                         
                         sendto(global_udp_socket, msg, strlen(msg), 0,
                                (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
+                        
+                        // Publish MQTT audio status
+                        char mqtt_audio_msg[512];
+                        snprintf(mqtt_audio_msg, sizeof(mqtt_audio_msg),
+                                 "{\"channel_id\":\"%s\",\"type\":\"audio_transmission\",\"opus_len\":%d,\"encrypted_len\":%zu,\"timestamp\":%ld}",
+                                 audio_stream->channel_id, opus_len, encrypted_len, time(NULL));
+                        publish_MQTT_message(MQTT_TOPIC_AUDIO_STATUS, mqtt_audio_msg);
                         
                         free(b64_data);
                     }
@@ -1137,6 +1337,13 @@ void* gpio_monitor_worker(void* arg) {
             
             // Send WebSocket transmit event
             send_websocket_transmit_event("555", (curr_val_38 == 0) ? 1 : 0);
+            
+            // Publish MQTT GPIO status
+            char mqtt_gpio_msg[256];
+            snprintf(mqtt_gpio_msg, sizeof(mqtt_gpio_msg),
+                     "{\"channel\":\"555\",\"gpio_pin\":38,\"state\":\"%s\",\"timestamp\":%ld}",
+                     curr_val_38 == 0 ? "active" : "inactive", time(NULL));
+            publish_MQTT_message(MQTT_TOPIC_GPIO_STATUS, mqtt_gpio_msg);
         }
         
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
@@ -1153,6 +1360,13 @@ void* gpio_monitor_worker(void* arg) {
             
             // Send WebSocket transmit event
             send_websocket_transmit_event("666", (curr_val_40 == 0) ? 1 : 0);
+            
+            // Publish MQTT GPIO status
+            char mqtt_gpio_msg[256];
+            snprintf(mqtt_gpio_msg, sizeof(mqtt_gpio_msg),
+                     "{\"channel\":\"666\",\"gpio_pin\":40,\"state\":\"%s\",\"timestamp\":%ld}",
+                     curr_val_40 == 0 ? "active" : "inactive", time(NULL));
+            publish_MQTT_message(MQTT_TOPIC_GPIO_STATUS, mqtt_gpio_msg);
         }
         
         pthread_mutex_unlock(&gpio_mutex);
@@ -1427,6 +1641,14 @@ int main(int argc, char *argv[]) {
     pthread_t gpio_thread;
     if (pthread_create(&gpio_thread, NULL, gpio_monitor_worker, NULL)) {
         fprintf(stderr, "Failed to create GPIO monitor thread\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    // Start MQTT thread
+    pthread_t mqtt_thread;
+    if (pthread_create(&mqtt_thread, NULL, mqtt_worker, NULL)) {
+        fprintf(stderr, "Failed to create MQTT thread\n");
         curl_global_cleanup();
         return 1;
     }

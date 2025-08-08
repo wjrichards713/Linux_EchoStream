@@ -1,6 +1,7 @@
 [Unit]
 Description=EchoStream Audio Communication
-After=network.target sound.target
+After=network.target mosquitto.service sound.target
+Wants=mosquitto.service
 
 [Service]
 Type=simple
@@ -8,9 +9,18 @@ User=naveen
 WorkingDirectory=/home/naveen/Linux_EchoStream
 ExecStart=/home/naveen/Linux_EchoStream/api_call
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
+
+# GPIO permissions
+SupplementaryGroups=gpio
+
+# Audio permissions
+SupplementaryGroups=audio
+
+# Environment variables
+Environment=DISPLAY=:0
 
 [Install]
 WantedBy=multi-user.target
