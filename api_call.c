@@ -243,6 +243,7 @@ static int mqtt_connect() {
     snprintf(status_msg, sizeof(status_msg), 
              "{\"status\":\"connected\",\"username\":\"%s\",\"agency\":\"%s\",\"client_id\":\"%s\",\"timestamp\":%ld}",
              global_user_name, global_agency_name, MQTT_CLIENT_ID, time(NULL));
+    printf("LOG: Sending MQTT initial status - Username: '%s', Agency: '%s'\n", global_user_name, global_agency_name);
     publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, status_msg);
     
     return 1;
@@ -300,6 +301,8 @@ void* mqtt_worker(void* arg) {
             snprintf(test_msg, sizeof(test_msg),
                      "{\"message\":\"This is the test MQTT message\",\"username\":\"%s\",\"agency\":\"%s\",\"timestamp\":%ld,\"client_id\":\"%s\"}",
                      global_user_name, global_agency_name, current_time, MQTT_CLIENT_ID);
+            printf("LOG: Sending MQTT periodic test - Username: '%s', Agency: '%s', Time: %ld\n", 
+                   global_user_name, global_agency_name, current_time);
             publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, test_msg);
             last_test_message = current_time;
         }
@@ -1643,6 +1646,12 @@ int main(int argc, char *argv[]) {
     int run_both = 1;
     int arg_index = 1; // Track which argument we're processing
     
+    printf("=== ECHOSTREAM STARTUP LOG ===\n");
+    printf("LOG: Program started with %d arguments\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("LOG: argv[%d] = '%s'\n", i, argv[i]);
+    }
+    
     // Parse command line arguments
     if (argc > 1) {
         // Check if first argument is a username (not a channel number)
@@ -1651,45 +1660,43 @@ int main(int argc, char *argv[]) {
             strncpy(global_user_name, argv[1], sizeof(global_user_name) - 1);
             global_user_name[sizeof(global_user_name) - 1] = '\0';
             arg_index = 2;
+            printf("LOG: Username set to '%s'\n", global_user_name);
             
             // Check for agency name (second parameter)
             if (argc > 2) {
                 strncpy(global_agency_name, argv[2], sizeof(global_agency_name) - 1);
                 global_agency_name[sizeof(global_agency_name) - 1] = '\0';
                 arg_index = 3;
+                printf("LOG: Agency name set to '%s'\n", global_agency_name);
             }
         }
         
         // Check for channel specification (could be first, second, or third argument)
         if (argc > arg_index) {
+            printf("LOG: Checking argument %d ('%s') for channel specification\n", arg_index, argv[arg_index]);
             if (strcmp(argv[arg_index], "555") == 0) {
                 run_both = 0;
+                printf("LOG: Channel mode set to 555 only\n");
                 printf("Running channel 555 only\n");
             } else if (strcmp(argv[arg_index], "666") == 0) {
                 run_both = 0;
+                printf("LOG: Channel mode set to 666 only\n");
                 printf("Running channel 666 only\n");
             } else if (strcmp(argv[arg_index], "both") == 0) {
                 run_both = 1;
+                printf("LOG: Channel mode set to both channels\n");
                 printf("Running both channels simultaneously\n");
-            } else if (arg_index == 1) {
-                // If first argument wasn't a channel and wasn't processed as username, show usage
-                fprintf(stderr, "Usage: %s [username] [agency_name] [555|666|both]\n", argv[0]);
-                fprintf(stderr, "  username     - User name for the connection\n");
-                fprintf(stderr, "  agency_name  - Agency name for the connection\n");
-                fprintf(stderr, "  555          - Run channel 555 only\n");
-                fprintf(stderr, "  666          - Run channel 666 only\n");
-                fprintf(stderr, "  both         - Run both channels simultaneously (default)\n");
-                fprintf(stderr, "\nExamples:\n");
-                fprintf(stderr, "  %s                    # Run both channels with defaults\n", argv[0]);
-                fprintf(stderr, "  %s 555               # Run channel 555 with defaults\n", argv[0]);
-                fprintf(stderr, "  %s John PoliceDept   # Run both channels with custom names\n", argv[0]);
-                fprintf(stderr, "  %s John PoliceDept 555 # Run channel 555 with custom names\n", argv[0]);
-                return 1;
+            } else {
+                printf("LOG: Argument '%s' is not a valid channel specification, using default (both)\n", argv[arg_index]);
+                printf("Running both channels simultaneously (default)\n");
             }
         } else {
+            printf("LOG: No channel specified, using default (both)\n");
             printf("Running both channels simultaneously (default)\n");
         }
         
+        printf("LOG: Final configuration - Username: '%s', Agency: '%s', Channels: %s\n", 
+               global_user_name, global_agency_name, run_both ? "both" : "single");
         printf("Using username: %s, agency: %s\n", global_user_name, global_agency_name);
     } else {
         printf("Running both channels simultaneously (default)\n");
