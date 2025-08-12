@@ -298,8 +298,8 @@ void* mqtt_worker(void* arg) {
         if (current_time - last_test_message >= 10) {
             char test_msg[256];
             snprintf(test_msg, sizeof(test_msg),
-                     "{\"message\":\"This is the test MQTT message\",\"timestamp\":%ld,\"client_id\":\"%s\"}",
-                     current_time, MQTT_CLIENT_ID);
+                     "{\"message\":\"This is the \":%s, %s,\"timestamp\":%ld,\"client_id\":\"%s\"}",
+                     global_user_name, global_agency_name, current_time, MQTT_CLIENT_ID);
             publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, test_msg);
             last_test_message = current_time;
         }
