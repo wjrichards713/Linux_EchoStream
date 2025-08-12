@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
@@ -102,6 +101,10 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
+
+// Add these lines right after the existing global variables (around line 95, after the MQTT topics)
+static char global_user_name[128] = "EchoStream";  // Default value
+static char global_agency_name[128] = "TestAgency"; // Default value
 
 // MQTT Client variables
 static MQTTClient mqtt_client = NULL;
