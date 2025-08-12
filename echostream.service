@@ -1,5 +1,5 @@
 [Unit]
-Description=EchoStream Audio Communication
+Description=EchoStream Audio Communication Service
 After=network.target mosquitto.service sound.target
 Wants=mosquitto.service
 
@@ -7,7 +7,7 @@ Wants=mosquitto.service
 Type=simple
 User=will
 WorkingDirectory=/home/will/Linux_EchoStream
-ExecStart=/home/will/Linux_EchoStream/api_call
+ExecStart=/home/will/Linux_EchoStream/run_with_config.sh
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -9,6 +9,21 @@ echo "=========================================="
 echo "EchoStream Run with Config"
 echo "=========================================="
 
+# Function to handle shutdown signals
+cleanup() {
+    echo "Received shutdown signal, cleaning up..."
+    if [ ! -z "$API_CALL_PID" ]; then
+        echo "Stopping api_call process (PID: $API_CALL_PID)..."
+        kill -TERM $API_CALL_PID 2>/dev/null
+        wait $API_CALL_PID 2>/dev/null
+    fi
+    echo "Cleanup complete"
+    exit 0
+}
+
+# Set up signal handlers
+trap cleanup SIGTERM SIGINT
+
 # Check if config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found at $CONFIG_FILE"
@@ -132,8 +147,19 @@ fi
 echo "Starting EchoStream with configuration parameters..."
 if [ "$RUN_MODE" = "both" ]; then
     echo "Command: ./api_call \"$USERNAME\" \"$AGENCY_NAME\" both"
-    ./api_call "$USERNAME" "$AGENCY_NAME" both
+    ./api_call "$USERNAME" "$AGENCY_NAME" both &
 else
     echo "Command: ./api_call \"$USERNAME\" \"$AGENCY_NAME\" $RUN_MODE"
-    ./api_call "$USERNAME" "$AGENCY_NAME" "$RUN_MODE"
-fi 
+    ./api_call "$USERNAME" "$AGENCY_NAME" "$RUN_MODE" &
+fi
+
+# Store the PID of the api_call process
+API_CALL_PID=$!
+echo "EchoStream started with PID: $API_CALL_PID"
+
+# Wait for the api_call process to complete
+wait $API_CALL_PID
+EXIT_CODE=$?
+
+echo "EchoStream process exited with code: $EXIT_CODE"
+exit $EXIT_CODE 
