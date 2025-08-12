@@ -216,6 +216,12 @@ install: api_call
 # Start the application
 run: api_call
 	@echo "$(BLUE)[INFO]$(NC) Starting EchoStream application..."
+	@echo "$(YELLOW)[INFO]$(NC) Usage examples:"
+	@echo "  ./api_call                    # Run both channels with defaults"
+	@echo "  ./api_call 555               # Run channel 555 with defaults"
+	@echo "  ./api_call John PoliceDept   # Run both channels with custom names"
+	@echo "  ./api_call John PoliceDept 555 # Run channel 555 with custom names"
+	@echo ""
 	@./api_call
 
 # Show help

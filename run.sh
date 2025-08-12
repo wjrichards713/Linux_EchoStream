@@ -15,6 +15,13 @@ if [ ! -f "api_call.c" ]; then
 fi
 
 echo "Building and running EchoStream application..."
+echo ""
+echo "Usage examples:"
+echo "  ./api_call                    # Run both channels with defaults"
+echo "  ./api_call 555               # Run channel 555 with defaults"
+echo "  ./api_call John PoliceDept   # Run both channels with custom names"
+echo "  ./api_call John PoliceDept 555 # Run channel 555 with custom names"
+echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
