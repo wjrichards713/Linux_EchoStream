@@ -241,8 +241,8 @@ static int mqtt_connect() {
     // Publish initial status
     char status_msg[256];
     snprintf(status_msg, sizeof(status_msg), 
-             "{\"status\":\"connected\",\"client_id\":\"%s\",\"timestamp\":%ld}",
-             MQTT_CLIENT_ID, time(NULL));
+             "{\"status\":\"connected\",\"username\":\"%s\",\"agency\":\"%s\",\"client_id\":\"%s\",\"timestamp\":%ld}",
+             global_user_name, global_agency_name, MQTT_CLIENT_ID, time(NULL));
     publish_MQTT_message(MQTT_TOPIC_SYSTEM_STATUS, status_msg);
     
     return 1;
