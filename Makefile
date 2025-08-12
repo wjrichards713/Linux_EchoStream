@@ -224,6 +224,18 @@ run: api_call
 	@echo ""
 	@./api_call
 
+# Start the application with config file parameters
+run-config: api_call
+	@echo "$(BLUE)[INFO]$(NC) Starting EchoStream with config file parameters..."
+	@if [ -f "run_with_config.sh" ]; then \
+		chmod +x run_with_config.sh; \
+		./run_with_config.sh; \
+	else \
+		echo "$(RED)[ERROR]$(NC) run_with_config.sh not found"; \
+		echo "$(YELLOW)[INFO]$(NC) Falling back to default run"; \
+		./api_call; \
+	fi
+
 # Show help
 help:
 	@echo "$(BLUE)EchoStream Makefile Help$(NC)"
@@ -236,11 +248,13 @@ help:
 	@echo "  deep-clean   - Clean everything including MQTT library"
 	@echo "  install      - Install to system (/usr/local/bin)"
 	@echo "  run          - Build and run the application"
+	@echo "  run-config   - Build and run with config file parameters"
 	@echo "  help         - Show this help message"
 	@echo ""
 	@echo "$(YELLOW)Quick start:$(NC)"
-	@echo "  make all     # Install everything and build"
-	@echo "  make run     # Build and run the application"
+	@echo "  make all        # Install everything and build"
+	@echo "  make run        # Build and run the application"
+	@echo "  make run-config # Build and run with config parameters"
 
 # Phony targets
-.PHONY: all check-os check-root update-packages install-system-deps install-audio-deps install-codec-deps install-networking-deps install-mqtt-broker install-mqtt-library test-mqtt check-audio-devices check-gpio install-deps build clean deep-clean install run help
+.PHONY: all check-os check-root update-packages install-system-deps install-audio-deps install-codec-deps install-networking-deps install-mqtt-broker install-mqtt-library test-mqtt check-audio-devices check-gpio install-deps build clean deep-clean install run run-config help
