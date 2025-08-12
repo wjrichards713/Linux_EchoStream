@@ -1641,63 +1641,56 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
 
 int main(int argc, char *argv[]) {
     int run_both = 1;
+    int arg_index = 1; // Track which argument we're processing
     
     // Parse command line arguments
     if (argc > 1) {
-        // Check if first argument is a channel number or "both"
-        if (strcmp(argv[1], "555") == 0) {
-            run_both = 0;
-            printf("Running channel 555 only\n");
-        } else if (strcmp(argv[1], "666") == 0) {
-            run_both = 0;
-            printf("Running channel 666 only\n");
-        } else if (strcmp(argv[1], "both") == 0) {
-            run_both = 1;
-            printf("Running both channels simultaneously\n");
-        } else {
-            // Check if it's a username (first parameter)
+        // Check if first argument is a username (not a channel number)
+        if (strcmp(argv[1], "555") != 0 && strcmp(argv[1], "666") != 0 && strcmp(argv[1], "both") != 0) {
+            // First argument is username
             strncpy(global_user_name, argv[1], sizeof(global_user_name) - 1);
             global_user_name[sizeof(global_user_name) - 1] = '\0';
+            arg_index = 2;
             
             // Check for agency name (second parameter)
             if (argc > 2) {
                 strncpy(global_agency_name, argv[2], sizeof(global_agency_name) - 1);
                 global_agency_name[sizeof(global_agency_name) - 1] = '\0';
-                
-                // Check for channel specification (third parameter)
-                if (argc > 3) {
-                    if (strcmp(argv[3], "555") == 0) {
-                        run_both = 0;
-                        printf("Running channel 555 only\n");
-                    } else if (strcmp(argv[3], "666") == 0) {
-                        run_both = 0;
-                        printf("Running channel 666 only\n");
-                    } else if (strcmp(argv[3], "both") == 0) {
-                        run_both = 1;
-                        printf("Running both channels simultaneously\n");
-                    } else {
-                        fprintf(stderr, "Usage: %s [username] [agency_name] [555|666|both]\n", argv[0]);
-                        fprintf(stderr, "  username     - User name for the connection\n");
-                        fprintf(stderr, "  agency_name  - Agency name for the connection\n");
-                        fprintf(stderr, "  555          - Run channel 555 only\n");
-                        fprintf(stderr, "  666          - Run channel 666 only\n");
-                        fprintf(stderr, "  both         - Run both channels simultaneously (default)\n");
-                        fprintf(stderr, "\nExamples:\n");
-                        fprintf(stderr, "  %s                    # Run both channels with defaults\n", argv[0]);
-                        fprintf(stderr, "  %s 555               # Run channel 555 with defaults\n", argv[0]);
-                        fprintf(stderr, "  %s John PoliceDept   # Run both channels with custom names\n", argv[0]);
-                        fprintf(stderr, "  %s John PoliceDept 555 # Run channel 555 with custom names\n", argv[0]);
-                        return 1;
-                    }
-                } else {
-                    printf("Running both channels simultaneously (default)\n");
-                }
-            } else {
-                printf("Running both channels simultaneously (default)\n");
+                arg_index = 3;
             }
-            
-            printf("Using username: %s, agency: %s\n", global_user_name, global_agency_name);
         }
+        
+        // Check for channel specification (could be first, second, or third argument)
+        if (argc > arg_index) {
+            if (strcmp(argv[arg_index], "555") == 0) {
+                run_both = 0;
+                printf("Running channel 555 only\n");
+            } else if (strcmp(argv[arg_index], "666") == 0) {
+                run_both = 0;
+                printf("Running channel 666 only\n");
+            } else if (strcmp(argv[arg_index], "both") == 0) {
+                run_both = 1;
+                printf("Running both channels simultaneously\n");
+            } else if (arg_index == 1) {
+                // If first argument wasn't a channel and wasn't processed as username, show usage
+                fprintf(stderr, "Usage: %s [username] [agency_name] [555|666|both]\n", argv[0]);
+                fprintf(stderr, "  username     - User name for the connection\n");
+                fprintf(stderr, "  agency_name  - Agency name for the connection\n");
+                fprintf(stderr, "  555          - Run channel 555 only\n");
+                fprintf(stderr, "  666          - Run channel 666 only\n");
+                fprintf(stderr, "  both         - Run both channels simultaneously (default)\n");
+                fprintf(stderr, "\nExamples:\n");
+                fprintf(stderr, "  %s                    # Run both channels with defaults\n", argv[0]);
+                fprintf(stderr, "  %s 555               # Run channel 555 with defaults\n", argv[0]);
+                fprintf(stderr, "  %s John PoliceDept   # Run both channels with custom names\n", argv[0]);
+                fprintf(stderr, "  %s John PoliceDept 555 # Run channel 555 with custom names\n", argv[0]);
+                return 1;
+            }
+        } else {
+            printf("Running both channels simultaneously (default)\n");
+        }
+        
+        printf("Using username: %s, agency: %s\n", global_user_name, global_agency_name);
     } else {
         printf("Running both channels simultaneously (default)\n");
         printf("Using default username: %s, agency: %s\n", global_user_name, global_agency_name);
