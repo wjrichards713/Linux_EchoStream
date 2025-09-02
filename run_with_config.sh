@@ -61,20 +61,20 @@ try:
         
         # If no channels found, use defaults
         if not channels:
-            channels = ['555', '666']
+            channels = ['555', '666', '308e2478-072c-4d8b-ffff24d-51854e06711a', '94415b61-8007-430d-ffffea0-10fc9fee2d8e']
     else:
         username = 'EchoStream'
         agency_name = 'TestAgency'
-        channels = ['555', '666']
+        channels = ['555', '666', '308e2478-072c-4d8b-ffff24d-51854e06711a', '94415b61-8007-430d-ffffea0-10fc9fee2d8e']
     
     print(f'USERNAME={username}')
     print(f'AGENCY_NAME={agency_name}')
-    print(f'CHANNELS={",".join(channels)}')
+    print('CHANNELS=' + ','.join(channels))
     
 except Exception as e:
     print('USERNAME=EchoStream')
     print('AGENCY_NAME=TestAgency')
-    print('CHANNELS=555,666')
+    print('CHANNELS=555,666,308e2478-072c-4d8b-ffff24d-51854e06711a,94415b61-8007-430d-ffffea0-10fc9fee2d8e')
     print(f'ERROR: {e}', file=sys.stderr)
 "
 }
@@ -90,6 +90,11 @@ if command -v jq &> /dev/null; then
     CHANNELS=$(jq -r '.shadow.state.desired.software_configuration[0] | 
         [.channel_one.channel_id, .channel_two.channel_id, .channel_three.channel_id, .channel_four.channel_id] | 
         map(select(. != null and . != "")) | join(",")' "$CONFIG_FILE" 2>/dev/null)
+    
+    # If no channels found with jq, use defaults
+    if [ "$CHANNELS" = "null" ] || [ -z "$CHANNELS" ]; then
+        CHANNELS="555,666,308e2478-072c-4d8b-ffff24d-51854e06711a,94415b61-8007-430d-ffffea0-10fc9fee2d8e"
+    fi
 else
     # Use Python to extract values
     while IFS='=' read -r key value; do
@@ -110,7 +115,7 @@ fi
 
 if [ "$CHANNELS" = "null" ] || [ -z "$CHANNELS" ]; then
     echo "WARNING: Could not extract channel IDs from config, using defaults"
-    CHANNELS="555,666"
+    CHANNELS="555,666,308e2478-072c-4d8b-ffff24d-51854e06711a,94415b61-8007-430d-ffffea0-10fc9fee2d8e"
 fi
 
 # Display extracted configuration
