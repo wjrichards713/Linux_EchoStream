@@ -116,6 +116,7 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
+static int connect_messages_sent = 0;
 
 // Add these lines right after the existing global variables (around line 95, after the MQTT topics)
 static char global_user_name[128] = "EchoStream";  // Default value
@@ -938,30 +939,38 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
             printf("WebSocket connection established for both channels\n");
-            
-            // Send connect message for all active channels
-            for (int i = 0; i < active_channels.count; i++) {
-                if (channels[i].active) {
-                    char connect_msg[512];
-                    time_t now = time(NULL);
-                    
-                    snprintf(connect_msg, sizeof(connect_msg),
-                        "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"%s\",\"agency_name\":\"%s\",\"channel_id\":\"%s\",\"time\":%ld}}",
-                        global_user_name, global_agency_name, channels[i].audio.channel_id, now);
-                    
-                    printf("Sending connect message for channel %s: %s\n", channels[i].audio.channel_id, connect_msg);
-                    
-                    size_t msg_len = strlen(connect_msg);
-                    unsigned char *buf = malloc(LWS_PRE + msg_len);
-                    if (buf) {
-                        memcpy(&buf[LWS_PRE], connect_msg, msg_len);
-                        lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                        free(buf);
+            printf("Waiting for UDP connection info from WebSocket\n");
+            // Request writeable callback to send connect messages
+            lws_callback_on_writable(wsi);
+            break;
+        }
+        
+        case LWS_CALLBACK_CLIENT_WRITEABLE: {
+            // Send connect message for all active channels (only once)
+            if (!connect_messages_sent) {
+                for (int i = 0; i < active_channels.count; i++) {
+                    if (channels[i].active) {
+                        char connect_msg[512];
+                        time_t now = time(NULL);
+                        
+                        snprintf(connect_msg, sizeof(connect_msg),
+                            "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"%s\",\"agency_name\":\"%s\",\"channel_id\":\"%s\",\"time\":%ld}}",
+                            global_user_name, global_agency_name, channels[i].audio.channel_id, now);
+                        
+                        printf("Sending connect message for channel %s: %s\n", channels[i].audio.channel_id, connect_msg);
+                        
+                        size_t msg_len = strlen(connect_msg);
+                        unsigned char *buf = malloc(LWS_PRE + msg_len);
+                        if (buf) {
+                            memcpy(&buf[LWS_PRE], connect_msg, msg_len);
+                            lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                            free(buf);
+                        }
                     }
                 }
+                connect_messages_sent = 1;
+                printf("All connect messages sent for %d channels\n", active_channels.count);
             }
-            
-            printf("Waiting for UDP connection info from WebSocket\n");
             break;
         }
             
@@ -1006,6 +1015,9 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                 }
                 else if (strstr(data, "users_connected")) {
                     printf("Users connected message received, but UDP not yet configured\n");
+                }
+                else {
+                    printf("Received other WebSocket message: %s\n", data);
                 }
                 
                 free(data);
