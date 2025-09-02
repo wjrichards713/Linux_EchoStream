@@ -21,6 +21,9 @@
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
+int get_channel_index(const char* channel_id);
+int get_gpio_pin_for_channel(const char* channel_id);
+void print_active_channels();
 int init_gpio_pin(int pin);
 int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
@@ -32,6 +35,12 @@ void* mqtt_reconnect_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
 int decode_base64(const char* input, unsigned char* output);
 size_t decode_base64_len(const char* input, unsigned char* output);
+
+// Channel list management functions
+void init_channel_list();
+void add_channel_to_list(const char* channel_id, int gpio_pin);
+int get_channel_index(const char* channel_id);
+int get_gpio_pin_for_channel(const char* channel_id);
 
 struct server_config {
     int udp_port;
@@ -86,8 +95,15 @@ struct channel_context {
     int active;
 };
 
-static struct channel_context channels[2] = {0};
-static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
+struct channel_list {
+    char channel_ids[16][64];  // Support up to 16 channels, each with 64 char ID
+    int count;
+    int gpio_pins[16];         // GPIO pin mapping for each channel
+};
+
+static struct channel_context channels[16] = {0};  // Support up to 16 channels
+static PaDeviceIndex usb_devices[16] = {paNoDevice};  // Support up to 16 devices
+static struct channel_list active_channels = {0};
 static int device_assigned = 0;
 static int global_interrupted = 0;
 static int global_udp_socket = -1;
@@ -96,6 +112,8 @@ static pthread_t heartbeat_thread;
 static pthread_t udp_listener_thread;
 static int gpio_38_state = 0;
 static int gpio_40_state = 0;
+static int gpio_22_state = 0;
+static int gpio_23_state = 0;
 static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
@@ -924,8 +942,8 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
             printf("WebSocket connection established for both channels\n");
             
-            // Send connect message for both active channels
-            for (int i = 0; i < 2; i++) {
+            // Send connect message for all active channels
+            for (int i = 0; i < 4; i++) {
                 if (channels[i].active) {
                     char connect_msg[512];
                     time_t now = time(NULL);
@@ -972,7 +990,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             printf("UDP connection established\n");
                             
                             // Start transmission for all active channels
-                            for (int i = 0; i < 2; i++) {
+                            for (int i = 0; i < 4; i++) {
                                 if (channels[i].active) {
                                     const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
                                     if (!decode_base64(key_b64, channels[i].audio.key)) {
@@ -1092,7 +1110,7 @@ void* global_websocket_thread(void* arg) {
     }
     
     // Cleanup all channels
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         if (channels[i].active) {
             if (channels[i].audio.input_stream && !global_interrupted) {
                 Pa_AbortStream(channels[i].audio.input_stream);
@@ -1136,6 +1154,44 @@ void* global_websocket_thread(void* arg) {
     return NULL;
 }
 
+// Channel list management functions
+void init_channel_list() {
+    active_channels.count = 0;
+    memset(active_channels.channel_ids, 0, sizeof(active_channels.channel_ids));
+    memset(active_channels.gpio_pins, 0, sizeof(active_channels.gpio_pins));
+}
+
+void add_channel_to_list(const char* channel_id, int gpio_pin) {
+    if (active_channels.count >= 16) {
+        printf("WARNING: Maximum number of channels (16) reached\n");
+        return;
+    }
+    
+    strncpy(active_channels.channel_ids[active_channels.count], channel_id, 63);
+    active_channels.channel_ids[active_channels.count][63] = '\0';
+    active_channels.gpio_pins[active_channels.count] = gpio_pin;
+    active_channels.count++;
+    
+    printf("Added channel to list: %s (GPIO pin %d)\n", channel_id, gpio_pin);
+}
+
+int get_channel_index(const char* channel_id) {
+    for (int i = 0; i < active_channels.count; i++) {
+        if (strcmp(active_channels.channel_ids[i], channel_id) == 0) {
+            return i;
+        }
+    }
+    return -1; // Channel not found
+}
+
+int get_gpio_pin_for_channel(const char* channel_id) {
+    int index = get_channel_index(channel_id);
+    if (index >= 0) {
+        return active_channels.gpio_pins[index];
+    }
+    return -1; // Channel not found
+}
+
 void auto_assign_usb_devices() {
     if (device_assigned) return;
     
@@ -1144,7 +1200,7 @@ void auto_assign_usb_devices() {
     
     printf("Scanning for USB audio devices...\n");
     
-    for (int i = 0; i < num_devices && usb_count < 2; i++) {
+    for (int i = 0; i < num_devices && usb_count < 16; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
             const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
@@ -1161,16 +1217,21 @@ void auto_assign_usb_devices() {
     }
     
     if (usb_count == 0) {
-        printf("No USB audio devices found, using default input device\n");
-        usb_devices[0] = Pa_GetDefaultInputDevice();
-        usb_devices[1] = Pa_GetDefaultInputDevice();
-    } else if (usb_count == 1) {
-        printf("Only one USB device found, both channels will use the same device\n");
-        usb_devices[1] = usb_devices[0];
+        printf("No USB audio devices found, using default input device for all channels\n");
+        for (int i = 0; i < active_channels.count; i++) {
+            usb_devices[i] = Pa_GetDefaultInputDevice();
+        }
+    } else if (usb_count < active_channels.count) {
+        printf("Only %d USB device(s) found, duplicating for remaining channels\n", usb_count);
+        for (int i = usb_count; i < active_channels.count; i++) {
+            usb_devices[i] = usb_devices[0];
+        }
     }
     
-    printf("Channel 555 -> Device %d\n", usb_devices[0]);
-    printf("Channel 666 -> Device %d\n", usb_devices[1]);
+    // Print device assignments for active channels
+    for (int i = 0; i < active_channels.count; i++) {
+        printf("Channel %s -> Device %d\n", active_channels.channel_ids[i], usb_devices[i]);
+    }
     
     device_assigned = 1;
 }
@@ -1178,13 +1239,38 @@ void auto_assign_usb_devices() {
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
     
-    if (strcmp(channel, "555") == 0) {
-        return usb_devices[0];
-    } else if (strcmp(channel, "666") == 0) {
-        return usb_devices[1];
+    int channel_index = get_channel_index(channel);
+    if (channel_index >= 0 && channel_index < active_channels.count) {
+        return usb_devices[channel_index];
     }
     
+    // Fallback to first device if channel not found
     return usb_devices[0];
+}
+
+int get_channel_index(const char* channel_id) {
+    for (int i = 0; i < active_channels.count; i++) {
+        if (strcmp(active_channels.channel_ids[i], channel_id) == 0) {
+            return i;
+        }
+    }
+    return -1; // channel not found
+}
+
+int get_gpio_pin_for_channel(const char* channel_id) {
+    int channel_idx = get_channel_index(channel_id);
+    if (channel_idx >= 0 && channel_idx < active_channels.count) {
+        return active_channels.gpio_pins[channel_idx];
+    }
+    return -1; // channel not found
+}
+
+void print_active_channels() {
+    printf("Active channels configuration:\n");
+    for (int i = 0; i < active_channels.count; i++) {
+        printf("  Channel %d: %s (GPIO pin %d)\n", 
+               i, active_channels.channel_ids[i], active_channels.gpio_pins[i]);
+    }
 }
 
 int init_gpio_pin(int pin) {
@@ -1318,92 +1404,90 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
 
 void* gpio_monitor_worker(void* arg) {
     (void)arg; // Suppress unused parameter warning
-    int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
-    int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
     
     printf("GPIO monitor worker started\n");
     
-    if (!init_gpio_pin(gpio_pin_38)) {
-        printf("Failed to initialize GPIO pin 38\n");
-        return NULL;
-    }
+    // Initialize GPIO pins for all active channels
+    int gpio_pins[16] = {0};
+    int gpio_count = 0;
     
-    if (!init_gpio_pin(gpio_pin_40)) {
-        printf("Failed to initialize GPIO pin 40\n");
-        cleanup_gpio(gpio_pin_38);
-        return NULL;
+    for (int i = 0; i < active_channels.count; i++) {
+        int physical_pin = active_channels.gpio_pins[i];
+        int gpio_pin = 0;
+        
+        // Convert physical pin to GPIO number for RPi5
+        switch (physical_pin) {
+            case 38: gpio_pin = 589; break;  // GPIO 20
+            case 40: gpio_pin = 590; break;  // GPIO 21
+            case 22: gpio_pin = 573; break;  // GPIO 22
+            case 23: gpio_pin = 574; break;  // GPIO 23
+            default: 
+                printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
+                continue;
+        }
+        
+        if (!init_gpio_pin(gpio_pin)) {
+            printf("Failed to initialize GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
+            // Cleanup previously initialized pins
+            for (int j = 0; j < gpio_count; j++) {
+                cleanup_gpio(gpio_pins[j]);
+            }
+            return NULL;
+        }
+        
+        gpio_pins[gpio_count] = gpio_pin;
+        gpio_count++;
     }
     
     printf("GPIO pins initialized. Reading initial states...\n");
     
-    // Read initial states without sending WebSocket events
+    // Read initial states for all channels
+    int gpio_states[16] = {0};
     pthread_mutex_lock(&gpio_mutex);
-    gpio_38_state = read_gpio_pin(gpio_pin_38);
-    gpio_40_state = read_gpio_pin(gpio_pin_40);
+    for (int i = 0; i < gpio_count; i++) {
+        gpio_states[i] = read_gpio_pin(gpio_pins[i]);
+        if (gpio_states[i] != -1) {
+            printf("PIN %d (Channel %s) initial state: %s\n", 
+                   active_channels.gpio_pins[i], active_channels.channel_ids[i],
+                   gpio_states[i] == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+        }
+    }
     pthread_mutex_unlock(&gpio_mutex);
-    
-    if (gpio_38_state != -1) {
-        printf("PIN 38 (Channel 555) initial state: %s\n", 
-               gpio_38_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
-    
-    if (gpio_40_state != -1) {
-        printf("PIN 40 (Channel 666) initial state: %s\n", 
-               gpio_40_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
     
     printf("GPIO pins initialized. Monitoring for changes...\n");
     
     while (!global_interrupted) {
-        int curr_val_38 = read_gpio_pin(gpio_pin_38);
-        int curr_val_40 = read_gpio_pin(gpio_pin_40);
-        
         pthread_mutex_lock(&gpio_mutex);
         
-        if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
-            gpio_38_state = curr_val_38;
-            printf("PIN 38 (Channel 555): %s\n", 
-                   curr_val_38 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+        // Check all GPIO pins for changes
+        for (int i = 0; i < gpio_count; i++) {
+            int curr_val = read_gpio_pin(gpio_pins[i]);
             
-            for (int i = 0; i < 2; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "555") == 0) {
-                    channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
-                    break;
+            if (curr_val != gpio_states[i] && curr_val != -1) {
+                gpio_states[i] = curr_val;
+                printf("PIN %d (Channel %s): %s\n", 
+                       active_channels.gpio_pins[i], active_channels.channel_ids[i],
+                       curr_val == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+                
+                // Update channel GPIO state
+                for (int j = 0; j < active_channels.count; j++) {
+                    if (channels[j].active && strcmp(channels[j].audio.channel_id, active_channels.channel_ids[i]) == 0) {
+                        channels[j].audio.gpio_active = (curr_val == 0) ? 1 : 0;
+                        break;
+                    }
                 }
+                
+                // Send WebSocket transmit event
+                send_websocket_transmit_event(active_channels.channel_ids[i], (curr_val == 0) ? 1 : 0);
+                
+                // Publish MQTT GPIO status
+                char mqtt_gpio_msg[256];
+                snprintf(mqtt_gpio_msg, sizeof(mqtt_gpio_msg),
+                         "{\"channel\":\"%s\",\"gpio_pin\":%d,\"state\":\"%s\",\"timestamp\":%ld}",
+                         active_channels.channel_ids[i], active_channels.gpio_pins[i],
+                         curr_val == 0 ? "active" : "inactive", time(NULL));
+                publish_MQTT_message(MQTT_TOPIC_GPIO_STATUS, mqtt_gpio_msg);
             }
-            
-            // Send WebSocket transmit event
-            send_websocket_transmit_event("555", (curr_val_38 == 0) ? 1 : 0);
-            
-            // Publish MQTT GPIO status
-            char mqtt_gpio_msg[256];
-            snprintf(mqtt_gpio_msg, sizeof(mqtt_gpio_msg),
-                     "{\"channel\":\"555\",\"gpio_pin\":38,\"state\":\"%s\",\"timestamp\":%ld}",
-                     curr_val_38 == 0 ? "active" : "inactive", time(NULL));
-            publish_MQTT_message(MQTT_TOPIC_GPIO_STATUS, mqtt_gpio_msg);
-        }
-        
-        if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
-            gpio_40_state = curr_val_40;
-            printf("PIN 40 (Channel 666): %s\n", 
-                   curr_val_40 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-            
-            for (int i = 0; i < 2; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "666") == 0) {
-                    channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
-                    break;
-                }
-            }
-            
-            // Send WebSocket transmit event
-            send_websocket_transmit_event("666", (curr_val_40 == 0) ? 1 : 0);
-            
-            // Publish MQTT GPIO status
-            char mqtt_gpio_msg[256];
-            snprintf(mqtt_gpio_msg, sizeof(mqtt_gpio_msg),
-                     "{\"channel\":\"666\",\"gpio_pin\":40,\"state\":\"%s\",\"timestamp\":%ld}",
-                     curr_val_40 == 0 ? "active" : "inactive", time(NULL));
-            publish_MQTT_message(MQTT_TOPIC_GPIO_STATUS, mqtt_gpio_msg);
         }
         
         pthread_mutex_unlock(&gpio_mutex);
@@ -1412,8 +1496,11 @@ void* gpio_monitor_worker(void* arg) {
     }
     
     printf("GPIO monitor worker stopped\n");
-    cleanup_gpio(gpio_pin_38);
-    cleanup_gpio(gpio_pin_40);
+    
+    // Cleanup all initialized GPIO pins
+    for (int i = 0; i < gpio_count; i++) {
+        cleanup_gpio(gpio_pins[i]);
+    }
     
     return NULL;
 }
@@ -1652,55 +1739,55 @@ int main(int argc, char *argv[]) {
         printf("LOG: argv[%d] = '%s'\n", i, argv[i]);
     }
     
+    // Initialize channel list
+    init_channel_list();
+    
     // Parse command line arguments
     if (argc > 1) {
-        // Check if first argument is a username (not a channel number)
-        if (strcmp(argv[1], "555") != 0 && strcmp(argv[1], "666") != 0 && strcmp(argv[1], "both") != 0) {
-            // First argument is username
-            strncpy(global_user_name, argv[1], sizeof(global_user_name) - 1);
-            global_user_name[sizeof(global_user_name) - 1] = '\0';
-            arg_index = 2;
-            printf("LOG: Username set to '%s'\n", global_user_name);
+        // First argument is username
+        strncpy(global_user_name, argv[1], sizeof(global_user_name) - 1);
+        global_user_name[sizeof(global_user_name) - 1] = '\0';
+        printf("LOG: Username set to '%s'\n", global_user_name);
+        
+        // Second argument is agency name
+        if (argc > 2) {
+            strncpy(global_agency_name, argv[2], sizeof(global_agency_name) - 1);
+            global_agency_name[sizeof(global_agency_name) - 1] = '\0';
+            printf("LOG: Agency name set to '%s'\n", global_agency_name);
+        }
+        
+        // Remaining arguments are channel IDs
+        int channel_count = 0;
+        for (int i = 3; i < argc; i++) {
+            // Default GPIO pin mapping (can be customized)
+            int gpio_pin = 38 + channel_count;  // Start with GPIO 38, 40, 22, 23, etc.
+            if (channel_count == 2) gpio_pin = 22;  // GPIO 22 for 3rd channel
+            if (channel_count == 3) gpio_pin = 23;  // GPIO 23 for 4th channel
             
-            // Check for agency name (second parameter)
-            if (argc > 2) {
-                strncpy(global_agency_name, argv[2], sizeof(global_agency_name) - 1);
-                global_agency_name[sizeof(global_agency_name) - 1] = '\0';
-                arg_index = 3;
-                printf("LOG: Agency name set to '%s'\n", global_agency_name);
-            }
+            add_channel_to_list(argv[i], gpio_pin);
+            channel_count++;
         }
         
-        // Check for channel specification (could be first, second, or third argument)
-        if (argc > arg_index) {
-            printf("LOG: Checking argument %d ('%s') for channel specification\n", arg_index, argv[arg_index]);
-            if (strcmp(argv[arg_index], "555") == 0) {
-                run_both = 0;
-                printf("LOG: Channel mode set to 555 only\n");
-                printf("Running channel 555 only\n");
-            } else if (strcmp(argv[arg_index], "666") == 0) {
-                run_both = 0;
-                printf("LOG: Channel mode set to 666 only\n");
-                printf("Running channel 666 only\n");
-            } else if (strcmp(argv[arg_index], "both") == 0) {
-                run_both = 1;
-                printf("LOG: Channel mode set to both channels\n");
-                printf("Running both channels simultaneously\n");
-            } else {
-                printf("LOG: Argument '%s' is not a valid channel specification, using default (both)\n", argv[arg_index]);
-                printf("Running both channels simultaneously (default)\n");
-            }
-        } else {
-            printf("LOG: No channel specified, using default (both)\n");
-            printf("Running both channels simultaneously (default)\n");
-        }
-        
-        printf("LOG: Final configuration - Username: '%s', Agency: '%s', Channels: %s\n", 
-               global_user_name, global_agency_name, run_both ? "both" : "single");
-        printf("Using username: %s, agency: %s\n", global_user_name, global_agency_name);
+        printf("LOG: Added %d channels to active list\n", channel_count);
     } else {
-        printf("Running both channels simultaneously (default)\n");
+        printf("LOG: No arguments provided, using defaults\n");
         printf("Using default username: %s, agency: %s\n", global_user_name, global_agency_name);
+    }
+    
+    // If no channels were added, add default channels
+    if (active_channels.count == 0) {
+        printf("LOG: No channels specified, adding default channels\n");
+        add_channel_to_list("555", 38);
+        add_channel_to_list("666", 40);
+        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 22);
+        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 23);
+    }
+    
+    printf("LOG: Final configuration - Username: '%s', Agency: '%s', Channels: %d\n", 
+           global_user_name, global_agency_name, active_channels.count);
+    printf("Active channels:\n");
+    for (int i = 0; i < active_channels.count; i++) {
+        printf("  %d: %s (GPIO %d)\n", i, active_channels.channel_ids[i], active_channels.gpio_pins[i]);
     }
     
     if (!initialize_portaudio()) {
@@ -1730,67 +1817,44 @@ int main(int argc, char *argv[]) {
     // UDP configuration will be received via WebSocket
     // UDP listener thread will be started after UDP connection is established
     
-    if (run_both) {
-        printf("Setting up both channels...\n");
-        
-        if (!setup_channel(&channels[0], "555")) {
-            fprintf(stderr, "Failed to setup channel 555\n");
+    // Setup all channels from the dynamic list
+    printf("Setting up %d channels from configuration...\n", active_channels.count);
+    
+    for (int i = 0; i < active_channels.count; i++) {
+        if (!setup_channel(&channels[i], active_channels.channel_ids[i])) {
+            fprintf(stderr, "Failed to setup channel %s\n", active_channels.channel_ids[i]);
             curl_global_cleanup();
             return 1;
         }
+    }
         
-        if (!setup_channel(&channels[1], "666")) {
-            fprintf(stderr, "Failed to setup channel 666\n");
-            curl_global_cleanup();
-            return 1;
+    // Connect global WebSocket for all channels
+    if (!connect_global_websocket()) {
+        fprintf(stderr, "Failed to connect WebSocket\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    pthread_t ws_thread;
+    if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
+        fprintf(stderr, "Failed to create WebSocket thread\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", active_channels.count);
+    
+    if (global_interrupted) {
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += 2;
+        
+        if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
+            printf("Forcing termination of WebSocket thread\n");
+            pthread_cancel(ws_thread);
         }
-        
-        // Connect global WebSocket for both channels
-        if (!connect_global_websocket()) {
-            fprintf(stderr, "Failed to connect WebSocket\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        pthread_t ws_thread;
-        if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
-            fprintf(stderr, "Failed to create WebSocket thread\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        printf("Both channels running with single WebSocket. Press Ctrl+C to stop.\n");
-        
-        if (global_interrupted) {
-            struct timespec timeout;
-            clock_gettime(CLOCK_REALTIME, &timeout);
-            timeout.tv_sec += 2;
-            
-            if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
-                printf("Forcing termination of WebSocket thread\n");
-                pthread_cancel(ws_thread);
-            }
-        } else {
-            pthread_join(ws_thread, NULL);
-        }
-        
     } else {
-        int channel_idx = (argc > 1 && atoi(argv[1]) == 666) ? 1 : 0;
-        const char* channel_id = (channel_idx == 0) ? "555" : "666";
-        
-        if (!setup_channel(&channels[channel_idx], channel_id)) {
-            fprintf(stderr, "Failed to setup channel %s\n", channel_id);
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        if (!connect_global_websocket()) {
-            fprintf(stderr, "Failed to connect WebSocket\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        global_websocket_thread(NULL);
+        pthread_join(ws_thread, NULL);
     }
     
     curl_global_cleanup();

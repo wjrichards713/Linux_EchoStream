@@ -43,24 +43,38 @@ try:
         config_item = software_config[0]
         username = config_item.get('user_name', 'EchoStream')
         agency_name = config_item.get('agency_name', 'TestAgency')
-        channel_one = config_item.get('channel_one', {}).get('channel_id', '555')
-        channel_two = config_item.get('channel_two', {}).get('channel_id', '666')
+        
+        # Extract all channels dynamically
+        channels = []
+        
+        # Check for channel_one, channel_two, channel_three, channel_four, etc.
+        channel_index = 1
+        while True:
+            channel_key = f'channel_{channel_index}' if channel_index > 2 else ('channel_one' if channel_index == 1 else 'channel_two')
+            channel_data = config_item.get(channel_key, {})
+            
+            if channel_data and 'channel_id' in channel_data:
+                channels.append(channel_data['channel_id'])
+                channel_index += 1
+            else:
+                break
+        
+        # If no channels found, use defaults
+        if not channels:
+            channels = ['555', '666']
     else:
         username = 'EchoStream'
         agency_name = 'TestAgency'
-        channel_one = '555'
-        channel_two = '666'
+        channels = ['555', '666']
     
     print(f'USERNAME={username}')
     print(f'AGENCY_NAME={agency_name}')
-    print(f'CHANNEL_ONE={channel_one}')
-    print(f'CHANNEL_TWO={channel_two}')
+    print(f'CHANNELS={",".join(channels)}')
     
 except Exception as e:
     print('USERNAME=EchoStream')
     print('AGENCY_NAME=TestAgency')
-    print('CHANNEL_ONE=555')
-    print('CHANNEL_TWO=666')
+    print('CHANNELS=555,666')
     print(f'ERROR: {e}', file=sys.stderr)
 "
 }
@@ -72,17 +86,17 @@ if command -v jq &> /dev/null; then
     USERNAME=$(jq -r '.shadow.state.desired.software_configuration[0].user_name' "$CONFIG_FILE" 2>/dev/null)
     AGENCY_NAME=$(jq -r '.shadow.state.desired.software_configuration[0].agency_name' "$CONFIG_FILE" 2>/dev/null)
 
-    # Extract channel IDs
-    CHANNEL_ONE=$(jq -r '.shadow.state.desired.software_configuration[0].channel_one.channel_id' "$CONFIG_FILE" 2>/dev/null)
-    CHANNEL_TWO=$(jq -r '.shadow.state.desired.software_configuration[0].channel_two.channel_id' "$CONFIG_FILE" 2>/dev/null)
+    # Extract all channels dynamically using jq
+    CHANNELS=$(jq -r '.shadow.state.desired.software_configuration[0] | 
+        [.channel_one.channel_id, .channel_two.channel_id, .channel_three.channel_id, .channel_four.channel_id] | 
+        map(select(. != null and . != "")) | join(",")' "$CONFIG_FILE" 2>/dev/null)
 else
     # Use Python to extract values
     while IFS='=' read -r key value; do
         case $key in
             USERNAME) USERNAME="$value" ;;
             AGENCY_NAME) AGENCY_NAME="$value" ;;
-            CHANNEL_ONE) CHANNEL_ONE="$value" ;;
-            CHANNEL_TWO) CHANNEL_TWO="$value" ;;
+            CHANNELS) CHANNELS="$value" ;;
         esac
     done < <(extract_with_python)
 fi
@@ -94,26 +108,19 @@ if [ "$USERNAME" = "null" ] || [ "$AGENCY_NAME" = "null" ] || [ -z "$USERNAME" ]
     AGENCY_NAME="TestAgency"
 fi
 
-if [ "$CHANNEL_ONE" = "null" ] || [ "$CHANNEL_TWO" = "null" ] || [ -z "$CHANNEL_ONE" ] || [ -z "$CHANNEL_TWO" ]; then
+if [ "$CHANNELS" = "null" ] || [ -z "$CHANNELS" ]; then
     echo "WARNING: Could not extract channel IDs from config, using defaults"
-    CHANNEL_ONE="555"
-    CHANNEL_TWO="666"
+    CHANNELS="555,666"
 fi
 
-# Determine which channels are available and set run mode
-if [ "$CHANNEL_ONE" != "null" ] && [ "$CHANNEL_TWO" != "null" ] && [ "$CHANNEL_ONE" != "" ] && [ "$CHANNEL_TWO" != "" ]; then
-    # Both channels are defined
-    RUN_MODE="both"
-elif [ "$CHANNEL_ONE" != "null" ] && [ "$CHANNEL_ONE" != "" ]; then
-    # Only channel one is defined
-    RUN_MODE="$CHANNEL_ONE"
-elif [ "$CHANNEL_TWO" != "null" ] && [ "$CHANNEL_TWO" != "" ]; then
-    # Only channel two is defined
-    RUN_MODE="$CHANNEL_TWO"
-else
-    # No channels defined, use defaults
-    RUN_MODE="both"
-fi
+# Display extracted configuration
+echo "Configuration extracted:"
+echo "  Username: $USERNAME"
+echo "  Agency: $AGENCY_NAME"
+echo "  Channels: $CHANNELS"
+
+# Convert comma-separated channels to space-separated for passing to C program
+CHANNEL_ARGS=$(echo "$CHANNELS" | tr ',' ' ')
 
 # Check if api_call executable exists
 if [ ! -f "./api_call" ]; then
@@ -126,13 +133,8 @@ if [ ! -f "./api_call" ]; then
 fi
 
 # Start EchoStream with configuration parameters
-if [ "$RUN_MODE" = "both" ]; then
-    echo "Executing: ./api_call \"$USERNAME\" \"$AGENCY_NAME\" both"
-    ./api_call "$USERNAME" "$AGENCY_NAME" both &
-else
-    echo "Executing: ./api_call \"$USERNAME\" \"$AGENCY_NAME\" $RUN_MODE"
-    ./api_call "$USERNAME" "$AGENCY_NAME" "$RUN_MODE" &
-fi
+echo "Executing: ./api_call \"$USERNAME\" \"$AGENCY_NAME\" $CHANNEL_ARGS"
+./api_call "$USERNAME" "$AGENCY_NAME" $CHANNEL_ARGS &
 
 # Store the PID of the api_call process
 API_CALL_PID=$!
