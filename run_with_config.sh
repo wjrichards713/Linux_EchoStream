@@ -48,16 +48,11 @@ try:
         channels = []
         
         # Check for channel_one, channel_two, channel_three, channel_four, etc.
-        channel_index = 1
-        while True:
-            channel_key = f'channel_{channel_index}' if channel_index > 2 else ('channel_one' if channel_index == 1 else 'channel_two')
-            channel_data = config_item.get(channel_key, {})
-            
-            if channel_data and 'channel_id' in channel_data:
-                channels.append(channel_data['channel_id'])
-                channel_index += 1
-            else:
-                break
+        channels.append(config_item.get('chanel_one', {}))
+        channels.append(config_item.get('channel_two', {}))
+        channels.append(config_item.get('channel_three', {}))
+        channels.append(config_item.get('channel_four', {}))
+
         
         # If no channels found, use defaults
         if not channels:
