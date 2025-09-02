@@ -52,7 +52,7 @@ struct websocket_ctx {
     struct lws_context *context;
     struct lws *client_wsi;
     int interrupted;
-    char channel_id[16];
+    char channel_id[64];
 };
 
 #define JITTER_BUFFER_SIZE 8
@@ -86,7 +86,7 @@ struct audio_stream {
     int input_buffer_pos;
     int current_output_frame_pos;
     PaDeviceIndex device_index;
-    char channel_id[16];
+    char channel_id[64];
 };
 
 struct channel_context {
@@ -940,7 +940,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
             printf("WebSocket connection established for both channels\n");
             
             // Send connect message for all active channels
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < active_channels.count; i++) {
                 if (channels[i].active) {
                     char connect_msg[512];
                     time_t now = time(NULL);
@@ -987,7 +987,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             printf("UDP connection established\n");
                             
                             // Start transmission for all active channels
-                            for (int i = 0; i < 4; i++) {
+                            for (int i = 0; i < active_channels.count; i++) {
                                 if (channels[i].active) {
                                     const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
                                     if (!decode_base64(key_b64, channels[i].audio.key)) {
@@ -1110,7 +1110,7 @@ void* global_websocket_thread(void* arg) {
     }
     
     // Cleanup all channels
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < active_channels.count; i++) {
         if (channels[i].active) {
             if (channels[i].audio.input_stream && !global_interrupted) {
                 Pa_AbortStream(channels[i].audio.input_stream);
