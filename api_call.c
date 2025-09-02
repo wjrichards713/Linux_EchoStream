@@ -1735,9 +1735,14 @@ int main(int argc, char *argv[]) {
         int channel_count = 0;
         for (int i = 3; i < argc; i++) {
             // Default GPIO pin mapping (can be customized)
-            int gpio_pin = 38 + channel_count;  // Start with GPIO 38, 40, 22, 23, etc.
-            if (channel_count == 2) gpio_pin = 22;  // GPIO 22 for 3rd channel
-            if (channel_count == 3) gpio_pin = 23;  // GPIO 23 for 4th channel
+            int gpio_pin;
+            switch (channel_count) {
+                case 0: gpio_pin = 38; break;  // GPIO 38 for 1st channel
+                case 1: gpio_pin = 40; break;  // GPIO 40 for 2nd channel
+                case 2: gpio_pin = 22; break;  // GPIO 22 for 3rd channel
+                case 3: gpio_pin = 23; break;  // GPIO 23 for 4th channel
+                default: gpio_pin = 38 + channel_count; break;  // Fallback for more channels
+            }
             
             add_channel_to_list(argv[i], gpio_pin);
             channel_count++;
