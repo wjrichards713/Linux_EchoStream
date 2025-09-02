@@ -110,10 +110,7 @@ static int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
 static pthread_t udp_listener_thread;
-static int gpio_38_state = 0;
-static int gpio_40_state = 0;
-static int gpio_22_state = 0;
-static int gpio_23_state = 0;
+
 static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
@@ -417,10 +414,10 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -452,10 +449,10 @@ size_t decode_base64_len(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -663,7 +660,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
                 int remaining_in_frame = current_frame->sample_count - audio_stream->current_output_frame_pos;
                 unsigned long frames_to_copy = frames - frames_filled;
                 
-                if (frames_to_copy > remaining_in_frame) {
+                if (frames_to_copy > (unsigned long)remaining_in_frame) {
                     frames_to_copy = remaining_in_frame;
                 }
                 
@@ -1038,9 +1035,12 @@ static struct lws_protocols protocols[] = {
         "audio-protocol",
         websocket_callback,
         0,
-        4096
+        4096,
+        0,  // id field
+        NULL,
+        0
     },
-    { NULL, NULL, 0, 0 }
+    { NULL, NULL, 0, 0, 0, NULL, 0 }
 };
 
 int connect_global_websocket() {
@@ -1248,30 +1248,7 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
     return usb_devices[0];
 }
 
-int get_channel_index(const char* channel_id) {
-    for (int i = 0; i < active_channels.count; i++) {
-        if (strcmp(active_channels.channel_ids[i], channel_id) == 0) {
-            return i;
-        }
-    }
-    return -1; // channel not found
-}
 
-int get_gpio_pin_for_channel(const char* channel_id) {
-    int channel_idx = get_channel_index(channel_id);
-    if (channel_idx >= 0 && channel_idx < active_channels.count) {
-        return active_channels.gpio_pins[channel_idx];
-    }
-    return -1; // channel not found
-}
-
-void print_active_channels() {
-    printf("Active channels configuration:\n");
-    for (int i = 0; i < active_channels.count; i++) {
-        printf("  Channel %d: %s (GPIO pin %d)\n", 
-               i, active_channels.channel_ids[i], active_channels.gpio_pins[i]);
-    }
-}
 
 int init_gpio_pin(int pin) {
     char path[64], value[8];
@@ -1588,7 +1565,7 @@ void* udp_listener_worker(void* arg) {
                             
                             // Debug: Print first few bytes of encrypted data and key
                             printf("UDP Listener: Encrypted data (first 16 bytes): ");
-                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
+                            for (int k = 0; k < 16 && k < (int)encrypted_len; k++) {
                                 printf("%02x ", encrypted_data[k]);
                             }
                             printf("\n");
@@ -1730,8 +1707,6 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
 }
 
 int main(int argc, char *argv[]) {
-    int run_both = 1;
-    int arg_index = 1; // Track which argument we're processing
     
     printf("=== ECHOSTREAM STARTUP LOG ===\n");
     printf("LOG: Program started with %d arguments\n", argc);
