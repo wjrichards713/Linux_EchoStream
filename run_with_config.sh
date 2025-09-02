@@ -48,10 +48,21 @@ try:
         channels = []
         
         # Check for channel_one, channel_two, channel_three, channel_four, etc.
-        channels.append(config_item.get('chanel_one', {}))
-        channels.append(config_item.get('channel_two', {}))
-        channels.append(config_item.get('channel_three', {}))
-        channels.append(config_item.get('channel_four', {}))
+        channel_one = config_item.get('channel_one', {})
+        if channel_one and 'channel_id' in channel_one:
+            channels.append(channel_one['channel_id'])
+            
+        channel_two = config_item.get('channel_two', {})
+        if channel_two and 'channel_id' in channel_two:
+            channels.append(channel_two['channel_id'])
+            
+        channel_three = config_item.get('channel_three', {})
+        if channel_three and 'channel_id' in channel_three:
+            channels.append(channel_three['channel_id'])
+            
+        channel_four = config_item.get('channel_four', {})
+        if channel_four and 'channel_id' in channel_four:
+            channels.append(channel_four['channel_id'])
 
         
         # If no channels found, use defaults
