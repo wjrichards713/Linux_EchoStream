@@ -1288,80 +1288,68 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
 
 
 int init_gpio_pin(int pin) {
-    char path[64], value[8];
-    int fd;
+    char cmd[128];
+    int result;
     
-    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
-    if ((fd = open(path, O_WRONLY)) != -1) {
-        snprintf(value, sizeof(value), "%d", pin);
-        write(fd, value, strlen(value));
-        close(fd);
-    }
-    
-    usleep(100000);
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/export");
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    snprintf(value, sizeof(value), "%d", pin);
-    if (write(fd, value, strlen(value)) == -1) {
-        printf("ERROR: Cannot export GPIO pin %d: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-    
-    usleep(100000);
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    if (write(fd, "in", 2) == -1) {
-        printf("ERROR: Cannot set GPIO pin %d direction: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-    
-    char cmd[64];
+    // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
-    system(cmd);
+    printf("Executing: %s\n", cmd);
+    result = system(cmd);
     
-    printf("GPIO pin %d initialized successfully\n", pin);
+    if (result != 0) {
+        printf("ERROR: Failed to configure GPIO pin %d with pinctrl (exit code: %d)\n", pin, result);
+        printf("This may be due to permission issues or incorrect GPIO numbers for RPi 5\n");
+        return 0;
+    }
+    
+    printf("GPIO pin %d initialized successfully with pinctrl\n", pin);
     return 1;
 }
 
 int read_gpio_pin(int pin) {
-    char path[64], value[4];
-    int fd;
+    char cmd[128];
+    char result_buffer[16];
+    FILE *fp;
     
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
-    if ((fd = open(path, O_RDONLY)) == -1) {
+    // Use pinctrl to read GPIO pin value for RPi 5
+    snprintf(cmd, sizeof(cmd), "pinctrl get %d", pin);
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        printf("ERROR: Failed to execute pinctrl get for pin %d\n", pin);
         return -1;
     }
     
-    if (read(fd, value, 3) == -1) {
-        close(fd);
+    if (fgets(result_buffer, sizeof(result_buffer), fp) == NULL) {
+        pclose(fp);
         return -1;
     }
-    close(fd);
+    pclose(fp);
     
-    return (value[0] == '0') ? 0 : 1;
+    // Parse the result - pinctrl returns something like "function=ip level=0"
+    // We need to extract the level value
+    char *level_pos = strstr(result_buffer, "level=");
+    if (level_pos == NULL) {
+        printf("ERROR: Could not parse pinctrl result for pin %d: %s\n", pin, result_buffer);
+        return -1;
+    }
+    
+    level_pos += 6; // Skip "level="
+    int level = atoi(level_pos);
+    
+    return level;
 }
 
 void cleanup_gpio(int pin) {
-    char path[64], value[8];
-    int fd;
+    char cmd[128];
+    int result;
     
-    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
-    if ((fd = open(path, O_WRONLY)) != -1) {
-        snprintf(value, sizeof(value), "%d", pin);
-        write(fd, value, strlen(value));
-        close(fd);
+    // Use pinctrl to reset GPIO pin to default state for RPi 5
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pin);
+    printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
+    result = system(cmd);
+    
+    if (result != 0) {
+        printf("WARNING: Failed to cleanup GPIO pin %d (exit code: %d)\n", pin, result);
     }
 }
 
@@ -1447,6 +1435,11 @@ void* gpio_monitor_worker(void* arg) {
                 continue;
         }
         
+        printf("=== GPIO PIN MAPPING ===\n");
+        printf("Channel: %s\n", active_channels.channel_ids[i]);
+        printf("Physical Pin: %d\n", physical_pin);
+        printf("GPIO Number: %d\n", gpio_pin);
+        
         if (!init_gpio_pin(gpio_pin)) {
             printf("Failed to initialize GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
             // Cleanup previously initialized pins
@@ -1465,12 +1458,16 @@ void* gpio_monitor_worker(void* arg) {
     // Read initial states for all channels
     int gpio_states[16] = {0};
     pthread_mutex_lock(&gpio_mutex);
+    printf("=== READING INITIAL GPIO STATES ===\n");
     for (int i = 0; i < gpio_count; i++) {
         gpio_states[i] = read_gpio_pin(gpio_pins[i]);
         if (gpio_states[i] != -1) {
-            printf("PIN %d (Channel %s) initial state: %s\n", 
-                   active_channels.gpio_pins[i], active_channels.channel_ids[i],
+            printf("Physical Pin %d (GPIO %d) - Channel %s: %s\n", 
+                   active_channels.gpio_pins[i], gpio_pins[i], active_channels.channel_ids[i],
                    gpio_states[i] == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+        } else {
+            printf("ERROR: Failed to read initial state for Physical Pin %d (GPIO %d) - Channel %s\n",
+                   active_channels.gpio_pins[i], gpio_pins[i], active_channels.channel_ids[i]);
         }
     }
     pthread_mutex_unlock(&gpio_mutex);
