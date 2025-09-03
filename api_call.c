@@ -610,6 +610,12 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                         sendto(global_udp_socket, msg, strlen(msg), 0,
                                (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
                         
+                        printf("=== AUDIO TRANSMISSION ===\n");
+                        printf("Channel: %s\n", audio_stream->channel_id);
+                        printf("Opus length: %d bytes\n", opus_len);
+                        printf("Encrypted length: %zu bytes\n", encrypted_len);
+                        printf("UDP message sent: %d bytes\n", (int)strlen(msg));
+                        
                         // Publish MQTT audio status
                         char mqtt_audio_msg[512];
                         snprintf(mqtt_audio_msg, sizeof(mqtt_audio_msg),
@@ -948,6 +954,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         case LWS_CALLBACK_CLIENT_WRITEABLE: {
             // Send connect message for all active channels (only once)
             if (!connect_messages_sent) {
+                printf("=== SENDING CONNECT MESSAGES FOR ALL CHANNELS ===\n");
                 for (int i = 0; i < active_channels.count; i++) {
                     if (channels[i].active) {
                         char connect_msg[512];
@@ -957,7 +964,11 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"%s\",\"agency_name\":\"%s\",\"channel_id\":\"%s\",\"time\":%ld}}",
                             global_user_name, global_agency_name, channels[i].audio.channel_id, now);
                         
-                        printf("Sending connect message for channel %s: %s\n", channels[i].audio.channel_id, connect_msg);
+                        printf("=== CONNECT MESSAGE FOR CHANNEL %d ===\n", i+1);
+                        printf("Channel ID: %s\n", channels[i].audio.channel_id);
+                        printf("Username: %s\n", global_user_name);
+                        printf("Agency: %s\n", global_agency_name);
+                        printf("Full message: %s\n", connect_msg);
                         
                         size_t msg_len = strlen(connect_msg);
                         unsigned char *buf = malloc(LWS_PRE + msg_len);
@@ -975,7 +986,9 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("Received WebSocket message: %.*s\n", (int)len, (char *)in);
+            printf("=== WEBSOCKET MESSAGE RECEIVED ===\n");
+            printf("Message length: %zu bytes\n", len);
+            printf("Raw message: %.*s\n", (int)len, (char *)in);
             
             char *data = malloc(len + 1);
             if (data) {
@@ -984,7 +997,8 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                 
                 // Check if this is the UDP connection info message
                 if (strstr(data, "udp_host") && strstr(data, "udp_port") && strstr(data, "websocket_id")) {
-                    printf("Received UDP connection info: %s\n", data);
+                    printf("=== UDP CONNECTION INFO RECEIVED ===\n");
+                    printf("Full message: %s\n", data);
                     
                     // Parse the WebSocket configuration
                     if (parse_websocket_config(data, &global_config)) {
@@ -1014,10 +1028,21 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                     }
                 }
                 else if (strstr(data, "users_connected")) {
-                    printf("Users connected message received, but UDP not yet configured\n");
+                    printf("=== USERS CONNECTED MESSAGE ===\n");
+                    printf("Message: %s\n", data);
+                    printf("Note: UDP not yet configured\n");
+                }
+                else if (strstr(data, "transmit_started") || strstr(data, "transmit_ended")) {
+                    printf("=== TRANSMIT EVENT MESSAGE ===\n");
+                    printf("Message: %s\n", data);
+                }
+                else if (strstr(data, "channel_id")) {
+                    printf("=== CHANNEL-SPECIFIC MESSAGE ===\n");
+                    printf("Message: %s\n", data);
                 }
                 else {
-                    printf("Received other WebSocket message: %s\n", data);
+                    printf("=== OTHER WEBSOCKET MESSAGE ===\n");
+                    printf("Message: %s\n", data);
                 }
                 
                 free(data);
@@ -1368,7 +1393,8 @@ void* heartbeat_worker(void* arg) {
 
 void send_websocket_transmit_event(const char* channel_id, int is_started) {
     if (!global_ws_client) {
-        printf("WebSocket not connected, cannot send transmit event\n");
+        printf("=== TRANSMIT EVENT ERROR ===\n");
+        printf("WebSocket not connected, cannot send transmit event for channel %s\n", channel_id);
         return;
     }
     
@@ -1380,7 +1406,13 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
         "{\"%s\":{\"affiliation_id\":\"12345\",\"user_name\":\"%s\",\"agency_name\":\"%s\",\"channel_id\":\"%s\",\"time\":%ld}}",
         event_type, global_user_name, global_agency_name, channel_id, now);
     
-    printf("Sending %s for channel %s: %s\n", event_type, channel_id, transmit_msg);
+    printf("=== TRANSMIT EVENT SENDING ===\n");
+    printf("Channel: %s\n", channel_id);
+    printf("Event Type: %s\n", event_type);
+    printf("Username: %s\n", global_user_name);
+    printf("Agency: %s\n", global_agency_name);
+    printf("Timestamp: %ld\n", now);
+    printf("Full message: %s\n", transmit_msg);
     
     size_t msg_len = strlen(transmit_msg);
     unsigned char *buf = malloc(LWS_PRE + msg_len);
@@ -1454,9 +1486,12 @@ void* gpio_monitor_worker(void* arg) {
             
             if (curr_val != gpio_states[i] && curr_val != -1) {
                 gpio_states[i] = curr_val;
-                printf("PIN %d (Channel %s): %s\n", 
-                       active_channels.gpio_pins[i], active_channels.channel_ids[i],
-                       curr_val == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+                printf("=== GPIO STATE CHANGE ===\n");
+                printf("Physical Pin: %d\n", active_channels.gpio_pins[i]);
+                printf("Channel: %s\n", active_channels.channel_ids[i]);
+                printf("Channel Index: %d\n", i);
+                printf("State: %s\n", curr_val == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+                printf("Previous State: %s\n", gpio_states[i] == 0 ? "ACTIVE" : "INACTIVE");
                 
                 // Update channel GPIO state
                 for (int j = 0; j < active_channels.count; j++) {
@@ -1542,14 +1577,16 @@ void* udp_listener_worker(void* arg) {
                 //        channel_id, type, strlen(data));
                 
                 if (strcmp(type, "audio") == 0) {
-                    // printf("UDP Listener: Processing audio message for channel %s\n", channel_id);
+                    printf("=== UDP AUDIO MESSAGE RECEIVED ===\n");
+                    printf("Channel ID: %s\n", channel_id);
+                    printf("Data length: %zu bytes\n", strlen(data));
                     
                     // Find the channel
                     struct audio_stream* target_stream = NULL;
                     for (int i = 0; i < active_channels.count; i++) {
                         if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
                             target_stream = &channels[i].audio;
-                            // printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
+                            printf("Found target channel %s at index %d\n", channel_id, i);
                             break;
                         }
                     }
@@ -1573,16 +1610,18 @@ void* udp_listener_worker(void* arg) {
                         size_t encrypted_len = decode_base64_len(data, encrypted_data);
                         
                         if (encrypted_len > 0) {
-                            printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
+                            printf("=== AUDIO DECODING ===\n");
+                            printf("Channel: %s\n", channel_id);
+                            printf("Base64 decoded successfully (%zu bytes)\n", encrypted_len);
                             
                             // Debug: Print first few bytes of encrypted data and key
-                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
+                            printf("Encrypted data (first 16 bytes): ");
                             for (int k = 0; k < 16 && k < (int)encrypted_len; k++) {
                                 printf("%02x ", encrypted_data[k]);
                             }
                             printf("\n");
                             
-                            printf("UDP Listener: Using key (first 16 bytes): ");
+                            printf("Using key (first 16 bytes): ");
                             for (int k = 0; k < 16; k++) {
                                 printf("%02x ", target_stream->key[k]);
                             }
@@ -1594,7 +1633,7 @@ void* udp_listener_worker(void* arg) {
                                                                   target_stream->key, &decrypted_len);
                             
                             if (decrypted) {
-                                printf("UDP Listener: Data decrypted successfully (%zu bytes)\n", decrypted_len);
+                                printf("Data decrypted successfully (%zu bytes)\n", decrypted_len);
                                 
                                 // Decode Opus audio
                                 short pcm_data[1920];
@@ -1602,7 +1641,7 @@ void* udp_listener_worker(void* arg) {
                                                         pcm_data, 1920, 0);
                                 
                                 if (samples > 0) {
-                                    printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
+                                    printf("Opus decoded successfully (%d samples)\n", samples);
                                     
                                     // Debug: Check audio levels
                                     short max_sample = 0;
@@ -1611,7 +1650,7 @@ void* udp_listener_worker(void* arg) {
                                             max_sample = abs(pcm_data[s]);
                                         }
                                     }
-                                    printf("UDP Listener: Audio level check - max sample: %d (%.2f%%)\n", 
+                                    printf("Audio level check - max sample: %d (%.2f%%)\n", 
                                            max_sample, (float)max_sample / 32767.0f * 100.0f);
                                     
                                     // Add audio frame to jitter buffer
@@ -1638,8 +1677,9 @@ void* udp_listener_worker(void* arg) {
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
                                         
-                                        printf("UDP: Audio queued for %s (buffer=%d)\n", 
-                                               channel_id, jitter->frame_count);
+                                        printf("=== AUDIO QUEUED ===\n");
+                                        printf("Channel: %s\n", channel_id);
+                                        printf("Buffer frames: %d\n", jitter->frame_count);
                                     } else {
                                         // Buffer full, drop oldest frame and add new one
                                         jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
@@ -1775,12 +1815,15 @@ int main(int argc, char *argv[]) {
         add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 23);
     }
     
-    printf("LOG: Final configuration - Username: '%s', Agency: '%s', Channels: %d\n", 
-           global_user_name, global_agency_name, active_channels.count);
+    printf("=== FINAL CONFIGURATION ===\n");
+    printf("Username: '%s'\n", global_user_name);
+    printf("Agency: '%s'\n", global_agency_name);
+    printf("Total Channels: %d\n", active_channels.count);
     printf("Active channels:\n");
     for (int i = 0; i < active_channels.count; i++) {
-        printf("  %d: %s (GPIO %d)\n", i, active_channels.channel_ids[i], active_channels.gpio_pins[i]);
+        printf("  Channel %d: %s (Physical Pin %d)\n", i+1, active_channels.channel_ids[i], active_channels.gpio_pins[i]);
     }
+    printf("========================\n");
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
