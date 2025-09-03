@@ -1328,36 +1328,8 @@ int read_gpio_pin(int pin) {
     char result_buffer[64];
     FILE *fp;
     
-    // Use pinctrl to read GPIO pin value for RPi 5
-    snprintf(cmd, sizeof(cmd), "pinctrl get %d", pin);
-    fp = popen(cmd, "r");
-    if (fp == NULL) {
-        printf("ERROR: Failed to execute pinctrl get for pin %d\n", pin);
-        return -1;
-    }
-    
-    if (fgets(result_buffer, sizeof(result_buffer), fp) == NULL) {
-        pclose(fp);
-        return -1;
-    }
-    pclose(fp);
-    
-    // Parse the result - pinctrl returns format like "21: ip    pu |"
-    // We need to extract the level value from the end
-    // The format appears to be: "pin: function pull |"
-    // For input pins, we need to check the actual level
-    
-    // Try to find level= in the output first (old format)
-    char *level_pos = strstr(result_buffer, "level=");
-    if (level_pos != NULL) {
-        level_pos += 6; // Skip "level="
-        int level = atoi(level_pos);
-        return level;
-    }
-    
-    // If no level= found, try to parse the new format
-    // For now, we'll use a different approach - read from /sys/class/gpio directly
-    // since pinctrl get doesn't seem to show the actual level
+    // Skip pinctrl get since it doesn't show actual pin levels
+    // Go directly to sysfs reading
     char gpio_path[64];
     char value[4];
     int fd;
