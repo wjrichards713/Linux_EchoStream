@@ -844,11 +844,12 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
     
+    printf("Creating input stream for channel %s on device %d\n", audio_stream->channel_id, input_params.device);
     PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
                                 paClipOff, audio_input_callback, audio_stream);
     
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
+        fprintf(stderr, "PortAudio input stream error for channel %s: %s\n", audio_stream->channel_id, Pa_GetErrorText(err));
         return 0;
     }
     
@@ -859,11 +860,12 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
     
+    printf("Creating output stream for channel %s on device %d\n", audio_stream->channel_id, output_params.device);
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
                         paClipOff, audio_output_callback, audio_stream);
     
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        fprintf(stderr, "PortAudio output stream error for channel %s: %s\n", audio_stream->channel_id, Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
         return 0;
     }
@@ -1268,6 +1270,20 @@ void auto_assign_usb_devices() {
     // Print device assignments for active channels
     for (int i = 0; i < active_channels.count; i++) {
         printf("Channel %s -> Device %d\n", active_channels.channel_ids[i], usb_devices[i]);
+        
+        // Check if device is valid
+        if (usb_devices[i] == paNoDevice) {
+            printf("WARNING: Channel %s assigned to invalid device (paNoDevice)\n", active_channels.channel_ids[i]);
+        } else {
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
+            if (device_info) {
+                printf("  Device %d: %s (Input: %d, Output: %d)\n", 
+                       usb_devices[i], device_info->name, 
+                       device_info->maxInputChannels, device_info->maxOutputChannels);
+            } else {
+                printf("  Device %d: Unable to get device info\n", usb_devices[i]);
+            }
+        }
     }
     
     device_assigned = 1;
