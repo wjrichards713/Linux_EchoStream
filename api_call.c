@@ -866,6 +866,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error for channel %s: %s\n", audio_stream->channel_id, Pa_GetErrorText(err));
+        fprintf(stderr, "This usually means the USB audio device is not available or has issues\n");
         Pa_CloseStream(audio_stream->input_stream);
         return 0;
     }
@@ -1261,9 +1262,12 @@ void auto_assign_usb_devices() {
             usb_devices[i] = Pa_GetDefaultInputDevice();
         }
     } else if (usb_count < active_channels.count) {
-        printf("Only %d USB device(s) found, duplicating for remaining channels\n", usb_count);
+        printf("Only %d USB device(s) found, using round-robin assignment for remaining channels\n", usb_count);
         for (int i = usb_count; i < active_channels.count; i++) {
-            usb_devices[i] = usb_devices[0];
+            // Use round-robin assignment to available devices
+            usb_devices[i] = usb_devices[i % usb_count];
+            printf("Channel %d assigned to device %d (round-robin from %d available devices)\n", 
+                   i, usb_devices[i], usb_count);
         }
     }
     
