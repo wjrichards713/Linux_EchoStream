@@ -344,7 +344,7 @@ static void handle_interrupt(int sig) {
     // Disconnect MQTT client
     mqtt_disconnect();
     
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < active_channels.count; i++) {
         if (channels[i].active) {
             channels[i].audio.transmitting = 0;
             
@@ -1303,7 +1303,7 @@ int init_gpio_pin(int pin) {
     close(fd);
     
     char cmd[64];
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin - 569);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
     system(cmd);
     
     printf("GPIO pin %d initialized successfully\n", pin);
@@ -1406,10 +1406,10 @@ void* gpio_monitor_worker(void* arg) {
         
         // Convert physical pin to GPIO number for RPi5
         switch (physical_pin) {
-            case 38: gpio_pin = 589; break;  // GPIO 20
-            case 40: gpio_pin = 590; break;  // GPIO 21
-            case 22: gpio_pin = 573; break;  // GPIO 22
-            case 23: gpio_pin = 574; break;  // GPIO 23
+            case 38: gpio_pin = 20; break;   // Physical pin 38 = GPIO 20
+            case 40: gpio_pin = 21; break;   // Physical pin 40 = GPIO 21
+            case 22: gpio_pin = 25; break;   // Physical pin 22 = GPIO 25
+            case 23: gpio_pin = 11; break;   // Physical pin 23 = GPIO 11
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
                 continue;
@@ -1546,7 +1546,7 @@ void* udp_listener_worker(void* arg) {
                     
                     // Find the channel
                     struct audio_stream* target_stream = NULL;
-                    for (int i = 0; i < 2; i++) {
+                    for (int i = 0; i < active_channels.count; i++) {
                         if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
                             target_stream = &channels[i].audio;
                             // printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
@@ -1557,7 +1557,7 @@ void* udp_listener_worker(void* arg) {
                     if (!target_stream) {
                         printf("UDP Listener: No active channel found for '%s'\n", channel_id);
                         printf("UDP Listener: Active channels: ");
-                        for (int i = 0; i < 2; i++) {
+                        for (int i = 0; i < active_channels.count; i++) {
                             if (channels[i].active) {
                                 printf("'%s' ", channels[i].audio.channel_id);
                             }
