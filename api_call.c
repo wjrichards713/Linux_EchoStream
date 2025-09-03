@@ -1292,7 +1292,10 @@ int init_gpio_pin(int pin) {
     int result;
     
     // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
+    // For pinctrl, we need to use the offset from the gpiochip base
+    // gpiochip569 is the base, so we need to subtract 569 from the sysfs GPIO number
+    int pinctrl_pin = pin - 569;
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pinctrl_pin);
     printf("Executing: %s\n", cmd);
     result = system(cmd);
     
@@ -1388,7 +1391,9 @@ void cleanup_gpio(int pin) {
     }
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pin);
+    // For pinctrl, we need to use the offset from the gpiochip base
+    int pinctrl_pin = pin - 569;
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
     
@@ -1468,12 +1473,12 @@ void* gpio_monitor_worker(void* arg) {
         int physical_pin = active_channels.gpio_pins[i];
         int gpio_pin = 0;
         
-        // Convert physical pin to GPIO number for RPi5
+        // Convert physical pin to GPIO number for RPi5 (sysfs numbering)
         switch (physical_pin) {
-            case 38: gpio_pin = 20; break;   // Physical pin 38 = GPIO 20
-            case 40: gpio_pin = 21; break;   // Physical pin 40 = GPIO 21
-            case 22: gpio_pin = 25; break;   // Physical pin 22 = GPIO 25
-            case 23: gpio_pin = 11; break;   // Physical pin 23 = GPIO 11
+            case 38: gpio_pin = 589; break;  // Physical pin 38 = GPIO 589 (sysfs)
+            case 40: gpio_pin = 590; break;  // Physical pin 40 = GPIO 590 (sysfs)
+            case 22: gpio_pin = 573; break;  // Physical pin 22 = GPIO 573 (sysfs)
+            case 23: gpio_pin = 574; break;  // Physical pin 23 = GPIO 574 (sysfs)
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
                 continue;
