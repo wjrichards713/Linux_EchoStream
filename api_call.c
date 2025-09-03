@@ -1302,13 +1302,30 @@ int init_gpio_pin(int pin) {
         return 0;
     }
     
+    // Also export the GPIO pin for reading via sysfs
+    char export_path[64];
+    char pin_str[8];
+    int export_fd;
+    
+    snprintf(export_path, sizeof(export_path), "/sys/class/gpio/export");
+    export_fd = open(export_path, O_WRONLY);
+    if (export_fd != -1) {
+        snprintf(pin_str, sizeof(pin_str), "%d", pin);
+        write(export_fd, pin_str, strlen(pin_str));
+        close(export_fd);
+        usleep(100000); // Wait for export to complete
+        printf("GPIO pin %d exported for reading\n", pin);
+    } else {
+        printf("WARNING: Could not export GPIO pin %d for reading\n", pin);
+    }
+    
     printf("GPIO pin %d initialized successfully with pinctrl\n", pin);
     return 1;
 }
 
 int read_gpio_pin(int pin) {
     char cmd[128];
-    char result_buffer[16];
+    char result_buffer[64];
     FILE *fp;
     
     // Use pinctrl to read GPIO pin value for RPi 5
@@ -1325,23 +1342,78 @@ int read_gpio_pin(int pin) {
     }
     pclose(fp);
     
-    // Parse the result - pinctrl returns something like "function=ip level=0"
-    // We need to extract the level value
+    // Parse the result - pinctrl returns format like "21: ip    pu |"
+    // We need to extract the level value from the end
+    // The format appears to be: "pin: function pull |"
+    // For input pins, we need to check the actual level
+    
+    // Try to find level= in the output first (old format)
     char *level_pos = strstr(result_buffer, "level=");
-    if (level_pos == NULL) {
-        printf("ERROR: Could not parse pinctrl result for pin %d: %s\n", pin, result_buffer);
+    if (level_pos != NULL) {
+        level_pos += 6; // Skip "level="
+        int level = atoi(level_pos);
+        return level;
+    }
+    
+    // If no level= found, try to parse the new format
+    // For now, we'll use a different approach - read from /sys/class/gpio directly
+    // since pinctrl get doesn't seem to show the actual level
+    char gpio_path[64];
+    char value[4];
+    int fd;
+    
+    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d/value", pin);
+    fd = open(gpio_path, O_RDONLY);
+    if (fd == -1) {
+        // GPIO not exported, try to export it first
+        char export_path[64];
+        char pin_str[8];
+        int export_fd;
+        
+        snprintf(export_path, sizeof(export_path), "/sys/class/gpio/export");
+        export_fd = open(export_path, O_WRONLY);
+        if (export_fd != -1) {
+            snprintf(pin_str, sizeof(pin_str), "%d", pin);
+            write(export_fd, pin_str, strlen(pin_str));
+            close(export_fd);
+            usleep(100000); // Wait for export to complete
+            
+            // Try to read again
+            fd = open(gpio_path, O_RDONLY);
+        }
+    }
+    
+    if (fd == -1) {
+        printf("ERROR: Could not read GPIO pin %d value\n", pin);
         return -1;
     }
     
-    level_pos += 6; // Skip "level="
-    int level = atoi(level_pos);
+    if (read(fd, value, 3) == -1) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
     
-    return level;
+    return (value[0] == '0') ? 0 : 1;
 }
 
 void cleanup_gpio(int pin) {
     char cmd[128];
     int result;
+    
+    // Unexport the GPIO pin from sysfs
+    char unexport_path[64];
+    char pin_str[8];
+    int unexport_fd;
+    
+    snprintf(unexport_path, sizeof(unexport_path), "/sys/class/gpio/unexport");
+    unexport_fd = open(unexport_path, O_WRONLY);
+    if (unexport_fd != -1) {
+        snprintf(pin_str, sizeof(pin_str), "%d", pin);
+        write(unexport_fd, pin_str, strlen(pin_str));
+        close(unexport_fd);
+        printf("GPIO pin %d unexported\n", pin);
+    }
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pin);
