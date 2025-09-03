@@ -1550,7 +1550,16 @@ void* gpio_monitor_worker(void* arg) {
         for (int i = 0; i < gpio_count; i++) {
             int curr_val = read_gpio_pin(gpio_pins[i]);
             
-            if (curr_val != gpio_states[i] && curr_val != -1) {
+            // Debug: Log GPIO readings for channels 3 and 4
+            if (i >= 2) { // Channels 3 and 4 (indices 2 and 3)
+                printf("DEBUG: Channel %d (Pin %d, GPIO %d) - Current: %d, Previous: %d\n", 
+                       i+1, active_channels.gpio_pins[i], gpio_pins[i], curr_val, gpio_states[i]);
+            }
+            
+            if (curr_val == -1) {
+                printf("ERROR: Failed to read GPIO pin %d (Physical Pin %d) for channel %s\n", 
+                       gpio_pins[i], active_channels.gpio_pins[i], active_channels.channel_ids[i]);
+            } else if (curr_val != gpio_states[i]) {
                 gpio_states[i] = curr_val;
                 printf("=== GPIO STATE CHANGE ===\n");
                 printf("Physical Pin: %d\n", active_channels.gpio_pins[i]);
