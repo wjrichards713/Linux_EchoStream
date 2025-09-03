@@ -1497,8 +1497,8 @@ void* gpio_monitor_worker(void* arg) {
         switch (physical_pin) {
             case 38: gpio_pin = 589; break;  // Physical pin 38 = GPIO 589 (sysfs)
             case 40: gpio_pin = 590; break;  // Physical pin 40 = GPIO 590 (sysfs)
-            case 22: gpio_pin = 573; break;  // Physical pin 22 = GPIO 573 (sysfs)
-            case 23: gpio_pin = 574; break;  // Physical pin 23 = GPIO 574 (sysfs)
+            case 16: gpio_pin = 567; break;  // Physical pin 16 = GPIO 567 (sysfs)
+            case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs)
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
                 continue;
@@ -1550,11 +1550,7 @@ void* gpio_monitor_worker(void* arg) {
         for (int i = 0; i < gpio_count; i++) {
             int curr_val = read_gpio_pin(gpio_pins[i]);
             
-            // Debug: Log GPIO readings for channels 3 and 4
-            if (i >= 2) { // Channels 3 and 4 (indices 2 and 3)
-                printf("DEBUG: Channel %d (Pin %d, GPIO %d) - Current: %d, Previous: %d\n", 
-                       i+1, active_channels.gpio_pins[i], gpio_pins[i], curr_val, gpio_states[i]);
-            }
+
             
             if (curr_val == -1) {
                 printf("ERROR: Failed to read GPIO pin %d (Physical Pin %d) for channel %s\n", 
@@ -1886,8 +1882,8 @@ int main(int argc, char *argv[]) {
         printf("LOG: No channels specified, adding default channels\n");
         add_channel_to_list("555", 38);
         add_channel_to_list("666", 40);
-        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 22);
-        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 23);
+        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 16);
+        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 18);
     }
     
     printf("=== FINAL CONFIGURATION ===\n");
