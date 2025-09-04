@@ -1634,6 +1634,7 @@ void* gpio_monitor_worker(void* arg) {
     // Initialize GPIO pins for all active channels
     int gpio_pins[16] = {0};
     int gpio_count = 0;
+    int channel_gpio_mapping[16] = {0}; // Maps channel index to gpio_pins array index
     
     for (int i = 0; i < active_channels.count; i++) {
         int physical_pin = active_channels.gpio_pins[i];
@@ -1647,6 +1648,7 @@ void* gpio_monitor_worker(void* arg) {
             case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs)
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
+                channel_gpio_mapping[i] = -1; // Mark as invalid
                 continue;
         }
         
@@ -1656,12 +1658,13 @@ void* gpio_monitor_worker(void* arg) {
         printf("GPIO Number: %d\n", gpio_pin);
         
         if (!init_gpio_pin(gpio_pin)) {
-            printf("WARNING: Failed to initialize GPIO pin %d for channel %s - skipping this channel\n", physical_pin, active_channels.channel_ids[i]);
-            // Continue with other channels instead of failing completely
-            continue;
+            printf("WARNING: Failed to initialize GPIO pin %d for channel %s - will monitor anyway\n", physical_pin, active_channels.channel_ids[i]);
+            // Don't skip the channel, just mark it as having failed initialization
+            // We'll still try to monitor it
         }
         
         gpio_pins[gpio_count] = gpio_pin;
+        channel_gpio_mapping[i] = gpio_count;
         gpio_count++;
     }
     
@@ -1676,15 +1679,22 @@ void* gpio_monitor_worker(void* arg) {
     int gpio_states[16] = {0};
     pthread_mutex_lock(&gpio_mutex);
     printf("=== READING INITIAL GPIO STATES ===\n");
-    for (int i = 0; i < gpio_count; i++) {
-        gpio_states[i] = read_gpio_pin(gpio_pins[i]);
-        if (gpio_states[i] != -1) {
+    for (int i = 0; i < active_channels.count; i++) {
+        // Skip channels that don't have valid GPIO mapping
+        if (channel_gpio_mapping[i] == -1) {
+            printf("Channel %s: No valid GPIO mapping\n", active_channels.channel_ids[i]);
+            continue;
+        }
+        
+        int gpio_index = channel_gpio_mapping[i];
+        gpio_states[gpio_index] = read_gpio_pin(gpio_pins[gpio_index]);
+        if (gpio_states[gpio_index] != -1) {
             printf("Physical Pin %d (GPIO %d) - Channel %s: %s\n", 
-                   active_channels.gpio_pins[i], gpio_pins[i], active_channels.channel_ids[i],
-                   gpio_states[i] == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+                   active_channels.gpio_pins[i], gpio_pins[gpio_index], active_channels.channel_ids[i],
+                   gpio_states[gpio_index] == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
         } else {
             printf("ERROR: Failed to read initial state for Physical Pin %d (GPIO %d) - Channel %s\n",
-                   active_channels.gpio_pins[i], gpio_pins[i], active_channels.channel_ids[i]);
+                   active_channels.gpio_pins[i], gpio_pins[gpio_index], active_channels.channel_ids[i]);
         }
     }
     pthread_mutex_unlock(&gpio_mutex);
@@ -1694,22 +1704,28 @@ void* gpio_monitor_worker(void* arg) {
     while (!global_interrupted) {
         pthread_mutex_lock(&gpio_mutex);
         
-        // Check all GPIO pins for changes
-        for (int i = 0; i < gpio_count; i++) {
-            int curr_val = read_gpio_pin(gpio_pins[i]);
+        // Check all channels for GPIO changes
+        for (int i = 0; i < active_channels.count; i++) {
+            // Skip channels that don't have valid GPIO mapping
+            if (channel_gpio_mapping[i] == -1) {
+                continue;
+            }
+            
+            int gpio_index = channel_gpio_mapping[i];
+            int curr_val = read_gpio_pin(gpio_pins[gpio_index]);
             
             if (curr_val == -1) {
                 printf("ERROR: Failed to read GPIO pin %d (Physical Pin %d) for channel %s\n", 
-                       gpio_pins[i], active_channels.gpio_pins[i], active_channels.channel_ids[i]);
+                       gpio_pins[gpio_index], active_channels.gpio_pins[i], active_channels.channel_ids[i]);
                 continue; // Skip this pin and continue with others
-            } else if (curr_val != gpio_states[i]) {
-                gpio_states[i] = curr_val;
+            } else if (curr_val != gpio_states[gpio_index]) {
+                gpio_states[gpio_index] = curr_val;
                 printf("=== GPIO STATE CHANGE ===\n");
                 printf("Physical Pin: %d\n", active_channels.gpio_pins[i]);
                 printf("Channel: %s\n", active_channels.channel_ids[i]);
                 printf("Channel Index: %d\n", i);
                 printf("State: %s\n", curr_val == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-                printf("Previous State: %s\n", gpio_states[i] == 0 ? "ACTIVE" : "INACTIVE");
+                printf("Previous State: %s\n", gpio_states[gpio_index] == 0 ? "ACTIVE" : "INACTIVE");
                 
                 // Update channel GPIO state
                 for (int j = 0; j < active_channels.count; j++) {
