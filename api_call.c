@@ -1307,25 +1307,47 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
 
 
 
+int check_gpio_chips() {
+    printf("=== CHECKING AVAILABLE GPIO CHIPS ===\n");
+    system("ls -la /dev/gpiochip* 2>/dev/null || echo 'No gpiochip devices found'");
+    system("gpioinfo 2>/dev/null | head -20 || echo 'gpioinfo not available'");
+    printf("=====================================\n");
+    return 1;
+}
+
 int init_gpio_pin(int pin) {
     char cmd[128];
     int result;
     
     // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
-    // For pinctrl, we need to use the correct GPIO number and chip
-    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip4
+    // For RPi 5, we need to use the correct line number within gpiochip4
+    // Physical pins map to specific lines in gpiochip4
     int pinctrl_pin;
     char chip_name[32];
-    if (pin >= 589) {
-        pinctrl_pin = pin - 589;  // Relative to gpiochip4
-        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
-    } else {
-        pinctrl_pin = pin - 567;  // Relative to gpiochip4
-        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
+    
+    // Map physical pins to gpiochip4 line numbers for RPi 5
+    switch (pin) {
+        case 567: pinctrl_pin = 0; break;   // Physical pin 16 -> gpiochip4 line 0
+        case 568: pinctrl_pin = 1; break;   // Physical pin 18 -> gpiochip4 line 1  
+        case 589: pinctrl_pin = 20; break;  // Physical pin 38 -> gpiochip4 line 20
+        case 590: pinctrl_pin = 21; break;  // Physical pin 40 -> gpiochip4 line 21
+        default:
+            printf("ERROR: Unknown GPIO pin %d for RPi 5\n", pin);
+            return 0;
     }
+    
+    snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip pu", chip_name, pinctrl_pin);
     printf("Executing: %s\n", cmd);
+    
+    // Try alternative pinctrl syntax if the first one fails
     result = system(cmd);
+    if (result != 0) {
+        printf("First pinctrl command failed, trying alternative syntax...\n");
+        snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pinctrl_pin);
+        printf("Executing alternative: %s\n", cmd);
+        result = system(cmd);
+    }
     
     if (result != 0) {
         printf("ERROR: Failed to configure GPIO pin %d with pinctrl (exit code: %d)\n", pin, result);
@@ -1417,17 +1439,22 @@ void cleanup_gpio(int pin) {
     }
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
-    // For pinctrl, we need to use the correct GPIO number and chip
-    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip4
+    // For RPi 5, we need to use the correct line number within gpiochip4
     int pinctrl_pin;
     char chip_name[32];
-    if (pin >= 589) {
-        pinctrl_pin = pin - 589;  // Relative to gpiochip4
-        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
-    } else {
-        pinctrl_pin = pin - 567;  // Relative to gpiochip4
-        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
+    
+    // Map physical pins to gpiochip4 line numbers for RPi 5
+    switch (pin) {
+        case 567: pinctrl_pin = 0; break;   // Physical pin 16 -> gpiochip4 line 0
+        case 568: pinctrl_pin = 1; break;   // Physical pin 18 -> gpiochip4 line 1  
+        case 589: pinctrl_pin = 20; break;  // Physical pin 38 -> gpiochip4 line 20
+        case 590: pinctrl_pin = 21; break;  // Physical pin 40 -> gpiochip4 line 21
+        default:
+            printf("WARNING: Unknown GPIO pin %d for cleanup\n", pin);
+            return;
     }
+    
+    snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip", chip_name, pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
@@ -1499,6 +1526,9 @@ void* gpio_monitor_worker(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
     printf("GPIO monitor worker started\n");
+    
+    // Debug GPIO chips availability
+    check_gpio_chips();
     
     // Initialize GPIO pins for all active channels
     int gpio_pins[16] = {0};
