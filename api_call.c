@@ -1312,15 +1312,18 @@ int init_gpio_pin(int pin) {
     int result;
     
     // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
-    // For pinctrl, we need to use the correct GPIO number
+    // For pinctrl, we need to use the gpiochip format
     // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip569
     int pinctrl_pin;
+    char gpiochip[16];
     if (pin >= 589) {
         pinctrl_pin = pin - 569;  // gpiochip569
+        snprintf(gpiochip, sizeof(gpiochip), "gpiochip569");
     } else {
         pinctrl_pin = pin;        // gpiochip4
+        snprintf(gpiochip, sizeof(gpiochip), "gpiochip4");
     }
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pinctrl_pin);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip pu", gpiochip, pinctrl_pin);
     printf("Executing: %s\n", cmd);
     result = system(cmd);
     
@@ -1416,15 +1419,18 @@ void cleanup_gpio(int pin) {
     }
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
-    // For pinctrl, we need to use the correct GPIO number
+    // For pinctrl, we need to use the gpiochip format
     // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip569
     int pinctrl_pin;
+    char gpiochip[16];
     if (pin >= 589) {
         pinctrl_pin = pin - 569;  // gpiochip569
+        snprintf(gpiochip, sizeof(gpiochip), "gpiochip569");
     } else {
         pinctrl_pin = pin;        // gpiochip4
+        snprintf(gpiochip, sizeof(gpiochip), "gpiochip4");
     }
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pinctrl_pin);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip", gpiochip, pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
     
