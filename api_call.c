@@ -1313,8 +1313,13 @@ int init_gpio_pin(int pin) {
     
     // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
     // For pinctrl, we need to use the offset from the gpiochip base
-    // gpiochip569 is the base, so we need to subtract 569 from the sysfs GPIO number
-    int pinctrl_pin = pin - 569;
+    // GPIO pins 567-568 belong to gpiochip0, pins 589+ belong to gpiochip569
+    int pinctrl_pin;
+    if (pin >= 589) {
+        pinctrl_pin = pin - 569;  // gpiochip569
+    } else {
+        pinctrl_pin = pin;        // gpiochip0
+    }
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pinctrl_pin);
     printf("Executing: %s\n", cmd);
     result = system(cmd);
@@ -1412,7 +1417,13 @@ void cleanup_gpio(int pin) {
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
     // For pinctrl, we need to use the offset from the gpiochip base
-    int pinctrl_pin = pin - 569;
+    // GPIO pins 567-568 belong to gpiochip0, pins 589+ belong to gpiochip569
+    int pinctrl_pin;
+    if (pin >= 589) {
+        pinctrl_pin = pin - 569;  // gpiochip569
+    } else {
+        pinctrl_pin = pin;        // gpiochip0
+    }
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
