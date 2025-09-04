@@ -255,7 +255,7 @@ static int mqtt_connect() {
     }
     
     // Publish initial status
-    char status_msg[256];
+    char status_msg[512];
     snprintf(status_msg, sizeof(status_msg), 
              "{\"status\":\"connected\",\"username\":\"%s\",\"agency\":\"%s\",\"client_id\":\"%s\",\"timestamp\":%ld}",
              global_user_name, global_agency_name, MQTT_CLIENT_ID, time(NULL));
@@ -313,7 +313,7 @@ void* mqtt_worker(void* arg) {
         // Send periodic test message every 10 seconds
         time_t current_time = time(NULL);
         if (current_time - last_test_message >= 10) {
-            char test_msg[256];
+            char test_msg[512];
             snprintf(test_msg, sizeof(test_msg),
                      "{\"message\":\"This is the test MQTT message\",\"username\":\"%s\",\"agency\":\"%s\",\"timestamp\":%ld,\"client_id\":\"%s\"}",
                      global_user_name, global_agency_name, current_time, MQTT_CLIENT_ID);
@@ -415,10 +415,10 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -450,10 +450,10 @@ size_t decode_base64_len(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(size_t)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & (int)i++ : table[(size_t)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -1312,15 +1312,18 @@ int init_gpio_pin(int pin) {
     int result;
     
     // Use pinctrl to set GPIO pin as input with pull-up for RPi 5
-    // For pinctrl, we need to use the correct GPIO number
-    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip569
+    // For pinctrl, we need to use the correct GPIO number and chip
+    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip4
     int pinctrl_pin;
+    char chip_name[32];
     if (pin >= 589) {
-        pinctrl_pin = pin - 569;  // gpiochip569
+        pinctrl_pin = pin - 589;  // Relative to gpiochip4
+        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     } else {
-        pinctrl_pin = pin;        // gpiochip4
+        pinctrl_pin = pin - 567;  // Relative to gpiochip4
+        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     }
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pinctrl_pin);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip pu", chip_name, pinctrl_pin);
     printf("Executing: %s\n", cmd);
     result = system(cmd);
     
@@ -1352,9 +1355,7 @@ int init_gpio_pin(int pin) {
 }
 
 int read_gpio_pin(int pin) {
-    char cmd[128];
-    char result_buffer[64];
-    FILE *fp;
+    // Variables removed as they were unused in the current implementation
     
     // Skip pinctrl get since it doesn't show actual pin levels
     // Go directly to sysfs reading
@@ -1416,15 +1417,18 @@ void cleanup_gpio(int pin) {
     }
     
     // Use pinctrl to reset GPIO pin to default state for RPi 5
-    // For pinctrl, we need to use the correct GPIO number
-    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip569
+    // For pinctrl, we need to use the correct GPIO number and chip
+    // GPIO pins 567-568 belong to gpiochip4, pins 589+ belong to gpiochip4
     int pinctrl_pin;
+    char chip_name[32];
     if (pin >= 589) {
-        pinctrl_pin = pin - 569;  // gpiochip569
+        pinctrl_pin = pin - 589;  // Relative to gpiochip4
+        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     } else {
-        pinctrl_pin = pin;        // gpiochip4
+        pinctrl_pin = pin - 567;  // Relative to gpiochip4
+        snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     }
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pinctrl_pin);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip", chip_name, pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
     
