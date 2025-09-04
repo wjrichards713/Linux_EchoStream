@@ -1862,8 +1862,8 @@ int main(int argc, char *argv[]) {
             switch (channel_count) {
                 case 0: gpio_pin = 38; break;  // GPIO 38 for 1st channel
                 case 1: gpio_pin = 40; break;  // GPIO 40 for 2nd channel
-                case 2: gpio_pin = 22; break;  // GPIO 22 for 3rd channel
-                case 3: gpio_pin = 23; break;  // GPIO 23 for 4th channel
+                case 2: gpio_pin = 16; break;  // GPIO 16 for 3rd channel
+                case 3: gpio_pin = 18; break;  // GPIO 18 for 4th channel
                 default: gpio_pin = 38 + channel_count; break;  // Fallback for more channels
             }
             
