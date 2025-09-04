@@ -888,48 +888,61 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         fprintf(stderr, "PortAudio output stream error for channel %s: %s\n", audio_stream->channel_id, Pa_GetErrorText(err));
         fprintf(stderr, "This usually means the USB audio device is not available or has issues\n");
         
-        // Try to fall back to a working device
-        fprintf(stderr, "Attempting to fall back to device 0 for channel %s\n", audio_stream->channel_id);
-        output_params.device = usb_devices[0];
-        if (output_params.device != paNoDevice) {
-            const PaDeviceInfo* fallback_info = Pa_GetDeviceInfo(output_params.device);
-            if (fallback_info && fallback_info->maxOutputChannels >= 1) {
-                output_params.suggestedLatency = fallback_info->defaultLowOutputLatency;
-                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                                    paClipOff, audio_output_callback, audio_stream);
-                if (err == paNoError) {
-                    printf("Successfully fell back to device 0 for channel %s\n", audio_stream->channel_id);
-                } else {
-                    fprintf(stderr, "Fallback also failed: %s\n", Pa_GetErrorText(err));
-                    Pa_CloseStream(audio_stream->input_stream);
-                    return 0;
+        // Try to fall back to other working devices
+        fprintf(stderr, "Attempting to find a working audio device for channel %s\n", audio_stream->channel_id);
+        int fallback_success = 0;
+        
+        // Try all available USB devices
+        for (int i = 0; i < 4; i++) {
+            if (usb_devices[i] != paNoDevice && usb_devices[i] != audio_stream->device_index) {
+                const PaDeviceInfo* fallback_info = Pa_GetDeviceInfo(usb_devices[i]);
+                if (fallback_info && fallback_info->maxOutputChannels >= 1) {
+                    output_params.device = usb_devices[i];
+                    output_params.suggestedLatency = fallback_info->defaultLowOutputLatency;
+                    
+                    printf("Trying fallback device %d for channel %s\n", usb_devices[i], audio_stream->channel_id);
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                                        paClipOff, audio_output_callback, audio_stream);
+                    if (err == paNoError) {
+                        printf("Successfully fell back to device %d for channel %s\n", usb_devices[i], audio_stream->channel_id);
+                        fallback_success = 1;
+                        break;
+                    } else {
+                        printf("Device %d also failed: %s\n", usb_devices[i], Pa_GetErrorText(err));
+                    }
                 }
-            } else {
-                fprintf(stderr, "Fallback device 0 is also invalid\n");
-                Pa_CloseStream(audio_stream->input_stream);
-                return 0;
             }
-        } else {
-            Pa_CloseStream(audio_stream->input_stream);
-            return 0;
+        }
+        
+        if (!fallback_success) {
+            fprintf(stderr, "All audio devices failed for channel %s, skipping output stream\n", audio_stream->channel_id);
+            // Don't fail completely, just skip output stream for this channel
+            audio_stream->output_stream = NULL;
         }
     }
     
-    // Start both streams
+    // Start input stream
     err = Pa_StartStream(audio_stream->input_stream);
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
+        if (audio_stream->output_stream) {
+            Pa_CloseStream(audio_stream->output_stream);
+        }
         return 0;
     }
     
-    err = Pa_StartStream(audio_stream->output_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
+    // Start output stream if available
+    if (audio_stream->output_stream) {
+        err = Pa_StartStream(audio_stream->output_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->output_stream);
+            return 0;
+        }
+    } else {
+        printf("Output stream not available for channel %s (input only mode)\n", audio_stream->channel_id);
     }
     
     // Check if streams are actually running
@@ -939,14 +952,22 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
-    if (Pa_IsStreamActive(audio_stream->output_stream)) {
-        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+    if (audio_stream->output_stream) {
+        if (Pa_IsStreamActive(audio_stream->output_stream)) {
+            printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+        } else {
+            printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        }
     } else {
-        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        printf("Output stream not available for channel %s (input only mode)\n", audio_stream->channel_id);
     }
     
     audio_stream->transmitting = 1;
-    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    if (audio_stream->output_stream) {
+        printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    } else {
+        printf("Audio transmission started for channel %s (input only)\n", audio_stream->channel_id);
+    }
     return 1;
 }
 
@@ -1292,6 +1313,12 @@ void auto_assign_usb_devices() {
                 const char* name = device_info->name;
                 if (strstr(name, "USB") || strstr(name, "usb") || 
                     strstr(name, "Audio Device") || strstr(name, "Headset")) {
+                    
+                    // Test if the device actually works before assigning it
+                    printf("Testing USB Device %d: %s\n", i, name);
+                    printf("  Input channels: %d, Output channels: %d\n", 
+                           device_info->maxInputChannels, device_info->maxOutputChannels);
+                    
                     usb_devices[usb_count] = i;
                     printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
                     usb_count++;
