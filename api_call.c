@@ -1382,6 +1382,21 @@ int check_gpio_chips() {
     printf("=== CHECKING AVAILABLE GPIO CHIPS ===\n");
     system("ls -la /dev/gpiochip* 2>/dev/null || echo 'No gpiochip devices found'");
     system("gpioinfo 2>/dev/null | head -20 || echo 'gpioinfo not available'");
+    
+    // Check specifically for gpiochip13 which is needed for pins 16 and 18
+    printf("\n=== CHECKING GPIOCHIP13 FOR PINS 16,18 ===\n");
+    system("ls -la /dev/gpiochip13 2>/dev/null || echo 'gpiochip13 not found'");
+    system("gpioinfo gpiochip13 2>/dev/null || echo 'gpioinfo gpiochip13 failed'");
+    
+    // Test if we can access pins directly
+    printf("\n=== TESTING DIRECT GPIO ACCESS ===\n");
+    system("gpioget gpiochip0 20 2>/dev/null || echo 'Pin 38 (gpiochip0:20) not accessible - likely in use by app'");
+    system("gpioget gpiochip0 21 2>/dev/null || echo 'Pin 40 (gpiochip0:21) not accessible - likely in use by app'");
+    system("gpioget gpiochip0 23 2>/dev/null || echo 'Pin 23 (gpiochip0:23) not accessible'");
+    system("gpioget gpiochip0 24 2>/dev/null || echo 'Pin 24 (gpiochip0:24) not accessible'");
+    system("gpioget gpiochip13 0 2>/dev/null || echo 'Pin 16 (gpiochip13:0) not accessible - old mapping'");
+    system("gpioget gpiochip13 1 2>/dev/null || echo 'Pin 18 (gpiochip13:1) not accessible - old mapping'");
+    
     printf("=====================================\n");
     return 1;
 }
@@ -1414,6 +1429,14 @@ int init_gpio_pin(int pin) {
             pinctrl_pin = 21; 
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
             break;  // Physical pin 40 -> gpiochip0 line 21
+        case 23: 
+            pinctrl_pin = 23; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 23 -> gpiochip0 line 23
+        case 24: 
+            pinctrl_pin = 24; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 24 -> gpiochip0 line 24
         default:
             printf("ERROR: Unknown GPIO pin %d for RPi 5\n", pin);
             return 0;
@@ -1552,6 +1575,14 @@ void cleanup_gpio(int pin) {
             pinctrl_pin = 21; 
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
             break;  // Physical pin 40 -> gpiochip0 line 21
+        case 23: 
+            pinctrl_pin = 23; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 23 -> gpiochip0 line 23
+        case 24: 
+            pinctrl_pin = 24; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 24 -> gpiochip0 line 24
         default:
             printf("WARNING: Unknown GPIO pin %d for cleanup\n", pin);
             return;
@@ -1644,8 +1675,10 @@ void* gpio_monitor_worker(void* arg) {
         switch (physical_pin) {
             case 38: gpio_pin = 589; break;  // Physical pin 38 = GPIO 589 (sysfs)
             case 40: gpio_pin = 590; break;  // Physical pin 40 = GPIO 590 (sysfs)
-            case 16: gpio_pin = 567; break;  // Physical pin 16 = GPIO 567 (sysfs)
-            case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs)
+            case 16: gpio_pin = 567; break;  // Physical pin 16 = GPIO 567 (sysfs) - OLD MAPPING
+            case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs) - OLD MAPPING
+            case 23: gpio_pin = 23; break;   // Physical pin 23 = GPIO 23 (sysfs) - NEW MAPPING
+            case 24: gpio_pin = 24; break;   // Physical pin 24 = GPIO 24 (sysfs) - NEW MAPPING
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
                 channel_gpio_mapping[i] = -1; // Mark as invalid
@@ -2025,8 +2058,8 @@ int main(int argc, char *argv[]) {
             switch (channel_count) {
                 case 0: gpio_pin = 38; break;  // GPIO 38 for 1st channel
                 case 1: gpio_pin = 40; break;  // GPIO 40 for 2nd channel
-                case 2: gpio_pin = 16; break;  // GPIO 16 for 3rd channel
-                case 3: gpio_pin = 18; break;  // GPIO 18 for 4th channel
+                case 2: gpio_pin = 23; break;  // GPIO 23 for 3rd channel (changed from 16)
+                case 3: gpio_pin = 24; break;  // GPIO 24 for 4th channel (changed from 18)
                 default: gpio_pin = 38 + channel_count; break;  // Fallback for more channels
             }
             
@@ -2045,8 +2078,8 @@ int main(int argc, char *argv[]) {
         printf("LOG: No channels specified, adding default channels\n");
         add_channel_to_list("555", 38);
         add_channel_to_list("666", 40);
-        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 16);
-        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 18);
+        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 23);
+        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 24);
     }
     
     printf("=== FINAL CONFIGURATION ===\n");
