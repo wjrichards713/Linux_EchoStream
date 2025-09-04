@@ -855,9 +855,29 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     // Setup output stream
     output_params.device = audio_stream->device_index;
+    if (output_params.device == paNoDevice) {
+        fprintf(stderr, "No output device for channel %s\n", audio_stream->channel_id);
+        Pa_CloseStream(audio_stream->input_stream);
+        return 0;
+    }
+    
+    // Validate device before using it
+    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(output_params.device);
+    if (!device_info) {
+        fprintf(stderr, "Invalid device %d for channel %s\n", output_params.device, audio_stream->channel_id);
+        Pa_CloseStream(audio_stream->input_stream);
+        return 0;
+    }
+    
+    if (device_info->maxOutputChannels < 1) {
+        fprintf(stderr, "Device %d has no output channels for channel %s\n", output_params.device, audio_stream->channel_id);
+        Pa_CloseStream(audio_stream->input_stream);
+        return 0;
+    }
+    
     output_params.channelCount = 1;
     output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.suggestedLatency = device_info->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
     
     printf("Creating output stream for channel %s on device %d\n", audio_stream->channel_id, output_params.device);
@@ -867,8 +887,32 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error for channel %s: %s\n", audio_stream->channel_id, Pa_GetErrorText(err));
         fprintf(stderr, "This usually means the USB audio device is not available or has issues\n");
-        Pa_CloseStream(audio_stream->input_stream);
-        return 0;
+        
+        // Try to fall back to a working device
+        fprintf(stderr, "Attempting to fall back to device 0 for channel %s\n", audio_stream->channel_id);
+        output_params.device = usb_devices[0];
+        if (output_params.device != paNoDevice) {
+            const PaDeviceInfo* fallback_info = Pa_GetDeviceInfo(output_params.device);
+            if (fallback_info && fallback_info->maxOutputChannels >= 1) {
+                output_params.suggestedLatency = fallback_info->defaultLowOutputLatency;
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                                    paClipOff, audio_output_callback, audio_stream);
+                if (err == paNoError) {
+                    printf("Successfully fell back to device 0 for channel %s\n", audio_stream->channel_id);
+                } else {
+                    fprintf(stderr, "Fallback also failed: %s\n", Pa_GetErrorText(err));
+                    Pa_CloseStream(audio_stream->input_stream);
+                    return 0;
+                }
+            } else {
+                fprintf(stderr, "Fallback device 0 is also invalid\n");
+                Pa_CloseStream(audio_stream->input_stream);
+                return 0;
+            }
+        } else {
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
     }
     
     // Start both streams
