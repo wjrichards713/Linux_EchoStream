@@ -918,6 +918,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             fprintf(stderr, "All audio devices failed for channel %s, skipping output stream\n", audio_stream->channel_id);
             // Don't fail completely, just skip output stream for this channel
             audio_stream->output_stream = NULL;
+        } else {
+            // Update the device index to the working fallback device
+            audio_stream->device_index = output_params.device;
         }
     }
     
@@ -1314,14 +1317,19 @@ void auto_assign_usb_devices() {
                 if (strstr(name, "USB") || strstr(name, "usb") || 
                     strstr(name, "Audio Device") || strstr(name, "Headset")) {
                     
-                    // Test if the device actually works before assigning it
-                    printf("Testing USB Device %d: %s\n", i, name);
-                    printf("  Input channels: %d, Output channels: %d\n", 
-                           device_info->maxInputChannels, device_info->maxOutputChannels);
-                    
-                    usb_devices[usb_count] = i;
-                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
-                    usb_count++;
+                        // Test if the device actually works before assigning it
+    printf("Testing USB Device %d: %s\n", i, name);
+    printf("  Input channels: %d, Output channels: %d\n", 
+           device_info->maxInputChannels, device_info->maxOutputChannels);
+    
+    // Only assign devices that have both input and output channels
+    if (device_info->maxInputChannels > 0 && device_info->maxOutputChannels > 0) {
+        usb_devices[usb_count] = i;
+        printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
+        usb_count++;
+    } else {
+        printf("Skipping device %d - missing input or output channels\n", i);
+    }
                 }
             }
         }
@@ -1342,7 +1350,16 @@ void auto_assign_usb_devices() {
         }
     }
     
+    // Final validation: ensure all channels have valid devices
+    for (int i = 0; i < active_channels.count; i++) {
+        if (usb_devices[i] == paNoDevice) {
+            printf("WARNING: Channel %d has no device, using default input device\n", i);
+            usb_devices[i] = Pa_GetDefaultInputDevice();
+        }
+    }
+    
     // Print device assignments for active channels
+    printf("\n=== FINAL AUDIO DEVICE ASSIGNMENTS ===\n");
     for (int i = 0; i < active_channels.count; i++) {
         printf("Channel %s -> Device %d\n", active_channels.channel_ids[i], usb_devices[i]);
         
@@ -1355,11 +1372,20 @@ void auto_assign_usb_devices() {
                 printf("  Device %d: %s (Input: %d, Output: %d)\n", 
                        usb_devices[i], device_info->name, 
                        device_info->maxInputChannels, device_info->maxOutputChannels);
+                
+                // Check if device is actually usable
+                if (device_info->maxInputChannels == 0) {
+                    printf("  WARNING: Device %d has no input channels!\n", usb_devices[i]);
+                }
+                if (device_info->maxOutputChannels == 0) {
+                    printf("  WARNING: Device %d has no output channels!\n", usb_devices[i]);
+                }
             } else {
                 printf("  Device %d: Unable to get device info\n", usb_devices[i]);
             }
         }
     }
+    printf("=====================================\n");
     
     device_assigned = 1;
 }
