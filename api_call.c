@@ -1421,9 +1421,19 @@ int init_gpio_pin(int pin) {
     }
     
     if (result != 0) {
-        printf("ERROR: Failed to configure GPIO pin %d with pinctrl (exit code: %d)\n", pin, result);
-        printf("This may be due to permission issues or incorrect GPIO numbers for RPi 5\n");
-        return 0;
+        printf("WARNING: pinctrl failed for GPIO pin %d (exit code: %d)\n", pin, result);
+        printf("Trying alternative GPIO configuration method...\n");
+        
+        // Try using libgpiod directly if pinctrl fails
+        char libgpiod_cmd[256];
+        snprintf(libgpiod_cmd, sizeof(libgpiod_cmd), "gpioset gpiochip4 %d=1", pinctrl_pin);
+        printf("Trying libgpiod: %s\n", libgpiod_cmd);
+        result = system(libgpiod_cmd);
+        
+        if (result != 0) {
+            printf("WARNING: libgpiod also failed, but continuing with GPIO export only\n");
+            // Don't fail completely, just continue with basic GPIO export
+        }
     }
     
     // Also export the GPIO pin for reading via sysfs
@@ -1626,19 +1636,21 @@ void* gpio_monitor_worker(void* arg) {
         printf("GPIO Number: %d\n", gpio_pin);
         
         if (!init_gpio_pin(gpio_pin)) {
-            printf("Failed to initialize GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
-            // Cleanup previously initialized pins
-            for (int j = 0; j < gpio_count; j++) {
-                cleanup_gpio(gpio_pins[j]);
-            }
-            return NULL;
+            printf("WARNING: Failed to initialize GPIO pin %d for channel %s - skipping this channel\n", physical_pin, active_channels.channel_ids[i]);
+            // Continue with other channels instead of failing completely
+            continue;
         }
         
         gpio_pins[gpio_count] = gpio_pin;
         gpio_count++;
     }
     
-    printf("GPIO pins initialized. Reading initial states...\n");
+    if (gpio_count == 0) {
+        printf("WARNING: No GPIO pins were successfully initialized. GPIO monitoring disabled.\n");
+        return NULL;
+    }
+    
+    printf("GPIO pins initialized (%d out of %d channels). Reading initial states...\n", gpio_count, active_channels.count);
     
     // Read initial states for all channels
     int gpio_states[16] = {0};
@@ -1666,11 +1678,10 @@ void* gpio_monitor_worker(void* arg) {
         for (int i = 0; i < gpio_count; i++) {
             int curr_val = read_gpio_pin(gpio_pins[i]);
             
-
-            
             if (curr_val == -1) {
                 printf("ERROR: Failed to read GPIO pin %d (Physical Pin %d) for channel %s\n", 
                        gpio_pins[i], active_channels.gpio_pins[i], active_channels.channel_ids[i]);
+                continue; // Skip this pin and continue with others
             } else if (curr_val != gpio_states[i]) {
                 gpio_states[i] = curr_val;
                 printf("=== GPIO STATE CHANGE ===\n");
