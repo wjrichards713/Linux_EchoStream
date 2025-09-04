@@ -1396,18 +1396,28 @@ int init_gpio_pin(int pin) {
     int pinctrl_pin;
     char chip_name[32];
     
-    // Map physical pins to gpiochip4 line numbers for RPi 5
+    // Map physical pins to correct gpiochip and line numbers for RPi 5
     switch (pin) {
-        case 567: pinctrl_pin = 0; break;   // Physical pin 16 -> gpiochip4 line 0
-        case 568: pinctrl_pin = 1; break;   // Physical pin 18 -> gpiochip4 line 1  
-        case 589: pinctrl_pin = 20; break;  // Physical pin 38 -> gpiochip4 line 20
-        case 590: pinctrl_pin = 21; break;  // Physical pin 40 -> gpiochip4 line 21
+        case 567: 
+            pinctrl_pin = 0; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
+            break;   // Physical pin 16 -> gpiochip13 line 0
+        case 568: 
+            pinctrl_pin = 1; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
+            break;   // Physical pin 18 -> gpiochip13 line 1  
+        case 589: 
+            pinctrl_pin = 20; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 38 -> gpiochip0 line 20
+        case 590: 
+            pinctrl_pin = 21; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 40 -> gpiochip0 line 21
         default:
             printf("ERROR: Unknown GPIO pin %d for RPi 5\n", pin);
             return 0;
     }
-    
-    snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip pu", chip_name, pinctrl_pin);
     printf("Executing: %s\n", cmd);
     
@@ -1426,7 +1436,7 @@ int init_gpio_pin(int pin) {
         
         // Try using libgpiod directly if pinctrl fails
         char libgpiod_cmd[256];
-        snprintf(libgpiod_cmd, sizeof(libgpiod_cmd), "gpioset gpiochip4 %d=1", pinctrl_pin);
+        snprintf(libgpiod_cmd, sizeof(libgpiod_cmd), "gpioset %s %d=1", chip_name, pinctrl_pin);
         printf("Trying libgpiod: %s\n", libgpiod_cmd);
         result = system(libgpiod_cmd);
         
@@ -1524,18 +1534,28 @@ void cleanup_gpio(int pin) {
     int pinctrl_pin;
     char chip_name[32];
     
-    // Map physical pins to gpiochip4 line numbers for RPi 5
+    // Map physical pins to correct gpiochip and line numbers for RPi 5
     switch (pin) {
-        case 567: pinctrl_pin = 0; break;   // Physical pin 16 -> gpiochip4 line 0
-        case 568: pinctrl_pin = 1; break;   // Physical pin 18 -> gpiochip4 line 1  
-        case 589: pinctrl_pin = 20; break;  // Physical pin 38 -> gpiochip4 line 20
-        case 590: pinctrl_pin = 21; break;  // Physical pin 40 -> gpiochip4 line 21
+        case 567: 
+            pinctrl_pin = 0; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
+            break;   // Physical pin 16 -> gpiochip13 line 0
+        case 568: 
+            pinctrl_pin = 1; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
+            break;   // Physical pin 18 -> gpiochip13 line 1  
+        case 589: 
+            pinctrl_pin = 20; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 38 -> gpiochip0 line 20
+        case 590: 
+            pinctrl_pin = 21; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;  // Physical pin 40 -> gpiochip0 line 21
         default:
             printf("WARNING: Unknown GPIO pin %d for cleanup\n", pin);
             return;
     }
-    
-    snprintf(chip_name, sizeof(chip_name), "gpiochip4");
     snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip", chip_name, pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
