@@ -1701,10 +1701,8 @@ void* gpio_monitor_worker(void* arg) {
         switch (physical_pin) {
             case 38: gpio_pin = 589; break;  // Physical pin 38 = GPIO 589 (sysfs)
             case 40: gpio_pin = 590; break;  // Physical pin 40 = GPIO 590 (sysfs)
-            case 16: gpio_pin = 567; break;  // Physical pin 16 = GPIO 567 (sysfs) - OLD MAPPING
-            case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs) - OLD MAPPING
-            case 23: gpio_pin = 23; break;   // Physical pin 23 = GPIO 23 (sysfs) - NEW MAPPING
-            case 24: gpio_pin = 24; break;   // Physical pin 24 = GPIO 24 (sysfs) - NEW MAPPING
+            case 16: gpio_pin = 567; break;  // Physical pin 16 = GPIO 567 (sysfs)
+            case 18: gpio_pin = 568; break;  // Physical pin 18 = GPIO 568 (sysfs)
             default: 
                 printf("WARNING: Unknown GPIO pin %d for channel %s\n", physical_pin, active_channels.channel_ids[i]);
                 channel_gpio_mapping[i] = -1; // Mark as invalid
@@ -2084,8 +2082,8 @@ int main(int argc, char *argv[]) {
             switch (channel_count) {
                 case 0: gpio_pin = 38; break;  // GPIO 38 for 1st channel
                 case 1: gpio_pin = 40; break;  // GPIO 40 for 2nd channel
-                case 2: gpio_pin = 23; break;  // GPIO 23 for 3rd channel (changed from 16)
-                case 3: gpio_pin = 24; break;  // GPIO 24 for 4th channel (changed from 18)
+                case 2: gpio_pin = 16; break;  // GPIO 23 for 3rd channel (changed from 16)
+                case 3: gpio_pin = 18; break;  // GPIO 24 for 4th channel (changed from 18)
                 default: gpio_pin = 38 + channel_count; break;  // Fallback for more channels
             }
             
