@@ -1300,7 +1300,7 @@ void *gpio_monitor_worker(void *arg)
         return NULL;
     }
 
-    if (!init_gpio_pin(gpio_pin18))
+    if (!init_gpio_pin(gpio_pin_18))
     {
         printf("Failed to initialize GPIO pin 18\n");
         cleanup_gpio(gpio_pin_18);
