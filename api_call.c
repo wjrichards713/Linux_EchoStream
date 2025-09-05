@@ -24,7 +24,7 @@ PaDeviceIndex get_device_for_channel(const char *channel);
 int init_gpio_pin(int pin);
 int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
-char *channel_list;
+char *channel_list[4];
 void *heartbeat_worker(void *arg);
 void send_websocket_transmit_event(const char *channel_id, int is_started);
 void *gpio_monitor_worker(void *arg);
