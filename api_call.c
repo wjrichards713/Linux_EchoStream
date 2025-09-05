@@ -1440,13 +1440,13 @@ int init_gpio_pin(int pin) {
     // Map physical pins to correct gpiochip and line numbers for RPi 5
     switch (pin) {
         case 567: 
-            pinctrl_pin = 0; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
-            break;   // Physical pin 16 -> gpiochip13 line 0
+            pinctrl_pin = 23; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;   // Physical pin 16 -> gpiochip0 line 23
         case 568: 
-            pinctrl_pin = 1; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
-            break;   // Physical pin 18 -> gpiochip13 line 1  
+            pinctrl_pin = 24; 
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;   // Physical pin 18 -> gpiochip0 line 24
         case 589: 
             pinctrl_pin = 20; 
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
@@ -1455,14 +1455,6 @@ int init_gpio_pin(int pin) {
             pinctrl_pin = 21; 
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
             break;  // Physical pin 40 -> gpiochip0 line 21
-        case 23: 
-            pinctrl_pin = 23; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
-            break;  // Physical pin 23 -> gpiochip0 line 23
-        case 24: 
-            pinctrl_pin = 24; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
-            break;  // Physical pin 24 -> gpiochip0 line 24
         default:
             printf("ERROR: Unknown GPIO pin %d for RPi 5\n", pin);
             return 0;
