@@ -1420,8 +1420,6 @@ int check_gpio_chips() {
     system("gpioget gpiochip0 21 2>/dev/null || echo 'Pin 40 (gpiochip0:21) not accessible - likely in use by app'");
     system("gpioget gpiochip0 23 2>/dev/null || echo 'Pin 23 (gpiochip0:23) not accessible'");
     system("gpioget gpiochip0 24 2>/dev/null || echo 'Pin 24 (gpiochip0:24) not accessible'");
-    system("gpioget gpiochip13 0 2>/dev/null || echo 'Pin 16 (gpiochip13:0) not accessible - old mapping'");
-    system("gpioget gpiochip13 1 2>/dev/null || echo 'Pin 18 (gpiochip13:1) not accessible - old mapping'");
     
     printf("=====================================\n");
     return 1;
@@ -1578,34 +1576,26 @@ void cleanup_gpio(int pin) {
     // Map physical pins to correct gpiochip and line numbers for RPi 5
     switch (pin) {
         case 567: 
-            pinctrl_pin = 0; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
-            break;   // Physical pin 16 -> gpiochip13 line 0
+            pinctrl_pin = 23;
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;   // Physical pin 16 -> gpiochip0 line 23
         case 568: 
-            pinctrl_pin = 1; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip13");
-            break;   // Physical pin 18 -> gpiochip13 line 1  
+            pinctrl_pin = 24;
+            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
+            break;   // Physical pin 18 -> gpiochip0 line 24
         case 589: 
-            pinctrl_pin = 20; 
+            pinctrl_pin = 20;
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
             break;  // Physical pin 38 -> gpiochip0 line 20
         case 590: 
-            pinctrl_pin = 21; 
+            pinctrl_pin = 21;
             snprintf(chip_name, sizeof(chip_name), "gpiochip0");
             break;  // Physical pin 40 -> gpiochip0 line 21
-        case 23: 
-            pinctrl_pin = 23; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
-            break;  // Physical pin 23 -> gpiochip0 line 23
-        case 24: 
-            pinctrl_pin = 24; 
-            snprintf(chip_name, sizeof(chip_name), "gpiochip0");
-            break;  // Physical pin 24 -> gpiochip0 line 24
         default:
             printf("WARNING: Unknown GPIO pin %d for cleanup\n", pin);
             return;
     }
-    snprintf(cmd, sizeof(cmd), "pinctrl set %s %d ip", chip_name, pinctrl_pin);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip", pinctrl_pin);
     printf("Cleaning up GPIO pin %d: %s\n", pin, cmd);
     result = system(cmd);
     
