@@ -2094,8 +2094,8 @@ int main(int argc, char *argv[]) {
         printf("LOG: No channels specified, adding default channels\n");
         add_channel_to_list("555", 38);
         add_channel_to_list("666", 40);
-        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 23);
-        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 24);
+        add_channel_to_list("308e2478-072c-4d8b-ffff24d-51854e06711a", 16);
+        add_channel_to_list("94415b61-8007-430d-ffffea0-10fc9fee2d8e", 18);
     }
     
     printf("=== FINAL CONFIGURATION ===\n");
