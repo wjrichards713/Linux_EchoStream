@@ -1434,67 +1434,47 @@ int main(int argc, char *argv[]) {
     // UDP configuration will be received via WebSocket
     // UDP listener thread will be started after UDP connection is established
     
-    if (run_both) {
-        printf("Setting up both channels...\n");
+    printf("Setting up both channels...\n");
+    
+    if (!setup_channel(&channels[0], "555")) {
+        fprintf(stderr, "Failed to setup channel 555\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    if (!setup_channel(&channels[1], "666")) {
+        fprintf(stderr, "Failed to setup channel 666\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    // Connect global WebSocket for both channels
+    if (!connect_global_websocket()) {
+        fprintf(stderr, "Failed to connect WebSocket\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    pthread_t ws_thread;
+    if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
+        fprintf(stderr, "Failed to create WebSocket thread\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    printf("Both channels running with single WebSocket. Press Ctrl+C to stop.\n");
+    
+    if (global_interrupted) {
+        struct timespec timeout;
+        clock_gettime(CLOCK_REALTIME, &timeout);
+        timeout.tv_sec += 2;
         
-        if (!setup_channel(&channels[0], "555")) {
-            fprintf(stderr, "Failed to setup channel 555\n");
-            curl_global_cleanup();
-            return 1;
+        if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
+            printf("Forcing termination of WebSocket thread\n");
+            pthread_cancel(ws_thread);
         }
-        
-        if (!setup_channel(&channels[1], "666")) {
-            fprintf(stderr, "Failed to setup channel 666\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        // Connect global WebSocket for both channels
-        if (!connect_global_websocket()) {
-            fprintf(stderr, "Failed to connect WebSocket\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        pthread_t ws_thread;
-        if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
-            fprintf(stderr, "Failed to create WebSocket thread\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        printf("Both channels running with single WebSocket. Press Ctrl+C to stop.\n");
-        
-        if (global_interrupted) {
-            struct timespec timeout;
-            clock_gettime(CLOCK_REALTIME, &timeout);
-            timeout.tv_sec += 2;
-            
-            if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
-                printf("Forcing termination of WebSocket thread\n");
-                pthread_cancel(ws_thread);
-            }
-        } else {
-            pthread_join(ws_thread, NULL);
-        }
-        
     } else {
-        int channel_idx = (argc > 1 && atoi(argv[1]) == 666) ? 1 : 0;
-        const char* channel_id = (channel_idx == 0) ? "555" : "666";
-        
-        if (!setup_channel(&channels[channel_idx], channel_id)) {
-            fprintf(stderr, "Failed to setup channel %s\n", channel_id);
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        if (!connect_global_websocket()) {
-            fprintf(stderr, "Failed to connect WebSocket\n");
-            curl_global_cleanup();
-            return 1;
-        }
-        
-        global_websocket_thread(NULL);
+        pthread_join(ws_thread, NULL);
     }
     
     curl_global_cleanup();
