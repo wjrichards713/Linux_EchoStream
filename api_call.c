@@ -683,7 +683,7 @@ int parse_websocket_config(const char *json_str, struct server_config *cfg) {
 
 static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                              void *user, void *in, size_t len) {
-    // Single WebSocket connection handles both channels
+    // Single WebSocket connection handles all channels
     if (wsi != global_ws_client) {
         return 0;
     }
@@ -767,7 +767,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_CLOSED:
-            printf("WebSocket closed for both channels\n");
+            printf("WebSocket closed for all channels\n");
             global_ws_client = NULL;
             break;
             
@@ -789,8 +789,10 @@ static struct lws_protocols protocols[] = {
         websocket_callback,
         0,
         4096,
+        0,  // id field
+        NULL,  // user field
     },
-    { NULL, NULL, 0, 0 }
+    { NULL, NULL, 0, 0, 0, NULL }
 };
 
 int connect_global_websocket() {
@@ -802,7 +804,7 @@ int connect_global_websocket() {
     struct lws_context_creation_info info;
     char ws_url[256] = "wss://audio.redenes.org/ws/";
     
-    printf("Connecting to: %s for both channels\n", ws_url);
+    printf("Connecting to: %s for all channels\n", ws_url);
     
     char address[128] = "audio.redenes.org";
     char path[256] = "/ws/";
@@ -841,7 +843,7 @@ int connect_global_websocket() {
         return 0;
     }
     
-    printf("Single WebSocket connection established for both channels\n");
+    printf("Single WebSocket connection established for all channels\n");
     return 1;
 }
 
@@ -1543,7 +1545,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    printf("Both channels running with single WebSocket. Press Ctrl+C to stop.\n");
+    printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
     
     if (global_interrupted) {
         struct timespec timeout;
