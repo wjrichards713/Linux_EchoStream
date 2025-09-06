@@ -96,7 +96,9 @@ static struct channel_context channels[4] = {0};
 static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
+static int global_interrupted_initialized = 1;  // Debug flag
 static int global_udp_socket = -1;
+sstatic int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
 static pthread_t udp_listener_thread;
@@ -989,7 +991,10 @@ void *global_websocket_thread(void *arg)
     // Close the single WebSocket connection
     if (global_ws_client)
     {
-        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        if (lws_wsi_state(global_ws_client) == LWS_WSI_STATE_CONNECTED)
+        {
+            lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        }
         global_ws_client = NULL;
     }
 
@@ -1829,8 +1834,3 @@ int main(int argc, char *argv[])
     {
         pthread_join(ws_thread, NULL);
     }
-
-    curl_global_cleanup();
-    Pa_Terminate();
-    return 0;
-}
