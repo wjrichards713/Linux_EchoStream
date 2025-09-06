@@ -697,7 +697,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
             // Send connect message for all active channels
             for (int i = 0; i < 4; i++) {
                 if (channels[i].active) {
-                    char connect_msg[512];
+                    char connect_msg[1024];
                     time_t now = time(NULL);
                     
                     snprintf(connect_msg, sizeof(connect_msg),
@@ -1075,7 +1075,7 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
         return;
     }
     
-    char transmit_msg[512];
+    char transmit_msg[1024];
     time_t now = time(NULL);
     const char* event_type = is_started ? "transmit_started" : "transmit_ended";
     
@@ -1560,18 +1560,8 @@ int main(int argc, char *argv[]) {
     
     printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
     
-    if (global_interrupted) {
-        struct timespec timeout;
-        clock_gettime(CLOCK_REALTIME, &timeout);
-        timeout.tv_sec += 2;
-        
-        if (pthread_timedjoin_np(ws_thread, NULL, &timeout) != 0) {
-            printf("Forcing termination of WebSocket thread\n");
-            pthread_cancel(ws_thread);
-        }
-    } else {
-        pthread_join(ws_thread, NULL);
-    }
+    // Wait for the WebSocket thread to complete
+    pthread_join(ws_thread, NULL);
     
     curl_global_cleanup();
     Pa_Terminate();
