@@ -112,7 +112,7 @@ static void handle_interrupt(int sig) {
         lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
     }
     
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         if (channels[i].active) {
             channels[i].audio.transmitting = 0;
             
@@ -690,10 +690,10 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
     
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-            printf("WebSocket connection established for both channels\n");
+            printf("WebSocket connection established for all channels\n");
             
-            // Send connect message for both active channels
-            for (int i = 0; i < 2; i++) {
+            // Send connect message for all active channels
+            for (int i = 0; i < 4; i++) {
                 if (channels[i].active) {
                     char connect_msg[512];
                     time_t now = time(NULL);
@@ -740,7 +740,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             printf("UDP connection established\n");
                             
                             // Start transmission for all active channels
-                            for (int i = 0; i < 2; i++) {
+                            for (int i = 0; i < 4; i++) {
                                 if (channels[i].active) {
                                     const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
                                     if (!decode_base64(key_b64, channels[i].audio.key)) {
@@ -859,7 +859,7 @@ void* global_websocket_thread(void* arg) {
     }
     
     // Cleanup all channels
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         if (channels[i].active) {
             if (channels[i].audio.input_stream && !global_interrupted) {
                 Pa_AbortStream(channels[i].audio.input_stream);
@@ -1159,7 +1159,7 @@ void* gpio_monitor_worker(void* arg) {
             printf("PIN 38 (Channel 555): %s\n", 
                    curr_val_38 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 4; i++) {
                 if (channels[i].active && strcmp(channels[i].audio.channel_id, "555") == 0) {
                     channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
                     break;
@@ -1175,7 +1175,7 @@ void* gpio_monitor_worker(void* arg) {
             printf("PIN 40 (Channel 666): %s\n", 
                    curr_val_40 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 4; i++) {
                 if (channels[i].active && strcmp(channels[i].audio.channel_id, "666") == 0) {
                     channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
                     break;
@@ -1287,7 +1287,7 @@ void* udp_listener_worker(void* arg) {
                     
                     // Find the channel
                     struct audio_stream* target_stream = NULL;
-                    for (int i = 0; i < 2; i++) {
+                    for (int i = 0; i < 4; i++) {
                         if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
                             target_stream = &channels[i].audio;
                             // printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
@@ -1298,7 +1298,7 @@ void* udp_listener_worker(void* arg) {
                     if (!target_stream) {
                         printf("UDP Listener: No active channel found for '%s'\n", channel_id);
                         printf("UDP Listener: Active channels: ");
-                        for (int i = 0; i < 2; i++) {
+                        for (int i = 0; i < 4; i++) {
                             if (channels[i].active) {
                                 printf("'%s' ", channels[i].audio.channel_id);
                             }
@@ -1503,7 +1503,7 @@ int main(int argc, char *argv[]) {
     // UDP configuration will be received via WebSocket
     // UDP listener thread will be started after UDP connection is established
     
-    printf("Setting up both channels...\n");
+    printf("Setting up all 4 channels...\n");
     
     if (!setup_channel(&channels[0], "555")) {
         fprintf(stderr, "Failed to setup channel 555\n");
