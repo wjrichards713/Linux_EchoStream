@@ -42,7 +42,7 @@ struct websocket_ctx {
     struct lws_context *context;
     struct lws *client_wsi;
     int interrupted;
-    char channel_id[16];
+    char channel_id[64];  // Increased from 16 to 64 to accommodate full UUIDs
 };
 
 #define JITTER_BUFFER_SIZE 8
@@ -76,7 +76,7 @@ struct audio_stream {
     int input_buffer_pos;
     int current_output_frame_pos;
     PaDeviceIndex device_index;
-    char channel_id[16];
+    char channel_id[64];  // Increased from 16 to 64 to accommodate full UUIDs
 };
 
 struct channel_context {
