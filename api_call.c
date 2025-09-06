@@ -1832,3 +1832,8 @@ int main(int argc, char *argv[])
     {
         pthread_join(ws_thread, NULL);
     }
+    
+    curl_global_cleanup();
+    Pa_Terminate();
+    return 0;
+}
