@@ -207,7 +207,7 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
     print_status "Starting EchoStream..."
     echo "Press Ctrl+C to stop"
     echo ""
-    ./api_call
+    ./api_call -y
 else
     print_success "EchoStream is ready to run!"
     print_status "Run './api_call' when you're ready to start"
