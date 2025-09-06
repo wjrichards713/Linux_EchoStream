@@ -88,7 +88,7 @@ struct channel_context {
 static struct channel_context channels[4] = {0};
 static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
-static int global_interrupted = 0;
+static volatile int global_interrupted = 0;
 static int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
@@ -852,6 +852,10 @@ int connect_global_websocket() {
 
 void* global_websocket_thread(void* arg) {
     printf("Starting global WebSocket thread\n");
+    
+    // Reset global_interrupted to ensure it's not corrupted
+    global_interrupted = 0;
+    
     printf("DEBUG: global_interrupted = %d, global_ws_context = %p\n", global_interrupted, (void*)global_ws_context);
     
     while (!global_interrupted && global_ws_context) {
@@ -1468,6 +1472,9 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
 }
 
 int main(int argc, char *argv[]) {
+    // Initialize global variables
+    global_interrupted = 0;
+    
     // int run_both = 1;
     
     // if (argc > 1) {
