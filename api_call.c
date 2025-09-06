@@ -989,10 +989,10 @@ void *global_websocket_thread(void *arg)
     // Close the single WebSocket connection
     if (global_ws_client)
     {
-        if (lws_wsi_state(global_ws_client) == LWS_WSI_STATE_CONNECTED)
-        {
-            lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
-        }
+        // if (lws_wsi_state(global_ws_client) == LWS_WSI_STATE_CONNECTED)
+        // {
+        //     lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        // }
         global_ws_client = NULL;
     }
 
@@ -1832,7 +1832,7 @@ int main(int argc, char *argv[])
     {
         pthread_join(ws_thread, NULL);
     }
-    
+
     curl_global_cleanup();
     Pa_Terminate();
     return 0;
