@@ -692,6 +692,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
             printf("WebSocket connection established for all channels\n");
+            printf("DEBUG: LWS_CALLBACK_CLIENT_ESTABLISHED received\n");
             
             // Send connect message for all active channels
             for (int i = 0; i < 4; i++) {
@@ -778,6 +779,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
             break;
             
         default:
+            printf("DEBUG: WebSocket callback reason: %d\n", reason);
             break;
     }
     
@@ -850,10 +852,13 @@ int connect_global_websocket() {
 
 void* global_websocket_thread(void* arg) {
     printf("Starting global WebSocket thread\n");
+    printf("DEBUG: global_interrupted = %d, global_ws_context = %p\n", global_interrupted, (void*)global_ws_context);
     
     while (!global_interrupted && global_ws_context) {
         lws_service(global_ws_context, 10);
     }
+    
+    printf("DEBUG: WebSocket thread exiting. Context: %p, Interrupted: %d\n", (void*)global_ws_context, global_interrupted);
     
     // Close the single WebSocket connection
     if (global_ws_client) {
