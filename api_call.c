@@ -85,8 +85,8 @@ struct channel_context {
     int active;
 };
 
-static struct channel_context channels[2] = {0};
-static PaDeviceIndex usb_devices[2] = {paNoDevice, paNoDevice};
+static struct channel_context channels[4] = {0};
+static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static int global_interrupted = 0;
 static int global_udp_socket = -1;
@@ -1391,29 +1391,29 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
 }
 
 int main(int argc, char *argv[]) {
-    int run_both = 1;
+    // int run_both = 1;
     
-    if (argc > 1) {
-        int channel = atoi(argv[1]);
-        if (channel == 555) {
-            run_both = 0;
-            printf("Running channel 555 only\n");
-        } else if (channel == 666) {
-            run_both = 0;
-            printf("Running channel 666 only\n");
-        } else if (strcmp(argv[1], "both") == 0) {
-            run_both = 1;
-            printf("Running both channels simultaneously\n");
-        } else {
-            fprintf(stderr, "Usage: %s [555|666|both]\n", argv[0]);
-            fprintf(stderr, "  555  - Run channel 555 only\n");
-            fprintf(stderr, "  666  - Run channel 666 only\n");
-            fprintf(stderr, "  both - Run both channels simultaneously (default)\n");
-            return 1;
-        }
-    } else {
-        printf("Running both channels simultaneously (default)\n");
-    }
+    // if (argc > 1) {
+    //     int channel = atoi(argv[1]);
+    //     if (channel == 555) {
+    //         run_both = 0;
+    //         printf("Running channel 555 only\n");
+    //     } else if (channel == 666) {
+    //         run_both = 0;
+    //         printf("Running channel 666 only\n");
+    //     } else if (strcmp(argv[1], "both") == 0) {
+    //         run_both = 1;
+    //         printf("Running both channels simultaneously\n");
+    //     } else {
+    //         fprintf(stderr, "Usage: %s [555|666|both]\n", argv[0]);
+    //         fprintf(stderr, "  555  - Run channel 555 only\n");
+    //         fprintf(stderr, "  666  - Run channel 666 only\n");
+    //         fprintf(stderr, "  both - Run both channels simultaneously (default)\n");
+    //         return 1;
+    //     }
+    // } else {
+    //     printf("Running both channels simultaneously (default)\n");
+    // }
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
@@ -1444,6 +1444,18 @@ int main(int argc, char *argv[]) {
     
     if (!setup_channel(&channels[1], "666")) {
         fprintf(stderr, "Failed to setup channel 666\n");
+        curl_global_cleanup();
+        return 1;
+    }
+
+    if (!setup_channel(&channels[2], "308e2478-072c-4d8b-ffff24d-51854e06711a")) {
+        fprintf(stderr, "Failed to setup channel 308e2478-072c-4d8b-ffff24d-51854e06711a\n");
+        curl_global_cleanup();
+        return 1;
+    }
+
+    if (!setup_channel(&channels[3], "94415b61-8007-430d-ffffea0-10fc9fee2d8e")) {
+        fprintf(stderr, "Failed to setup channel 94415b61-8007-430d-ffffea0-10fc9fee2d8e\n");
         curl_global_cleanup();
         return 1;
     }
