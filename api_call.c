@@ -109,7 +109,8 @@ static void handle_interrupt(int sig) {
     
     // Close the single WebSocket connection
     if (global_ws_client) {
-        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        // Don't call lws_close_reason() - let the context destruction handle it
+        global_ws_client = NULL;
     }
     
     for (int i = 0; i < 4; i++) {
@@ -856,7 +857,7 @@ void* global_websocket_thread(void* arg) {
     
     // Close the single WebSocket connection
     if (global_ws_client) {
-        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
+        // Don't call lws_close_reason() - let the context destruction handle it
         global_ws_client = NULL;
     }
     
