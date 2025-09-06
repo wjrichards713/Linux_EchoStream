@@ -1160,6 +1160,10 @@ void* gpio_monitor_worker(void* arg) {
     
     printf("GPIO pins initialized. Monitoring for changes...\n");
     
+    // Variables for periodic status reporting
+    time_t last_status_time = time(NULL);
+    int status_interval = 10; // Report status every 10 seconds
+    
     while (!global_interrupted) {
         int curr_val_38 = read_gpio_pin(gpio_pin_38);
         int curr_val_40 = read_gpio_pin(gpio_pin_40);
@@ -1235,6 +1239,22 @@ void* gpio_monitor_worker(void* arg) {
         }
         
         pthread_mutex_unlock(&gpio_mutex);
+        
+        // Periodic status reporting every 10 seconds
+        time_t current_time = time(NULL);
+        if (current_time - last_status_time >= status_interval) {
+            printf("\n=== GPIO STATUS REPORT (Every 10s) ===\n");
+            printf("PIN 38 (Channel 555): %s\n", 
+                   gpio_38_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            printf("PIN 40 (Channel 666): %s\n", 
+                   gpio_40_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            printf("PIN 16 (Channel 3):  %s\n", 
+                   gpio_16_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            printf("PIN 18 (Channel 4):  %s\n", 
+                   gpio_18_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            printf("=====================================\n\n");
+            last_status_time = current_time;
+        }
         
         usleep(100000);
     }
