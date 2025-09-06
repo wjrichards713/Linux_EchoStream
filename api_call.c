@@ -95,6 +95,8 @@ static pthread_t heartbeat_thread;
 static pthread_t udp_listener_thread;
 static int gpio_38_state = 0;
 static int gpio_40_state = 0;
+static int gpio_16_state = 0;  // GPIO pin 16 (physical pin 16) for channel 3
+static int gpio_18_state = 0;  // GPIO pin 18 (physical pin 18) for channel 4
 static pthread_mutex_t gpio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
@@ -1083,6 +1085,8 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
 void* gpio_monitor_worker(void* arg) {
     int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
     int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
+    int gpio_pin_16 = 567;  // GPIO 23 (physical pin 16) on RPi5
+    int gpio_pin_18 = 568;  // GPIO 24 (physical pin 18) on RPi5
     
     printf("GPIO monitor worker started\n");
     
@@ -1097,12 +1101,29 @@ void* gpio_monitor_worker(void* arg) {
         return NULL;
     }
     
+    if (!init_gpio_pin(gpio_pin_16)) {
+        printf("Failed to initialize GPIO pin 16\n");
+        cleanup_gpio(gpio_pin_38);
+        cleanup_gpio(gpio_pin_40);
+        return NULL;
+    }
+    
+    if (!init_gpio_pin(gpio_pin_18)) {
+        printf("Failed to initialize GPIO pin 18\n");
+        cleanup_gpio(gpio_pin_38);
+        cleanup_gpio(gpio_pin_40);
+        cleanup_gpio(gpio_pin_16);
+        return NULL;
+    }
+    
     printf("GPIO pins initialized. Reading initial states...\n");
     
     // Read initial states without sending WebSocket events
     pthread_mutex_lock(&gpio_mutex);
     gpio_38_state = read_gpio_pin(gpio_pin_38);
     gpio_40_state = read_gpio_pin(gpio_pin_40);
+    gpio_16_state = read_gpio_pin(gpio_pin_16);
+    gpio_18_state = read_gpio_pin(gpio_pin_18);
     pthread_mutex_unlock(&gpio_mutex);
     
     if (gpio_38_state != -1) {
@@ -1113,6 +1134,16 @@ void* gpio_monitor_worker(void* arg) {
     if (gpio_40_state != -1) {
         printf("PIN 40 (Channel 666) initial state: %s\n", 
                gpio_40_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+    }
+    
+    if (gpio_16_state != -1) {
+        printf("PIN 16 (Channel 3) initial state: %s\n", 
+               gpio_16_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+    }
+    
+    if (gpio_18_state != -1) {
+        printf("PIN 18 (Channel 4) initial state: %s\n", 
+               gpio_18_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
     }
     
     printf("GPIO pins initialized. Monitoring for changes...\n");
@@ -1155,6 +1186,42 @@ void* gpio_monitor_worker(void* arg) {
             send_websocket_transmit_event("666", (curr_val_40 == 0) ? 1 : 0);
         }
         
+        // Monitor pin 16 (Channel 3)
+        int curr_val_16 = read_gpio_pin(gpio_pin_16);
+        if (curr_val_16 != gpio_16_state && curr_val_16 != -1) {
+            gpio_16_state = curr_val_16;
+            printf("PIN 16 (Channel 3): %s\n", 
+                   curr_val_16 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
+                    channels[i].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
+                    break;
+                }
+            }
+            
+            // Send WebSocket transmit event for channel 3
+            send_websocket_transmit_event("308e2478-072c-4d8b-ffff24d-51854e06711a", (curr_val_16 == 0) ? 1 : 0);
+        }
+        
+        // Monitor pin 18 (Channel 4)
+        int curr_val_18 = read_gpio_pin(gpio_pin_18);
+        if (curr_val_18 != gpio_18_state && curr_val_18 != -1) {
+            gpio_18_state = curr_val_18;
+            printf("PIN 18 (Channel 4): %s\n", 
+                   curr_val_18 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
+            
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+                    channels[i].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
+                    break;
+                }
+            }
+            
+            // Send WebSocket transmit event for channel 4
+            send_websocket_transmit_event("94415b61-8007-430d-ffffea0-10fc9fee2d8e", (curr_val_18 == 0) ? 1 : 0);
+        }
+        
         pthread_mutex_unlock(&gpio_mutex);
         
         usleep(100000);
@@ -1163,6 +1230,8 @@ void* gpio_monitor_worker(void* arg) {
     printf("GPIO monitor worker stopped\n");
     cleanup_gpio(gpio_pin_38);
     cleanup_gpio(gpio_pin_40);
+    cleanup_gpio(gpio_pin_16);
+    cleanup_gpio(gpio_pin_18);
     
     return NULL;
 }
