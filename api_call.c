@@ -585,7 +585,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Setup input stream
     input_params.device = audio_stream->device_index;
     if (input_params.device == paNoDevice) {
-        fprintf(stderr, "No input device for channel %s (device_index=%d)\n", 
+        printf("No input device available for channel %s (device_index=%d) - WebSocket functionality will continue\n", 
                 audio_stream->channel_id, audio_stream->device_index);
         return 0;
     }
@@ -593,7 +593,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Verify device is valid
     const PaDeviceInfo* device_info = Pa_GetDeviceInfo(input_params.device);
     if (!device_info) {
-        fprintf(stderr, "Invalid device %d for channel %s\n", 
+        printf("Invalid device %d for channel %s - WebSocket functionality will continue\n", 
                 input_params.device, audio_stream->channel_id);
         return 0;
     }
@@ -756,6 +756,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             printf("UDP connection established\n");
                             
                             // Start transmission for all active channels
+                            int audio_channels_ready = 0;
                             for (int i = 0; i < 4; i++) {
                                 if (channels[i].active) {
                                     const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
@@ -767,8 +768,18 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                                     
                                     if (start_transmission_for_channel(&channels[i].audio)) {
                                         printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
+                                        audio_channels_ready++;
+                                    } else {
+                                        printf("Audio transmission failed for channel %s, but continuing with WebSocket functionality\n", channels[i].audio.channel_id);
                                     }
                                 }
+                            }
+                            
+                            if (audio_channels_ready == 0) {
+                                printf("No audio channels ready, but WebSocket communication and GPIO monitoring will continue\n");
+                                printf("The application will still send/receive WebSocket messages and monitor GPIO pins\n");
+                            } else {
+                                printf("Audio ready for %d out of 4 channels\n", audio_channels_ready);
                             }
                         }
                     }
