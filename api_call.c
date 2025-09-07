@@ -954,10 +954,10 @@ void auto_assign_usb_devices() {
         }
     }
     
-    printf("Channel %s -> Device %d\n", global_channel_ids[0], usb_devices[0]);
-    printf("Channel %s -> Device %d\n", global_channel_ids[1], usb_devices[1]);
-    printf("Channel %s -> Device %d\n", global_channel_ids[2], usb_devices[2]);
-    printf("Channel %s -> Device %d\n", global_channel_ids[3], usb_devices[3]);
+    printf("Channel assignments:\n");
+    for (int i = 0; i < 4; i++) {
+        printf("Channel %s -> Device %d\n", global_channel_ids[i], usb_devices[i]);
+    }
     
     device_assigned = 1;
 }
@@ -1167,10 +1167,6 @@ void* gpio_monitor_worker(void* arg) {
     }
     
     printf("GPIO pins initialized. Monitoring for changes...\n");
-    
-    // Variables for periodic status reporting
-    time_t last_status_time = time(NULL);
-    int status_interval = 10; // Report status every 10 seconds
     
     while (!global_interrupted) {
         int curr_val_38 = read_gpio_pin(gpio_pin_38);
