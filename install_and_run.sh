@@ -200,15 +200,8 @@ echo "  Channel 555 - First USB audio device"
 echo "  Channel 666 - Second USB audio device"
 echo ""
 
-# Ask user if they want to run now
-# echo -n "Do you want to run EchoStream now? (y/n): "
-read -r response
-if [[ "$response" =~ ^[Yy]$ ]]; then
-    print_status "Starting EchoStream..."
-    echo "Press Ctrl+C to stop"
-    echo ""
-    ./api_call
-else
-    print_success "EchoStream is ready to run!"
-    print_status "Run './api_call' when you're ready to start"
-fi
+# Auto-run EchoStream after installation
+print_status "Starting EchoStream automatically..."
+echo "Press Ctrl+C to stop"
+echo ""
+./api_call
