@@ -87,7 +87,7 @@ struct channel_context {
 };
 
 static struct channel_context channels[4] = {0};
-static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice};
+static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice, paNoDevice, paNoDevice};
 static int device_assigned = 0;
 static volatile int global_interrupted = 0;
 static int global_udp_socket = -1;
@@ -828,7 +828,7 @@ int connect_global_websocket() {
         return 0;
     }
     
-    // Create a single WebSocket connection for both channels
+    // Create a single WebSocket connection for all channels
     struct lws_client_connect_info connect_info;
     memset(&connect_info, 0, sizeof(connect_info));
     connect_info.context = global_ws_context;
@@ -925,7 +925,7 @@ void auto_assign_usb_devices() {
     
     printf("Scanning for USB audio devices...\n");
     
-    for (int i = 0; i < num_devices && usb_count < 2; i++) {
+    for (int i = 0; i < num_devices && usb_count < 4; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
             const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
@@ -942,16 +942,22 @@ void auto_assign_usb_devices() {
     }
     
     if (usb_count == 0) {
-        printf("No USB audio devices found, using default input device\n");
-        usb_devices[0] = Pa_GetDefaultInputDevice();
-        usb_devices[1] = Pa_GetDefaultInputDevice();
-    } else if (usb_count == 1) {
-        printf("Only one USB device found, both channels will use the same device\n");
-        usb_devices[1] = usb_devices[0];
+        printf("No USB audio devices found, using default input device for all channels\n");
+        for (int i = 0; i < 4; i++) {
+            usb_devices[i] = Pa_GetDefaultInputDevice();
+        }
+    } else if (usb_count < 4) {
+        printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
+        // Fill remaining slots with available devices
+        for (int i = usb_count; i < 4; i++) {
+            usb_devices[i] = usb_devices[i % usb_count];
+        }
     }
     
-    printf("Channel 555 -> Device %d\n", usb_devices[0]);
-    printf("Channel 666 -> Device %d\n", usb_devices[1]);
+    printf("Channel %s -> Device %d\n", global_channel_ids[0], usb_devices[0]);
+    printf("Channel %s -> Device %d\n", global_channel_ids[1], usb_devices[1]);
+    printf("Channel %s -> Device %d\n", global_channel_ids[2], usb_devices[2]);
+    printf("Channel %s -> Device %d\n", global_channel_ids[3], usb_devices[3]);
     
     device_assigned = 1;
 }
@@ -1620,7 +1626,7 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Connect global WebSocket for both channels
+    // Connect global WebSocket for all channels
     if (!connect_global_websocket()) {
         fprintf(stderr, "Failed to connect WebSocket\n");
         curl_global_cleanup();
