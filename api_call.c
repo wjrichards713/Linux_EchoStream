@@ -31,6 +31,7 @@ void* udp_listener_worker(void* arg);
 unsigned char* decrypt_data(const unsigned char* data, size_t data_len, const unsigned char* key, size_t* out_len);
 int decode_base64(const char* input, unsigned char* output);
 size_t decode_base64_len(const char* input, unsigned char* output);
+int load_channel_config(char channel_ids[4][64]);
 
 struct server_config {
     int udp_port;
@@ -102,6 +103,7 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
+static char global_channel_ids[4][64] = {"555", "666", "308e2478-072c-4d8b-ffff24d-51854e06711a", "94415b61-8007-430d-ffffea0-10fc9fee2d8e"};
 
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
@@ -957,10 +959,10 @@ void auto_assign_usb_devices() {
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
     
-    if (strcmp(channel, "555") == 0) {
-        return usb_devices[0];
-    } else if (strcmp(channel, "666") == 0) {
-        return usb_devices[1];
+    for (int i = 0; i < 4; i++) {
+        if (strcmp(channel, global_channel_ids[i]) == 0) {
+            return usb_devices[i];
+        }
     }
     
     return usb_devices[0];
@@ -1172,70 +1174,70 @@ void* gpio_monitor_worker(void* arg) {
         
         if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
             gpio_38_state = curr_val_38;
-            printf("PIN 38 (Channel 555): %s\n", 
+            printf("PIN 38 (Channel %s): %s\n", global_channel_ids[0],
                    curr_val_38 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
             for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "555") == 0) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[0]) == 0) {
                     channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
                     break;
                 }
             }
             
             // Send WebSocket transmit event
-            send_websocket_transmit_event("555", (curr_val_38 == 0) ? 1 : 0);
+            send_websocket_transmit_event(global_channel_ids[0], (curr_val_38 == 0) ? 1 : 0);
         }
         
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
             gpio_40_state = curr_val_40;
-            printf("PIN 40 (Channel 666): %s\n", 
+            printf("PIN 40 (Channel %s): %s\n", global_channel_ids[1],
                    curr_val_40 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
             for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "666") == 0) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[1]) == 0) {
                     channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
                     break;
                 }
             }
             
             // Send WebSocket transmit event
-            send_websocket_transmit_event("666", (curr_val_40 == 0) ? 1 : 0);
+            send_websocket_transmit_event(global_channel_ids[1], (curr_val_40 == 0) ? 1 : 0);
         }
         
         // Monitor pin 16 (Channel 3)
         int curr_val_16 = read_gpio_pin(gpio_pin_16);
         if (curr_val_16 != gpio_16_state && curr_val_16 != -1) {
             gpio_16_state = curr_val_16;
-            printf("PIN 16 (Channel 3): %s\n", 
+            printf("PIN 16 (Channel %s): %s\n", global_channel_ids[2],
                    curr_val_16 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
             for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[2]) == 0) {
                     channels[i].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
                     break;
                 }
             }
             
             // Send WebSocket transmit event for channel 3
-            send_websocket_transmit_event("308e2478-072c-4d8b-ffff24d-51854e06711a", (curr_val_16 == 0) ? 1 : 0);
+            send_websocket_transmit_event(global_channel_ids[2], (curr_val_16 == 0) ? 1 : 0);
         }
         
         // Monitor pin 18 (Channel 4)
         int curr_val_18 = read_gpio_pin(gpio_pin_18);
         if (curr_val_18 != gpio_18_state && curr_val_18 != -1) {
             gpio_18_state = curr_val_18;
-            printf("PIN 18 (Channel 4): %s\n", 
+            printf("PIN 18 (Channel %s): %s\n", global_channel_ids[3],
                    curr_val_18 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
             
             for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[3]) == 0) {
                     channels[i].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
                     break;
                 }
             }
             
             // Send WebSocket transmit event for channel 4
-            send_websocket_transmit_event("94415b61-8007-430d-ffffea0-10fc9fee2d8e", (curr_val_18 == 0) ? 1 : 0);
+            send_websocket_transmit_event(global_channel_ids[3], (curr_val_18 == 0) ? 1 : 0);
         }
         
         pthread_mutex_unlock(&gpio_mutex);
@@ -1491,9 +1493,94 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     return 1;
 }
 
+int load_channel_config(char channel_ids[4][64]) {
+    const char* config_path = "/home/will/.an/config.json";
+    FILE *file = fopen(config_path, "r");
+    if (!file) {
+        printf("Warning: Could not open config file %s, using default channel IDs\n", config_path);
+        return 0;
+    }
+    
+    // Read the entire file
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    char *json_string = malloc(file_size + 1);
+    if (!json_string) {
+        fclose(file);
+        printf("Error: Memory allocation failed for config file\n");
+        return 0;
+    }
+    
+    fread(json_string, 1, file_size, file);
+    json_string[file_size] = '\0';
+    fclose(file);
+    
+    // Parse JSON
+    struct json_object *json = json_tokener_parse(json_string);
+    free(json_string);
+    
+    if (!json) {
+        printf("Error: Failed to parse config JSON\n");
+        return 0;
+    }
+    
+    // Navigate to the channel configuration
+    struct json_object *shadow, *state, *desired, *software_config, *config_item;
+    if (!json_object_object_get_ex(json, "shadow", &shadow) ||
+        !json_object_object_get_ex(shadow, "state", &state) ||
+        !json_object_object_get_ex(state, "desired", &desired) ||
+        !json_object_object_get_ex(desired, "software_configuration", &software_config) ||
+        json_object_array_length(software_config) == 0) {
+        printf("Error: Could not find software_configuration in config\n");
+        json_object_put(json);
+        return 0;
+    }
+    
+    // Get the first (and only) configuration item
+    config_item = json_object_array_get_idx(software_config, 0);
+    
+    // Extract channel IDs
+    const char* channel_keys[] = {"channel_one", "channel_two", "channel_three", "channel_four"};
+    int channels_loaded = 0;
+    
+    for (int i = 0; i < 4; i++) {
+        struct json_object *channel_obj, *channel_id_obj;
+        if (json_object_object_get_ex(config_item, channel_keys[i], &channel_obj) &&
+            json_object_object_get_ex(channel_obj, "channel_id", &channel_id_obj)) {
+            const char* channel_id = json_object_get_string(channel_id_obj);
+            if (channel_id && strlen(channel_id) < 64) {
+                strncpy(channel_ids[i], channel_id, 63);
+                channel_ids[i][63] = '\0';
+                channels_loaded++;
+                printf("Loaded channel %d ID: %s\n", i + 1, channel_ids[i]);
+            }
+        }
+    }
+    
+    json_object_put(json);
+    
+    if (channels_loaded == 4) {
+        printf("Successfully loaded all 4 channel IDs from config\n");
+        return 1;
+    } else {
+        printf("Warning: Only loaded %d out of 4 channel IDs from config\n", channels_loaded);
+        return 0;
+    }
+}
+
 int main(int argc, char *argv[]) {
     // Initialize global variables
     global_interrupted = 0;
+    
+    // Load channel configuration from JSON file
+    printf("Loading channel configuration from /home/will/.an/config.json...\n");
+    if (load_channel_config(global_channel_ids)) {
+        printf("Channel configuration loaded successfully\n");
+    } else {
+        printf("Using default channel IDs\n");
+    }
     
     // int run_both = 1;
     
@@ -1540,28 +1627,13 @@ int main(int argc, char *argv[]) {
     
     printf("Setting up all 4 channels...\n");
     
-    if (!setup_channel(&channels[0], "555")) {
-        fprintf(stderr, "Failed to setup channel 555\n");
-        curl_global_cleanup();
-        return 1;
-    }
-    
-    if (!setup_channel(&channels[1], "666")) {
-        fprintf(stderr, "Failed to setup channel 666\n");
-        curl_global_cleanup();
-        return 1;
-    }
-
-    if (!setup_channel(&channels[2], "308e2478-072c-4d8b-ffff24d-51854e06711a")) {
-        fprintf(stderr, "Failed to setup channel 308e2478-072c-4d8b-ffff24d-51854e06711a\n");
-        curl_global_cleanup();
-        return 1;
-    }
-
-    if (!setup_channel(&channels[3], "94415b61-8007-430d-ffffea0-10fc9fee2d8e")) {
-        fprintf(stderr, "Failed to setup channel 94415b61-8007-430d-ffffea0-10fc9fee2d8e\n");
-        curl_global_cleanup();
-        return 1;
+    for (int i = 0; i < 4; i++) {
+        printf("Setting up channel %d with ID: %s\n", i + 1, global_channel_ids[i]);
+        if (!setup_channel(&channels[i], global_channel_ids[i])) {
+            fprintf(stderr, "Failed to setup channel %d (%s)\n", i + 1, global_channel_ids[i]);
+            curl_global_cleanup();
+            return 1;
+        }
     }
     
     // Connect global WebSocket for both channels
