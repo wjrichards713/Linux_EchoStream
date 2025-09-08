@@ -1171,7 +1171,9 @@ void* gpio_monitor_worker(void* arg) {
     printf("PIN 18 initial state: %s\n", (gpio_18_state == 0) ? "ACTIVE" : "INACTIVE");
 
     printf("Monitoring GPIO pins for changes...\n");
+    printf("GPIO Status will be displayed every 10 seconds\n");
 
+    int status_counter = 0;
     while (!global_interrupted) {
         int curr_val_38 = read_gpio_pin(gpio_pin_38);
         int curr_val_40 = read_gpio_pin(gpio_pin_40);
@@ -1180,6 +1182,7 @@ void* gpio_monitor_worker(void* arg) {
 
         pthread_mutex_lock(&gpio_mutex);
 
+        // Check for changes and send WebSocket events
         if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
             gpio_38_state = curr_val_38;
             printf("PIN 38: %s\n", curr_val_38 == 0 ? "ACTIVE" : "INACTIVE");
@@ -1202,6 +1205,22 @@ void* gpio_monitor_worker(void* arg) {
             gpio_18_state = curr_val_18;
             printf("PIN 18: %s\n", curr_val_18 == 0 ? "ACTIVE" : "INACTIVE");
             send_websocket_transmit_event(global_channel_ids[3], curr_val_18 == 0 ? 1 : 0);
+        }
+
+        // Display status every 10 seconds (100 iterations * 100ms = 10 seconds)
+        status_counter++;
+        if (status_counter >= 100) {
+            printf("\n=== GPIO Status Report (every 10 seconds) ===\n");
+            printf("PIN 38 (GPIO 20): %s (Channel: %s)\n", 
+                   curr_val_38 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[0]);
+            printf("PIN 40 (GPIO 21): %s (Channel: %s)\n", 
+                   curr_val_40 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[1]);
+            printf("PIN 16 (GPIO 23): %s (Channel: %s)\n", 
+                   curr_val_16 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[2]);
+            printf("PIN 18 (GPIO 24): %s (Channel: %s)\n", 
+                   curr_val_18 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[3]);
+            printf("==========================================\n\n");
+            status_counter = 0;
         }
 
         pthread_mutex_unlock(&gpio_mutex);
