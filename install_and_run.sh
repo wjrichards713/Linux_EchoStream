@@ -4,6 +4,7 @@
 # This script installs all dependencies and runs the EchoStream audio application
 
 set -e  # Exit on any error
+set -o pipefail
 
 echo "=========================================="
 echo "EchoStream Installation Script for RPi 5"
@@ -16,21 +17,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+print_status()  { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Check if running on Raspberry Pi
 print_status "Checking if running on Raspberry Pi..."
@@ -40,77 +30,51 @@ fi
 
 # Check if running as root
 if [[ $EUID -eq 0 ]]; then
-   print_error "This script should not be run as root. Please run as regular user."
-   exit 1
+    print_error "This script should not be run as root. Please run as a regular user."
+    exit 1
 fi
 
 # Update package manager
 print_status "Updating package manager..."
 sudo apt update -y
-
 print_status "Upgrading system packages..."
 sudo apt upgrade -y
 
 # Install essential build tools
 print_status "Installing build essentials..."
-sudo apt install -y \
-    build-essential \
-    cmake \
-    git \
-    pkg-config \
-    wget \
-    curl
+sudo apt install -y build-essential cmake git pkg-config wget curl make
 
 # Install audio dependencies
 print_status "Installing audio libraries..."
-sudo apt install -y \
-    libportaudio2 \
-    libportaudiocpp0 \
-    portaudio19-dev \
-    alsa-utils \
-    pulseaudio \
-    pulseaudio-utils
+sudo apt install -y libportaudio2 libportaudiocpp0 portaudio19-dev alsa-utils pulseaudio pulseaudio-utils
 
 # Install Opus codec
 print_status "Installing Opus codec..."
-sudo apt install -y \
-    libopus-dev \
-    libopus0
+sudo apt install -y libopus-dev libopus0
 
 # Install OpenSSL for encryption
 print_status "Installing OpenSSL..."
-sudo apt install -y \
-    libssl-dev \
-    openssl
+sudo apt install -y libssl-dev openssl
 
 # Install JSON-C library
 print_status "Installing JSON-C library..."
-sudo apt install -y \
-    libjson-c-dev \
-    libjson-c5
+sudo apt install -y libjson-c-dev libjson-c5
 
 # Install cURL library
 print_status "Installing cURL library..."
-sudo apt install -y \
-    libcurl4-openssl-dev \
-    curl
+sudo apt install -y libcurl4-openssl-dev curl
 
 # Install WebSockets library
 print_status "Installing WebSockets library..."
-sudo apt install -y \
-    libwebsockets-dev
+sudo apt install -y libwebsockets-dev
 
-# Install pthread library (usually included with build-essential)
+# Ensure pthread support (usually included with build-essential)
 print_status "Ensuring pthread support..."
-sudo apt install -y \
-    libc6-dev
+sudo apt install -y libc6-dev
 
-# Install pinctrl for GPIO control on RPi 5
+# Install GPIO utilities for RPi 5
 print_status "Installing GPIO utilities for RPi 5..."
-sudo apt install -y \
-    raspi-gpio \
-    gpiod \
-    libgpiod-dev
+sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
 # Check if api_call.c exists
 if [ ! -f "api_call.c" ]; then
@@ -123,7 +87,7 @@ print_success "All dependencies installed successfully!"
 
 # Compile the application
 print_status "Cleaning previous build..."
-make clean
+make clean || true
 
 print_status "Compiling EchoStream application..."
 make
@@ -140,11 +104,17 @@ chmod +x ./api_call
 
 # Check for USB audio devices
 print_status "Checking for USB audio devices..."
-lsusb | grep -i audio && print_success "USB audio devices found" || print_warning "No USB audio devices detected"
+if lsusb | grep -iq audio; then
+    print_success "USB audio devices found"
+else
+    print_warning "No USB audio devices detected"
+fi
 
 # Show audio devices
 print_status "Available audio devices:"
-aplay -l 2>/dev/null || print_warning "Could not list audio devices"
+if ! aplay -l 2>/dev/null; then
+    print_warning "Could not list audio devices"
+fi
 
 # Check GPIO permissions
 print_status "Checking GPIO permissions..."
