@@ -161,7 +161,7 @@ print_status "Creating systemd service file..."
 sudo cp echostream.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable echostream.service
-sudo systemctl start echostream.service
+# sudo systemctl start echostream.service
 
 print_success "Service file created: echostream.service"
 print_status "To install as system service, run: sudo cp echostream.service /etc/systemd/system/"
