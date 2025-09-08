@@ -7,25 +7,16 @@ Wants=mosquitto.service
 Type=simple
 User=will
 WorkingDirectory=/home/will/Linux_EchoStream
-
-# Run your script with unbuffered output
-ExecStart=/usr/bin/stdbuf -oL -eL /home/will/Linux_EchoStream/install_and_run.sh
-
+ExecStart=/usr/bin/stdbuf -oL -eL /home/will/Linux_EchoStream/api_call
 Restart=always
 RestartSec=10
 
-# Real-time logging configuration
 StandardOutput=journal
 StandardError=journal
 StandardInput=null
 
-# GPIO and Audio permissions
 SupplementaryGroups=gpio,audio
-
-# Environment variables
 Environment=DISPLAY=:0
-
-# Service limits for better performance
 LimitNOFILE=65536
 LimitNPROC=4096
 
