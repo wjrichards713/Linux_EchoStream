@@ -10,8 +10,19 @@ WorkingDirectory=/home/will/Linux_EchoStream
 ExecStart=/home/will/Linux_EchoStream/install_and_run.sh
 Restart=always
 RestartSec=10
+
+# Real-time logging configuration
 StandardOutput=journal
 StandardError=journal
+StandardInput=null
+
+# Force immediate log flushing
+Environment=SYSTEMD_LOG_LEVEL=debug
+Environment=JOURNAL_STREAM=1
+
+# Logging options for real-time output
+ExecStartPre=/bin/bash -c 'echo "Starting EchoStream service at $(date)"'
+ExecStartPost=/bin/bash -c 'echo "EchoStream service started at $(date)"'
 
 # GPIO permissions
 SupplementaryGroups=gpio
@@ -21,6 +32,10 @@ SupplementaryGroups=audio
 
 # Environment variables
 Environment=DISPLAY=:0
+
+# Service limits for better performance
+LimitNOFILE=65536
+LimitNPROC=4096
 
 [Install]
 WantedBy=multi-user.target
