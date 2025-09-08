@@ -706,8 +706,8 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
     
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-            printf("WebSocket connection established for all channels\n");
-            printf("DEBUG: LWS_CALLBACK_CLIENT_ESTABLISHED received\n");
+            printf("[INFO] WebSocket connection established for all channels\n");
+            printf("[DEBUG] LWS_CALLBACK_CLIENT_ESTABLISHED received\n");
             
             // Send connect message for all active channels
             for (int i = 0; i < 4; i++) {
@@ -719,24 +719,34 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                         "{\"connect\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
                         channels[i].audio.channel_id, now);
                     
-                    printf("Sending connect message for channel %s: %s\n", channels[i].audio.channel_id, connect_msg);
+                    printf("[INFO] Sending connect message for channel %s\n", channels[i].audio.channel_id);
                     
                     size_t msg_len = strlen(connect_msg);
                     unsigned char *buf = malloc(LWS_PRE + msg_len);
-                    if (buf) {
-                        memcpy(&buf[LWS_PRE], connect_msg, msg_len);
-                        lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-                        free(buf);
+                    if (!buf) {
+                        printf("[ERROR] Failed to allocate memory for connect message\n");
+                        continue;
                     }
+                    
+                    memcpy(&buf[LWS_PRE], connect_msg, msg_len);
+                    int result = lws_write(wsi, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+                    
+                    if (result < 0) {
+                        printf("[ERROR] Failed to send connect message for channel %s (result=%d)\n", channels[i].audio.channel_id, result);
+                    } else {
+                        printf("[INFO] Connect message sent successfully for channel %s (%d bytes)\n", channels[i].audio.channel_id, result);
+                    }
+                    
+                    free(buf);
                 }
             }
             
-            printf("Waiting for UDP connection info from WebSocket\n");
+            printf("[INFO] Waiting for UDP connection info from WebSocket\n");
             break;
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("Received WebSocket message: %.*s\n", (int)len, (char *)in);
+            printf("[INFO] Received WebSocket message (%d bytes): %.*s\n", (int)len, (int)len, (char *)in);
             
             char *data = malloc(len + 1);
             if (data) {
@@ -795,17 +805,17 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_CLOSED:
-            printf("WebSocket closed for all channels\n");
+            printf("[WARNING] WebSocket closed for all channels\n");
             global_ws_client = NULL;
             break;
             
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-            printf("WebSocket error: %.*s\n", (int)len, (char *)in);
+            printf("[ERROR] WebSocket connection error: %.*s\n", (int)len, (char *)in);
             global_ws_client = NULL;
             break;
             
         default:
-            printf("DEBUG: WebSocket callback reason: %d\n", reason);
+            printf("[DEBUG] WebSocket callback reason: %d\n", reason);
             break;
     }
     
@@ -848,8 +858,18 @@ int connect_global_websocket() {
     
     global_ws_context = lws_create_context(&info);
     if (!global_ws_context) {
-        fprintf(stderr, "WebSocket context failed\n");
+        fprintf(stderr, "[ERROR] WebSocket context creation failed\n");
         return 0;
+    }
+    printf("[INFO] WebSocket context created successfully\n");
+    
+    // Register all active channels with WebSocket
+    printf("[INFO] Registering all active channels with WebSocket\n");
+    for (int i = 0; i < 4; i++) {
+        if (channels[i].active) {
+            printf("[INFO] Registering channel %s\n", channels[i].audio.channel_id);
+            send_websocket_transmit_event(channels[i].audio.channel_id, 1);
+        }
     }
     
     // Create a single WebSocket connection for all channels
@@ -865,14 +885,15 @@ int connect_global_websocket() {
     connect_info.protocol = protocols[0].name;
     connect_info.pwsi = &global_ws_client;
     
+    printf("[INFO] Attempting WebSocket connection to %s:%d%s\n", address, port, path);
     global_ws_client = lws_client_connect_via_info(&connect_info);
     
     if (global_ws_client == NULL) {
-        fprintf(stderr, "WebSocket connect failed\n");
+        fprintf(stderr, "[ERROR] WebSocket connection failed\n");
         return 0;
     }
     
-    printf("Single WebSocket connection established for all channels\n");
+    printf("[INFO] WebSocket connection established for all channels\n");
     return 1;
 }
 
@@ -932,12 +953,22 @@ void* global_websocket_thread(void* arg) {
         }
     }
     
+    // Send cleanup events for all active channels before destroying context
+    printf("[INFO] Sending cleanup events for all active channels\n");
+    for (int i = 0; i < 4; i++) {
+        if (channels[i].active) {
+            printf("[INFO] Sending transmit_ended event for channel %s\n", channels[i].audio.channel_id);
+            send_websocket_transmit_event(channels[i].audio.channel_id, 0);
+        }
+    }
+    
     if (global_ws_context) {
+        printf("[INFO] Destroying WebSocket context\n");
         lws_context_destroy(global_ws_context);
         global_ws_context = NULL;
     }
     
-    printf("Global WebSocket thread terminated\n");
+    printf("[INFO] Global WebSocket thread terminated\n");
     return NULL;
 }
 
@@ -1124,7 +1155,7 @@ void* heartbeat_worker(void* arg) {
 
 void send_websocket_transmit_event(const char* channel_id, int is_started) {
     if (!global_ws_client) {
-        printf("WebSocket not connected, cannot send transmit event\n");
+        printf("[WARNING] WebSocket not connected, cannot send transmit event for channel %s\n", channel_id);
         return;
     }
     
@@ -1136,15 +1167,25 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
         "{\"%s\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"channel_id\":\"%s\",\"time\":%ld}}",
         event_type, channel_id, now);
     
-    printf("Sending %s for channel %s: %s\n", event_type, channel_id, transmit_msg);
+    printf("[INFO] Sending %s for channel %s\n", event_type, channel_id);
     
     size_t msg_len = strlen(transmit_msg);
     unsigned char *buf = malloc(LWS_PRE + msg_len);
-    if (buf) {
-        memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
-        lws_write(global_ws_client, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
-        free(buf);
+    if (!buf) {
+        printf("[ERROR] Failed to allocate memory for WebSocket message\n");
+        return;
     }
+    
+    memcpy(&buf[LWS_PRE], transmit_msg, msg_len);
+    int result = lws_write(global_ws_client, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+    
+    if (result < 0) {
+        printf("[ERROR] Failed to send WebSocket message for channel %s (result=%d)\n", channel_id, result);
+    } else {
+        printf("[INFO] WebSocket message sent successfully for channel %s (%d bytes)\n", channel_id, result);
+    }
+    
+    free(buf);
 }
 
 void* gpio_monitor_worker(void* arg) {
@@ -1455,12 +1496,17 @@ void* udp_listener_worker(void* arg) {
 int setup_channel(struct channel_context *ctx, const char *channel_id) {
     strcpy(ctx->audio.channel_id, channel_id);
     
+    // Register channel with WebSocket immediately
+    printf("[INFO] Registering channel %s with WebSocket\n", channel_id);
+    send_websocket_transmit_event(ctx->audio.channel_id, 1);
+    
     if (!setup_audio_for_channel(&ctx->audio)) {
-        fprintf(stderr, "Audio setup failed for channel %s\n", channel_id);
+        fprintf(stderr, "[ERROR] Audio setup failed for channel %s\n", channel_id);
         return 0;
     }
     
     ctx->active = 1;
+    printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
 }
 
