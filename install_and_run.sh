@@ -158,24 +158,10 @@ fi
 
 # Create systemd service file (optional)
 print_status "Creating systemd service file..."
-cat > echostream.service << EOF
-[Unit]
-Description=EchoStream Audio Communication
-After=network.target sound.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/api_call
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
+sudo cp echostream.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable echostream.service
+sudo systemctl start echostream.service
 
 print_success "Service file created: echostream.service"
 print_status "To install as system service, run: sudo cp echostream.service /etc/systemd/system/"
