@@ -1045,16 +1045,18 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
 int init_gpio_pin(int pin) {
     char path[64], value[8];
     int fd;
-    
+
+    // Unexport if previously exported
     snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
     if ((fd = open(path, O_WRONLY)) != -1) {
         snprintf(value, sizeof(value), "%d", pin);
         write(fd, value, strlen(value));
         close(fd);
     }
-    
+
     usleep(100000);
-    
+
+    // Export pin
     snprintf(path, sizeof(path), "/sys/class/gpio/export");
     if ((fd = open(path, O_WRONLY)) == -1) {
         printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
@@ -1067,9 +1069,10 @@ int init_gpio_pin(int pin) {
         return 0;
     }
     close(fd);
-    
+
     usleep(100000);
-    
+
+    // Set direction to input (all four pins same as GPIO20/21)
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
     if ((fd = open(path, O_WRONLY)) == -1) {
         printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
@@ -1081,14 +1084,16 @@ int init_gpio_pin(int pin) {
         return 0;
     }
     close(fd);
-    
+
+    // Set pull-up using pinctrl (all four pins same)
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
     system(cmd);
-    
-    printf("GPIO pin %d initialized successfully\n", pin);
+
+    printf("GPIO pin %d initialized successfully (input + pull-up)\n", pin);
     return 1;
 }
+
 
 int read_gpio_pin(int pin) {
     char path[64], value[4];
