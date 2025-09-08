@@ -7,6 +7,7 @@
 #include <libwebsockets.h>
 #include <signal.h>
 #include <time.h>
+#include <gpiod.h>
 #include <portaudio.h>
 #include <opus/opus.h>
 #include <openssl/evp.h>
@@ -1056,24 +1057,33 @@ int init_gpio_pin(int pin) {
     return 1;
 }
 
-
 int read_gpio_pin(int pin) {
-    char path[64], value[4];
-    int fd;
-    
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
-    if ((fd = open(path, O_RDONLY)) == -1) {
+    struct gpiod_chip *chip;
+    struct gpiod_line *line;
+    int val;
+
+    chip = gpiod_chip_open_by_name("gpiochip0");
+    if (!chip) return -1;
+
+    line = gpiod_chip_get_line(chip, pin);
+    if (!line) {
+        gpiod_chip_close(chip);
         return -1;
     }
-    
-    if (read(fd, value, 3) == -1) {
-        close(fd);
+
+    if (gpiod_line_request_input(line, "gpio_monitor") < 0) {
+        gpiod_chip_close(chip);
         return -1;
     }
-    close(fd);
-    
-    return (value[0] == '0') ? 0 : 1;
+
+    val = gpiod_line_get_value(line);
+
+    gpiod_line_release(line);
+    gpiod_chip_close(chip);
+
+    return val;  // 0 = low, 1 = high
 }
+
 
 void cleanup_gpio(int pin) {
     char path[64], value[8];
