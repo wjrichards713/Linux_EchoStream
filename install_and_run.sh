@@ -122,10 +122,11 @@ fi
 print_success "All dependencies installed successfully!"
 
 # Compile the application
+print_status "Cleaning previous build..."
+make clean
+
 print_status "Compiling EchoStream application..."
-gcc -Wall -Wextra -std=c99 -D_GNU_SOURCE -o api_call api_call.c \
-    $(pkg-config --cflags --libs libcurl json-c libwebsockets portaudio-2.0 opus openssl) \
-    -lpthread
+make
 
 if [ $? -eq 0 ]; then
     print_success "Compilation successful!"
@@ -155,36 +156,6 @@ else
     sudo usermod -a -G gpio $USER
     print_warning "Please log out and log back in for GPIO permissions to take effect"
 fi
-
-# Create systemd service file (optional)
-print_status "Creating systemd service file..."
-sudo cp echostream.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable echostream.service
-# sudo systemctl start echostream.service
-
-print_success "Service file created: echostream.service"
-print_status "To install as system service, run: sudo cp echostream.service /etc/systemd/system/"
-
-# Display usage information
-echo ""
-echo "=========================================="
-echo "Installation Complete!"
-echo "=========================================="
-echo ""
-echo "Usage:"
-echo "  Run both channels: ./api_call"
-echo "  Run channel 555:  ./api_call 555"
-echo "  Run channel 666:  ./api_call 666"
-echo ""
-echo "GPIO Connections:"
-echo "  Pin 38 (GPIO 20) - Channel 555 PTT (connect to GND to transmit)"
-echo "  Pin 40 (GPIO 21) - Channel 666 PTT (connect to GND to transmit)"
-echo ""
-echo "Audio Devices:"
-echo "  Channel 555 - First USB audio device"
-echo "  Channel 666 - Second USB audio device"
-echo ""
 
 # Auto-run EchoStream after installation
 print_status "Starting EchoStream automatically..."
