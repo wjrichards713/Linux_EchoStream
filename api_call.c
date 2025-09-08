@@ -1083,7 +1083,7 @@ int init_gpio_pin(int pin) {
     close(fd);
     
     char cmd[64];
-    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin - 569);
+    snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
     system(cmd);
     
     printf("GPIO pin %d initialized successfully\n", pin);
@@ -1171,10 +1171,10 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
 }
 
 void* gpio_monitor_worker(void* arg) {
-    int gpio_pin_38 = 589;  // GPIO 20 (physical pin 38) on RPi5
-    int gpio_pin_40 = 590;  // GPIO 21 (physical pin 40) on RPi5
-    int gpio_pin_16 = 567;  // GPIO 23 (physical pin 16) on RPi5
-    int gpio_pin_18 = 568;  // GPIO 24 (physical pin 18) on RPi5
+    int gpio_pin_38 = 20;   // GPIO 20 (physical pin 38) on RPi5
+    int gpio_pin_40 = 21;   // GPIO 21 (physical pin 40) on RPi5
+    int gpio_pin_16 = 23;   // GPIO 23 (physical pin 16) on RPi5
+    int gpio_pin_18 = 24;   // GPIO 24 (physical pin 18) on RPi5
     
     printf("GPIO monitor worker started\n");
     
