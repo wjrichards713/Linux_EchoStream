@@ -1260,7 +1260,7 @@ void* gpio_monitor_worker(void* arg) {
 
         // Display status every 10 seconds (100 iterations * 100ms = 10 seconds)
         status_counter++;
-        if (status_counter >= 100) {
+        if (status_counter >= 30) {
             printf("\n=== GPIO Status Report (every 10 seconds) ===\n");
             printf("PIN 38 (GPIO 20): %s (Channel: %s)\n", 
                    curr_val_38 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[0]);
