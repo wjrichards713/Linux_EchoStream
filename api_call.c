@@ -118,19 +118,7 @@ static void handle_interrupt(int sig) {
     
     for (int i = 0; i < 4; i++) {
         if (channels[i].active) {
-            channels[i].audio.transmitting = 0;
-            
-            if (channels[i].audio.input_stream) {
-                Pa_AbortStream(channels[i].audio.input_stream);
-                Pa_CloseStream(channels[i].audio.input_stream);
-                channels[i].audio.input_stream = NULL;
-            }
-            
-            if (channels[i].audio.output_stream) {
-                Pa_AbortStream(channels[i].audio.output_stream);
-                Pa_CloseStream(channels[i].audio.output_stream);
-                channels[i].audio.output_stream = NULL;
-            }
+            close_audio_streams(&channels[i].audio);
         }
     }
     
@@ -457,8 +445,12 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     return paContinue;
 }
 
-int setup_audio_for_channel(struct audio_stream* audio_stream) {
+int init_audio_streams(struct audio_stream* audio_stream) {
     int error;
+    
+    // Initialize streams to NULL
+    audio_stream->input_stream = NULL;
+    audio_stream->output_stream = NULL;
     
     // Setup encoder
     audio_stream->encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
@@ -578,92 +570,188 @@ int setup_global_udp(struct server_config* config) {
     return 1;
 }
 
-int start_transmission_for_channel(struct audio_stream* audio_stream) {
+int start_audio_streams(struct audio_stream* audio_stream) {
     PaStreamParameters input_params, output_params;
+    PaError err;
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
     
-    // Setup input stream
-    input_params.device = audio_stream->device_index;
-    if (input_params.device == paNoDevice) {
+    // Verify device is valid
+    if (audio_stream->device_index == paNoDevice) {
         printf("No input device available for channel %s (device_index=%d) - WebSocket functionality will continue\n", 
                 audio_stream->channel_id, audio_stream->device_index);
         return 0;
     }
     
-    // Verify device is valid
-    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(input_params.device);
+    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
     if (!device_info) {
         printf("Invalid device %d for channel %s - WebSocket functionality will continue\n", 
-                input_params.device, audio_stream->channel_id);
+                audio_stream->device_index, audio_stream->channel_id);
         return 0;
     }
     
     printf("Using device %d for channel %s: %s\n", 
-           input_params.device, audio_stream->channel_id, device_info->name);
+           audio_stream->device_index, audio_stream->channel_id, device_info->name);
     
-    input_params.channelCount = 1;
-    input_params.sampleFormat = paFloat32;
-    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-    input_params.hostApiSpecificStreamInfo = NULL;
+    // Check device capabilities
+    int has_input = (device_info->maxInputChannels > 0);
+    int has_output = (device_info->maxOutputChannels > 0);
     
-    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
-                                paClipOff, audio_input_callback, audio_stream);
+    printf("Device capabilities - Input: %s, Output: %s\n", 
+           has_input ? "YES" : "NO", has_output ? "YES" : "NO");
     
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
-        return 0;
+    // Always try to open input stream if device supports it
+    if (has_input) {
+        input_params.device = audio_stream->device_index;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = device_info->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                            paClipOff, audio_input_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            audio_stream->input_stream = NULL;
+            return 0;
+        }
+        
+        printf("Input stream opened and started for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("Device does not support input - skipping input stream for channel %s\n", audio_stream->channel_id);
     }
     
-    // Setup output stream
-    output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;
-    output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-    output_params.hostApiSpecificStreamInfo = NULL;
-    
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                        paClipOff, audio_output_callback, audio_stream);
-    
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        return 0;
+    // Only try to open output stream if device supports it
+    if (has_output) {
+        output_params.device = audio_stream->device_index;
+        output_params.channelCount = 1;
+        output_params.sampleFormat = paFloat32;
+        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+        output_params.hostApiSpecificStreamInfo = NULL;
+        
+        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                            paClipOff, audio_output_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+            // Don't fail completely if output fails, just log and continue
+            printf("Output stream failed to open for channel %s, continuing with input-only mode\n", 
+                   audio_stream->channel_id);
+        } else {
+            err = Pa_StartStream(audio_stream->output_stream);
+            if (err != paNoError) {
+                fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+                Pa_CloseStream(audio_stream->output_stream);
+                audio_stream->output_stream = NULL;
+                printf("Output stream failed to start for channel %s, continuing with input-only mode\n", 
+                       audio_stream->channel_id);
+            } else {
+                printf("Output stream opened and started for channel %s\n", audio_stream->channel_id);
+            }
+        }
+    } else {
+        printf("Device does not support output - skipping output stream for channel %s\n", audio_stream->channel_id);
     }
     
-    // Start both streams
-    err = Pa_StartStream(audio_stream->input_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
-    }
+    // Check final stream status
+    int input_active = (audio_stream->input_stream && Pa_IsStreamActive(audio_stream->input_stream));
+    int output_active = (audio_stream->output_stream && Pa_IsStreamActive(audio_stream->output_stream));
     
-    err = Pa_StartStream(audio_stream->output_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
-    }
-    
-    // Check if streams are actually running
-    if (Pa_IsStreamActive(audio_stream->input_stream)) {
+    if (input_active) {
         printf("Input stream is active for channel %s\n", audio_stream->channel_id);
     } else {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
-    if (Pa_IsStreamActive(audio_stream->output_stream)) {
+    if (output_active) {
         printf("Output stream is active for channel %s\n", audio_stream->channel_id);
     } else {
-        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        printf("Output stream is NOT active for channel %s (input-only device)\n", audio_stream->channel_id);
     }
     
-    audio_stream->transmitting = 1;
-    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
-    return 1;
+    // Only set transmitting if we have at least input capability
+    if (input_active) {
+        audio_stream->transmitting = 1;
+        printf("Audio transmission started for channel %s (%s)\n", 
+               audio_stream->channel_id, 
+               (input_active && output_active) ? "input + output" : "input only");
+        return 1;
+    } else {
+        printf("No audio capability available for channel %s\n", audio_stream->channel_id);
+        return 0;
+    }
+}
+
+int close_audio_streams(struct audio_stream* audio_stream) {
+    int closed_streams = 0;
+    
+    // Close input stream if it exists
+    if (audio_stream->input_stream) {
+        if (Pa_IsStreamActive(audio_stream->input_stream)) {
+            Pa_AbortStream(audio_stream->input_stream);
+        }
+        PaError err = Pa_CloseStream(audio_stream->input_stream);
+        if (err == paNoError) {
+            printf("Input stream closed for channel %s\n", audio_stream->channel_id);
+            closed_streams++;
+        } else {
+            fprintf(stderr, "Error closing input stream for channel %s: %s\n", 
+                    audio_stream->channel_id, Pa_GetErrorText(err));
+        }
+        audio_stream->input_stream = NULL;
+    }
+    
+    // Close output stream if it exists
+    if (audio_stream->output_stream) {
+        if (Pa_IsStreamActive(audio_stream->output_stream)) {
+            Pa_AbortStream(audio_stream->output_stream);
+        }
+        PaError err = Pa_CloseStream(audio_stream->output_stream);
+        if (err == paNoError) {
+            printf("Output stream closed for channel %s\n", audio_stream->channel_id);
+            closed_streams++;
+        } else {
+            fprintf(stderr, "Error closing output stream for channel %s: %s\n", 
+                    audio_stream->channel_id, Pa_GetErrorText(err));
+        }
+        audio_stream->output_stream = NULL;
+    }
+    
+    // Clean up encoder and decoder
+    if (audio_stream->encoder) {
+        opus_encoder_destroy(audio_stream->encoder);
+        audio_stream->encoder = NULL;
+    }
+    
+    if (audio_stream->decoder) {
+        opus_decoder_destroy(audio_stream->decoder);
+        audio_stream->decoder = NULL;
+    }
+    
+    // Clean up input buffer
+    if (audio_stream->input_buffer) {
+        free(audio_stream->input_buffer);
+        audio_stream->input_buffer = NULL;
+    }
+    
+    // Clean up jitter buffer mutex
+    pthread_mutex_destroy(&audio_stream->output_jitter.mutex);
+    
+    // Reset transmission state
+    audio_stream->transmitting = 0;
+    
+    printf("Audio streams cleanup completed for channel %s (%d streams closed)\n", 
+           audio_stream->channel_id, closed_streams);
+    
+    return closed_streams;
 }
 
 int parse_websocket_config(const char *json_str, struct server_config *cfg) {
@@ -777,7 +865,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                                     }
                                     printf("AES key decoded for channel %s\n", channels[i].audio.channel_id);
                                     
-                                    if (start_transmission_for_channel(&channels[i].audio)) {
+                                    if (start_audio_streams(&channels[i].audio)) {
                                         printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
                                         audio_channels_ready++;
                                     } else {
@@ -920,35 +1008,7 @@ void* global_websocket_thread(void* arg) {
     // Cleanup all channels
     for (int i = 0; i < 4; i++) {
         if (channels[i].active) {
-            if (channels[i].audio.input_stream && !global_interrupted) {
-                Pa_AbortStream(channels[i].audio.input_stream);
-                Pa_CloseStream(channels[i].audio.input_stream);
-                channels[i].audio.input_stream = NULL;
-            }
-            
-            if (channels[i].audio.output_stream && !global_interrupted) {
-                Pa_AbortStream(channels[i].audio.output_stream);
-                Pa_CloseStream(channels[i].audio.output_stream);
-                channels[i].audio.output_stream = NULL;
-            }
-            
-            if (channels[i].audio.encoder) {
-                opus_encoder_destroy(channels[i].audio.encoder);
-                channels[i].audio.encoder = NULL;
-            }
-            
-            if (channels[i].audio.decoder) {
-                opus_decoder_destroy(channels[i].audio.decoder);
-                channels[i].audio.decoder = NULL;
-            }
-            
-            if (channels[i].audio.input_buffer) {
-                free(channels[i].audio.input_buffer);
-                channels[i].audio.input_buffer = NULL;
-            }
-            
-            pthread_mutex_destroy(&channels[i].audio.output_jitter.mutex);
-            
+            close_audio_streams(&channels[i].audio);
             channels[i].active = 0;
         }
     }
@@ -1500,8 +1560,8 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     printf("[INFO] Registering channel %s with WebSocket\n", channel_id);
     send_websocket_transmit_event(ctx->audio.channel_id, 1);
     
-    if (!setup_audio_for_channel(&ctx->audio)) {
-        fprintf(stderr, "[ERROR] Audio setup failed for channel %s\n", channel_id);
+    if (!init_audio_streams(&ctx->audio)) {
+        fprintf(stderr, "[ERROR] Audio initialization failed for channel %s\n", channel_id);
         return 0;
     }
     
