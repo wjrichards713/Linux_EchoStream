@@ -1043,52 +1043,14 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
 }
 
 int init_gpio_pin(int pin) {
-    char path[64], value[8];
-    int fd;
-
-    // Unexport if previously exported
-    snprintf(path, sizeof(path), "/sys/class/gpio/unexport");
-    if ((fd = open(path, O_WRONLY)) != -1) {
-        snprintf(value, sizeof(value), "%d", pin);
-        write(fd, value, strlen(value));
-        close(fd);
-    }
-
-    usleep(100000);
-
-    // Export pin
-    snprintf(path, sizeof(path), "/sys/class/gpio/export");
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO export file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    snprintf(value, sizeof(value), "%d", pin);
-    if (write(fd, value, strlen(value)) == -1) {
-        printf("ERROR: Cannot export GPIO pin %d: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-
-    usleep(100000);
-
-    // Set direction to input (all four pins same as GPIO20/21)
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-    if ((fd = open(path, O_WRONLY)) == -1) {
-        printf("ERROR: Cannot open GPIO direction file %s: %s\n", path, strerror(errno));
-        return 0;
-    }
-    if (write(fd, "in", 2) == -1) {
-        printf("ERROR: Cannot set GPIO pin %d direction: %s\n", pin, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
-
-    // Set pull-up using pinctrl (all four pins same)
     char cmd[64];
+
+    // Set pin as input with pull-up resistor
     snprintf(cmd, sizeof(cmd), "pinctrl set %d ip pu", pin);
-    system(cmd);
+    if (system(cmd) != 0) {
+        printf("ERROR: Cannot configure GPIO pin %d via pinctrl\n", pin);
+        return 0;
+    }
 
     printf("GPIO pin %d initialized successfully (input + pull-up)\n", pin);
     return 1;
@@ -1176,156 +1138,77 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
 }
 
 void* gpio_monitor_worker(void* arg) {
-    int gpio_pin_38 = 20;   // GPIO 20 (physical pin 38) on RPi5
-    int gpio_pin_40 = 21;   // GPIO 21 (physical pin 40) on RPi5
-    int gpio_pin_16 = 23;   // GPIO 23 (physical pin 16) on RPi5
-    int gpio_pin_18 = 24;   // GPIO 24 (physical pin 18) on RPi5
-    
+    int gpio_pin_38 = 20;   // GPIO 20 (physical pin 38)
+    int gpio_pin_40 = 21;   // GPIO 21 (physical pin 40)
+    int gpio_pin_16 = 23;   // GPIO 23 (physical pin 16)
+    int gpio_pin_18 = 24;   // GPIO 24 (physical pin 18)
+
     printf("GPIO monitor worker started\n");
-    
-    if (!init_gpio_pin(gpio_pin_38)) {
-        printf("Failed to initialize GPIO pin 38\n");
+
+    // Initialize all pins via pinctrl
+    if (!init_gpio_pin(gpio_pin_38) ||
+        !init_gpio_pin(gpio_pin_40) ||
+        !init_gpio_pin(gpio_pin_16) ||
+        !init_gpio_pin(gpio_pin_18)) {
+        printf("Failed to initialize one or more GPIO pins\n");
         return NULL;
     }
-    
-    if (!init_gpio_pin(gpio_pin_40)) {
-        printf("Failed to initialize GPIO pin 40\n");
-        cleanup_gpio(gpio_pin_38);
-        return NULL;
-    }
-    
-    if (!init_gpio_pin(gpio_pin_16)) {
-        printf("Failed to initialize GPIO pin 16\n");
-        cleanup_gpio(gpio_pin_38);
-        cleanup_gpio(gpio_pin_40);
-        return NULL;
-    }
-    
-    if (!init_gpio_pin(gpio_pin_18)) {
-        printf("Failed to initialize GPIO pin 18\n");
-        cleanup_gpio(gpio_pin_38);
-        cleanup_gpio(gpio_pin_40);
-        cleanup_gpio(gpio_pin_16);
-        return NULL;
-    }
-    
+
     printf("GPIO pins initialized. Reading initial states...\n");
-    
-    // Read initial states without sending WebSocket events
+
+    // Read initial states
     pthread_mutex_lock(&gpio_mutex);
     gpio_38_state = read_gpio_pin(gpio_pin_38);
     gpio_40_state = read_gpio_pin(gpio_pin_40);
     gpio_16_state = read_gpio_pin(gpio_pin_16);
     gpio_18_state = read_gpio_pin(gpio_pin_18);
     pthread_mutex_unlock(&gpio_mutex);
-    
-    if (gpio_38_state != -1) {
-        printf("PIN 38 (Channel 555) initial state: %s\n", 
-               gpio_38_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
-    
-    if (gpio_40_state != -1) {
-        printf("PIN 40 (Channel 666) initial state: %s\n", 
-               gpio_40_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
-    
-    if (gpio_16_state != -1) {
-        printf("PIN 16 (Channel 3) initial state: %s\n", 
-               gpio_16_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
-    
-    if (gpio_18_state != -1) {
-        printf("PIN 18 (Channel 4) initial state: %s\n", 
-               gpio_18_state == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-    }
-    
-    printf("GPIO pins initialized. Monitoring for changes...\n");
-    
+
+    // Print initial states
+    printf("PIN 38 initial state: %s\n", (gpio_38_state == 0) ? "ACTIVE" : "INACTIVE");
+    printf("PIN 40 initial state: %s\n", (gpio_40_state == 0) ? "ACTIVE" : "INACTIVE");
+    printf("PIN 16 initial state: %s\n", (gpio_16_state == 0) ? "ACTIVE" : "INACTIVE");
+    printf("PIN 18 initial state: %s\n", (gpio_18_state == 0) ? "ACTIVE" : "INACTIVE");
+
+    printf("Monitoring GPIO pins for changes...\n");
+
     while (!global_interrupted) {
         int curr_val_38 = read_gpio_pin(gpio_pin_38);
         int curr_val_40 = read_gpio_pin(gpio_pin_40);
-        
+        int curr_val_16 = read_gpio_pin(gpio_pin_16);
+        int curr_val_18 = read_gpio_pin(gpio_pin_18);
+
         pthread_mutex_lock(&gpio_mutex);
-        
+
         if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
             gpio_38_state = curr_val_38;
-            printf("PIN 38 (Channel %s): %s\n", global_channel_ids[0],
-                   curr_val_38 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-            
-            for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[0]) == 0) {
-                    channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
-                    break;
-                }
-            }
-            
-            // Send WebSocket transmit event
-            send_websocket_transmit_event(global_channel_ids[0], (curr_val_38 == 0) ? 1 : 0);
+            printf("PIN 38: %s\n", curr_val_38 == 0 ? "ACTIVE" : "INACTIVE");
+            send_websocket_transmit_event(global_channel_ids[0], curr_val_38 == 0 ? 1 : 0);
         }
-        
+
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
             gpio_40_state = curr_val_40;
-            printf("PIN 40 (Channel %s): %s\n", global_channel_ids[1],
-                   curr_val_40 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-            
-            for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[1]) == 0) {
-                    channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
-                    break;
-                }
-            }
-            
-            // Send WebSocket transmit event
-            send_websocket_transmit_event(global_channel_ids[1], (curr_val_40 == 0) ? 1 : 0);
+            printf("PIN 40: %s\n", curr_val_40 == 0 ? "ACTIVE" : "INACTIVE");
+            send_websocket_transmit_event(global_channel_ids[1], curr_val_40 == 0 ? 1 : 0);
         }
-        
-        // Monitor pin 16 (Channel 3)
-        int curr_val_16 = read_gpio_pin(gpio_pin_16);
+
         if (curr_val_16 != gpio_16_state && curr_val_16 != -1) {
             gpio_16_state = curr_val_16;
-            printf("PIN 16 (Channel %s): %s\n", global_channel_ids[2],
-                   curr_val_16 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-            
-            for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[2]) == 0) {
-                    channels[i].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
-                    break;
-                }
-            }
-            
-            // Send WebSocket transmit event for channel 3
-            send_websocket_transmit_event(global_channel_ids[2], (curr_val_16 == 0) ? 1 : 0);
+            printf("PIN 16: %s\n", curr_val_16 == 0 ? "ACTIVE" : "INACTIVE");
+            send_websocket_transmit_event(global_channel_ids[2], curr_val_16 == 0 ? 1 : 0);
         }
-        
-        // Monitor pin 18 (Channel 4)
-        int curr_val_18 = read_gpio_pin(gpio_pin_18);
+
         if (curr_val_18 != gpio_18_state && curr_val_18 != -1) {
             gpio_18_state = curr_val_18;
-            printf("PIN 18 (Channel %s): %s\n", global_channel_ids[3],
-                   curr_val_18 == 0 ? "ACTIVE (PTT ON)" : "INACTIVE (PTT OFF)");
-            
-            for (int i = 0; i < 4; i++) {
-                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[3]) == 0) {
-                    channels[i].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
-                    break;
-                }
-            }
-            
-            // Send WebSocket transmit event for channel 4
-            send_websocket_transmit_event(global_channel_ids[3], (curr_val_18 == 0) ? 1 : 0);
+            printf("PIN 18: %s\n", curr_val_18 == 0 ? "ACTIVE" : "INACTIVE");
+            send_websocket_transmit_event(global_channel_ids[3], curr_val_18 == 0 ? 1 : 0);
         }
-        
+
         pthread_mutex_unlock(&gpio_mutex);
-        
-        usleep(100000);
+        usleep(100000); // 100 ms poll
     }
-    
+
     printf("GPIO monitor worker stopped\n");
-    cleanup_gpio(gpio_pin_38);
-    cleanup_gpio(gpio_pin_40);
-    cleanup_gpio(gpio_pin_16);
-    cleanup_gpio(gpio_pin_18);
-    
     return NULL;
 }
 
