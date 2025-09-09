@@ -601,10 +601,21 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("Using device %d for channel %s: %s\n", 
            input_params.device, audio_stream->channel_id, device_info->name);
     
-    input_params.channelCount = 1;
+    // Check device capabilities and set appropriate channel count
+    const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(input_params.device);
+    if (input_device_info->maxInputChannels >= 1) {
+        input_params.channelCount = 1;  // Use mono for better compatibility
+    } else {
+        fprintf(stderr, "Device %d does not support input channels\n", input_params.device);
+        return 0;
+    }
+    
     input_params.sampleFormat = paFloat32;
-    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+    input_params.suggestedLatency = input_device_info->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
+    
+    printf("[DEBUG] Input device %d supports %d input channels, using %d\n", 
+           input_params.device, input_device_info->maxInputChannels, input_params.channelCount);
     
     PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
                                 paClipOff, audio_input_callback, audio_stream);
@@ -616,18 +627,62 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     // Setup output stream
     output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;
+    
+    // Check device capabilities for output
+    const PaDeviceInfo* output_device_info = Pa_GetDeviceInfo(output_params.device);
+    if (output_device_info->maxOutputChannels >= 1) {
+        output_params.channelCount = 1;  // Use mono for better compatibility
+    } else {
+        fprintf(stderr, "Device %d does not support output channels\n", output_params.device);
+        return 0;
+    }
+    
     output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.suggestedLatency = output_device_info->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
+    
+    printf("[DEBUG] Output device %d supports %d output channels, using %d\n", 
+           output_params.device, output_device_info->maxOutputChannels, output_params.channelCount);
     
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
                         paClipOff, audio_output_callback, audio_stream);
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        printf("[WARNING] Output stream failed for channel %s (device %d), trying input-only mode\n", 
+               audio_stream->channel_id, audio_stream->device_index);
+        
+        // Log device details for debugging
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+        if (device_info) {
+            printf("[DEBUG] Device info - Name: %s, MaxInputChannels: %d, MaxOutputChannels: %d\n",
+                   device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
+        }
+        
+        // Try input-only mode as fallback
         Pa_CloseStream(audio_stream->input_stream);
-        return 0;
+        audio_stream->input_stream = NULL;
+        
+        // Reopen input stream
+        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                            paClipOff, audio_input_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        // Start input stream only
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
+        
+        printf("[INFO] Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
+        audio_stream->transmitting = 1;
+        return 1;
     }
     
     // Start both streams
@@ -999,7 +1054,8 @@ void auto_assign_usb_devices() {
                 if (strstr(name, "USB") || strstr(name, "usb") || 
                     strstr(name, "Audio Device") || strstr(name, "Headset")) {
                     usb_devices[usb_count] = i;
-                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
+                    printf("USB Device %d assigned to slot %d: %s (Input: %d, Output: %d)\n", 
+                           i, usb_count, name, device_info->maxInputChannels, device_info->maxOutputChannels);
                     usb_count++;
                 }
             }
@@ -1016,6 +1072,26 @@ void auto_assign_usb_devices() {
         // Fill remaining slots with available devices
         for (int i = usb_count; i < 4; i++) {
             usb_devices[i] = usb_devices[i % usb_count];
+        }
+    }
+    
+    // Add fallback devices for better reliability
+    printf("Setting up device fallbacks for better reliability...\n");
+    for (int i = 0; i < 4; i++) {
+        // If primary device is invalid, try to find a working alternative
+        if (usb_devices[i] == paNoDevice || !Pa_GetDeviceInfo(usb_devices[i])) {
+            printf("Device %d is invalid, finding fallback...\n", i);
+            for (int j = 0; j < num_devices; j++) {
+                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(j);
+                if (device_info && device_info->maxInputChannels > 0) {
+                    const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
+                    if (host_info && host_info->type == paALSA) {
+                        usb_devices[i] = j;
+                        printf("Fallback device %d assigned to slot %d: %s\n", j, i, device_info->name);
+                        break;
+                    }
+                }
+            }
         }
     }
     
