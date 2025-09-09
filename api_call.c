@@ -352,6 +352,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         return paContinue;
     }
     
+    static int audio_processing_count = 0;
+    if (audio_processing_count++ % 100 == 0) {
+        printf("Audio processing for channel %s (frames=%lu)\n", audio_stream->channel_id, frames);
+    }
+    
     const float *samples = (const float*)input;
     
     for (unsigned long i = 0; i < frames; i++) {
@@ -381,8 +386,14 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                         snprintf(msg, sizeof(msg),
                                 "{\"channel_id\":\"%s\",\"type\":\"audio\",\"data\":\"%s\"}", audio_stream->channel_id, b64_data);
                         
-                        sendto(global_udp_socket, msg, strlen(msg), 0,
+                        int sent = sendto(global_udp_socket, msg, strlen(msg), 0,
                                (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
+                        
+                        static int audio_send_count = 0;
+                        if (audio_send_count++ % 10 == 0) {
+                            printf("Audio sent for channel %s (%d bytes, UDP result: %d)\n", 
+                                   audio_stream->channel_id, (int)strlen(msg), sent);
+                        }
                         
                         free(b64_data);
                     }
@@ -637,8 +648,33 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        printf("WARNING: Output stream failed for channel %s (device %d), trying input-only mode\n", 
+               audio_stream->channel_id, audio_stream->device_index);
+        
+        // Try input-only mode as fallback
         Pa_CloseStream(audio_stream->input_stream);
-        return 0;
+        audio_stream->input_stream = NULL;
+        
+        // Reopen input stream
+        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                            paClipOff, audio_input_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        // Start input stream only
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
+        
+        printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
+        audio_stream->transmitting = 1;
+        return 1;
     }
     
     // Start both streams
@@ -1184,11 +1220,52 @@ void* gpio_monitor_worker(void* arg) {
     gpio_18_state = read_gpio_pin(gpio_pin_18);
     pthread_mutex_unlock(&gpio_mutex);
 
-    // Print initial states
+    // Print initial states and set gpio_active for any pins that are already active
     printf("PIN 38 initial state: %s\n", (gpio_38_state == 0) ? "ACTIVE" : "INACTIVE");
     printf("PIN 40 initial state: %s\n", (gpio_40_state == 0) ? "ACTIVE" : "INACTIVE");
     printf("PIN 16 initial state: %s\n", (gpio_16_state == 0) ? "ACTIVE" : "INACTIVE");
     printf("PIN 18 initial state: %s\n", (gpio_18_state == 0) ? "ACTIVE" : "INACTIVE");
+    
+    // Set gpio_active for any pins that are already active at startup
+    if (gpio_38_state == 0) {
+        for (int i = 0; i < 4; i++) {
+            if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[0]) == 0) {
+                channels[i].audio.gpio_active = 1;
+                printf("Channel %s audio ENABLED (PIN 38 was already active)\n", global_channel_ids[0]);
+                break;
+            }
+        }
+    }
+    
+    if (gpio_40_state == 0) {
+        for (int i = 0; i < 4; i++) {
+            if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[1]) == 0) {
+                channels[i].audio.gpio_active = 1;
+                printf("Channel %s audio ENABLED (PIN 40 was already active)\n", global_channel_ids[1]);
+                break;
+            }
+        }
+    }
+    
+    if (gpio_16_state == 0) {
+        for (int i = 0; i < 4; i++) {
+            if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[2]) == 0) {
+                channels[i].audio.gpio_active = 1;
+                printf("Channel %s audio ENABLED (PIN 16 was already active)\n", global_channel_ids[2]);
+                break;
+            }
+        }
+    }
+    
+    if (gpio_18_state == 0) {
+        for (int i = 0; i < 4; i++) {
+            if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[3]) == 0) {
+                channels[i].audio.gpio_active = 1;
+                printf("Channel %s audio ENABLED (PIN 18 was already active)\n", global_channel_ids[3]);
+                break;
+            }
+        }
+    }
 
     printf("Monitoring GPIO pins for changes...\n");
     printf("GPIO Status will be displayed every 10 seconds\n");
@@ -1312,6 +1389,11 @@ void* udp_listener_worker(void* arg) {
     while (!global_interrupted) {
         int bytes_received = recvfrom(global_udp_socket, buffer, sizeof(buffer) - 1, 0,
                                     (struct sockaddr*)&client_addr, &client_len);
+        
+        static int udp_debug_count = 0;
+        if (udp_debug_count++ % 1000 == 0) {
+            printf("UDP Listener: Still listening... (attempt %d)\n", udp_debug_count);
+        }
         
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
