@@ -501,18 +501,7 @@ int initialize_portaudio() {
     static int initialized = 0;
     if (initialized) return 1;
     
-    // Suppress ALSA error messages by redirecting stderr temporarily
-    int stderr_backup = dup(STDERR_FILENO);
-    int dev_null = open("/dev/null", O_WRONLY);
-    dup2(dev_null, STDERR_FILENO);
-    
     PaError err = Pa_Initialize();
-    
-    // Restore stderr
-    dup2(stderr_backup, STDERR_FILENO);
-    close(dev_null);
-    close(stderr_backup);
-    
     if (err != paNoError) {
         fprintf(stderr, "PortAudio error: %s\n", Pa_GetErrorText(err));
         return 0;
@@ -597,15 +586,14 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Setup input stream
     input_params.device = audio_stream->device_index;
     if (input_params.device == paNoDevice) {
-        printf("No input device available for channel %s (device_index=%d) - WebSocket functionality will continue\n", 
-                audio_stream->channel_id, audio_stream->device_index);
+        fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
         return 0;
     }
     
     // Verify device is valid
     const PaDeviceInfo* device_info = Pa_GetDeviceInfo(input_params.device);
     if (!device_info) {
-        printf("Invalid device %d for channel %s - WebSocket functionality will continue\n", 
+        fprintf(stderr, "Invalid device %d for channel %s\n", 
                 input_params.device, audio_stream->channel_id);
         return 0;
     }
@@ -719,6 +707,15 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
             printf("[INFO] WebSocket connection established for all channels\n");
             printf("[DEBUG] LWS_CALLBACK_CLIENT_ESTABLISHED received\n");
+            
+            // Register all active channels with WebSocket
+            printf("[INFO] Registering all active channels with WebSocket\n");
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active) {
+                    printf("[INFO] Registering channel %s\n", channels[i].audio.channel_id);
+                    send_websocket_transmit_event(channels[i].audio.channel_id, 1);
+                }
+            }
             
             // Send connect message for all active channels
             for (int i = 0; i < 4; i++) {
@@ -988,71 +985,31 @@ void auto_assign_usb_devices() {
     
     int num_devices = Pa_GetDeviceCount();
     int usb_count = 0;
-    int input_devices = 0;
     
-    printf("Scanning for audio devices...\n");
+    printf("Scanning for USB audio devices...\n");
     printf("Total PortAudio devices found: %d\n", num_devices);
     
-    // First, list all available input devices for debugging
-    for (int i = 0; i < num_devices; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-        if (device_info && device_info->maxInputChannels > 0) {
-            const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-            printf("Input Device %d: %s (API: %s, Channels: %d)\n", 
-                   i, device_info->name, host_info ? host_info->name : "Unknown", 
-                   device_info->maxInputChannels);
-            input_devices++;
-        }
-    }
-    
-    printf("Found %d input devices total\n", input_devices);
-    
-    // Look for USB devices (more flexible matching)
+    // Look for USB devices with stricter ALSA-only filtering (like original)
     for (int i = 0; i < num_devices && usb_count < 4; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
             const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-            const char* name = device_info->name;
-            
-            // More flexible USB device detection
-            if (strstr(name, "USB") || strstr(name, "usb") || 
-                strstr(name, "Audio Device") || strstr(name, "Headset") ||
-                strstr(name, "Microphone") || strstr(name, "microphone") ||
-                strstr(name, "Sound") || strstr(name, "sound") ||
-                (host_info && strstr(host_info->name, "ALSA"))) {
-                usb_devices[usb_count] = i;
-                printf("USB Device %d assigned to slot %d: %s (API: %s)\n", 
-                       i, usb_count, name, host_info ? host_info->name : "Unknown");
-                usb_count++;
+            if (host_info && host_info->type == paALSA) {
+                const char* name = device_info->name;
+                if (strstr(name, "USB") || strstr(name, "usb") || 
+                    strstr(name, "Audio Device") || strstr(name, "Headset")) {
+                    usb_devices[usb_count] = i;
+                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
+                    usb_count++;
+                }
             }
         }
     }
     
     if (usb_count == 0) {
-        printf("No USB audio devices found, using available input devices\n");
-        // Use any available input devices
-        int device_index = 0;
-        for (int i = 0; i < num_devices && device_index < 4; i++) {
-            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-            if (device_info && device_info->maxInputChannels > 0) {
-                usb_devices[device_index] = i;
-                printf("Using input device %d for channel %d: %s\n", 
-                       i, device_index, device_info->name);
-                device_index++;
-            }
-        }
-        
-        // If still no devices, use default
-        if (device_index == 0) {
-            printf("No input devices found, using default input device for all channels\n");
-            for (int i = 0; i < 4; i++) {
-                usb_devices[i] = Pa_GetDefaultInputDevice();
-            }
-        } else {
-            // Fill remaining slots with available devices
-            for (int i = device_index; i < 4; i++) {
-                usb_devices[i] = usb_devices[i % device_index];
-            }
+        printf("No USB audio devices found, using default input device for all channels\n");
+        for (int i = 0; i < 4; i++) {
+            usb_devices[i] = Pa_GetDefaultInputDevice();
         }
     } else if (usb_count < 4) {
         printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
@@ -1076,13 +1033,18 @@ void auto_assign_usb_devices() {
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
     
-    for (int i = 0; i < 4; i++) {
-        if (strcmp(channel, global_channel_ids[i]) == 0) {
-            return usb_devices[i];
-        }
+    // Direct channel mapping like the original
+    if (strcmp(channel, "555") == 0) {
+        return usb_devices[0];
+    } else if (strcmp(channel, "666") == 0) {
+        return usb_devices[1];
+    } else if (strcmp(channel, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
+        return usb_devices[2];
+    } else if (strcmp(channel, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+        return usb_devices[3];
     }
     
-    return usb_devices[0];
+    return usb_devices[0];  // Default fallback
 }
 
 int init_gpio_pin(int pin) {
@@ -1506,10 +1468,6 @@ void* udp_listener_worker(void* arg) {
 
 int setup_channel(struct channel_context *ctx, const char *channel_id) {
     strcpy(ctx->audio.channel_id, channel_id);
-    
-    // Register channel with WebSocket immediately
-    printf("[INFO] Registering channel %s with WebSocket\n", channel_id);
-    send_websocket_transmit_event(ctx->audio.channel_id, 1);
     
     if (!setup_audio_for_channel(&ctx->audio)) {
         fprintf(stderr, "[ERROR] Audio setup failed for channel %s\n", channel_id);
