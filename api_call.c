@@ -22,6 +22,7 @@
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
+int test_device_capabilities(PaDeviceIndex device);
 int init_gpio_pin(int pin);
 int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
@@ -625,24 +626,15 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup output stream
+    // Setup output stream - use the SAME device as input (like original code)
     output_params.device = audio_stream->device_index;
-    
-    // Check device capabilities for output
-    const PaDeviceInfo* output_device_info = Pa_GetDeviceInfo(output_params.device);
-    if (output_device_info->maxOutputChannels >= 1) {
-        output_params.channelCount = 1;  // Use mono for better compatibility
-    } else {
-        fprintf(stderr, "Device %d does not support output channels\n", output_params.device);
-        return 0;
-    }
-    
+    output_params.channelCount = 1;  // Use mono for better compatibility
     output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = output_device_info->defaultLowOutputLatency;
+    output_params.suggestedLatency = input_device_info->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
     
-    printf("[DEBUG] Output device %d supports %d output channels, using %d\n", 
-           output_params.device, output_device_info->maxOutputChannels, output_params.channelCount);
+    printf("[DEBUG] Using same device %d for both input and output (Input: %d, Output: %d)\n", 
+           output_params.device, input_device_info->maxInputChannels, input_device_info->maxOutputChannels);
     
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
                         paClipOff, audio_output_callback, audio_stream);
@@ -1044,7 +1036,7 @@ void auto_assign_usb_devices() {
     printf("Scanning for USB audio devices...\n");
     printf("Total PortAudio devices found: %d\n", num_devices);
     
-    // Look for USB devices with stricter ALSA-only filtering (like original)
+    // Look for USB devices - be more permissive like the original
     for (int i = 0; i < num_devices && usb_count < 4; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
@@ -1057,6 +1049,34 @@ void auto_assign_usb_devices() {
                     printf("USB Device %d assigned to slot %d: %s (Input: %d, Output: %d)\n", 
                            i, usb_count, name, device_info->maxInputChannels, device_info->maxOutputChannels);
                     usb_count++;
+                }
+            }
+        }
+    }
+    
+    // If we don't have enough USB devices, use any ALSA input device
+    if (usb_count < 4) {
+        printf("Only found %d USB devices, looking for other ALSA input devices...\n", usb_count);
+        for (int i = 0; i < num_devices && usb_count < 4; i++) {
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+            if (device_info && device_info->maxInputChannels > 0) {
+                const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
+                if (host_info && host_info->type == paALSA) {
+                    // Check if we already assigned this device
+                    int already_assigned = 0;
+                    for (int j = 0; j < usb_count; j++) {
+                        if (usb_devices[j] == i) {
+                            already_assigned = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (!already_assigned) {
+                        usb_devices[usb_count] = i;
+                        printf("ALSA Device %d assigned to slot %d: %s (Input: %d, Output: %d)\n", 
+                               i, usb_count, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
+                        usb_count++;
+                    }
                 }
             }
         }
@@ -1101,9 +1121,71 @@ void auto_assign_usb_devices() {
         printf("Channel %s -> Device %d: %s\n", 
                global_channel_ids[i], usb_devices[i], 
                device_info ? device_info->name : "Invalid Device");
+        
+        // Test device capabilities
+        if (device_info) {
+            printf("Testing device %d capabilities...\n", usb_devices[i]);
+            test_device_capabilities(usb_devices[i]);
+        }
     }
     
     device_assigned = 1;
+}
+
+int test_device_capabilities(PaDeviceIndex device) {
+    if (device == paNoDevice) return 0;
+    
+    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(device);
+    if (!device_info) return 0;
+    
+    printf("[DEBUG] Testing device %d: %s\n", device, device_info->name);
+    printf("[DEBUG]   Input channels: %d, Output channels: %d\n", 
+           device_info->maxInputChannels, device_info->maxOutputChannels);
+    
+    // Test if we can open both input and output streams
+    PaStreamParameters input_params, output_params;
+    PaStream *test_input = NULL, *test_output = NULL;
+    int result = 1;
+    
+    // Test input
+    if (device_info->maxInputChannels > 0) {
+        input_params.device = device;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = device_info->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError err = Pa_OpenStream(&test_input, &input_params, NULL, 48000, 1024, 
+                                   paClipOff, NULL, NULL);
+        if (err != paNoError) {
+            printf("[DEBUG]   Input test FAILED: %s\n", Pa_GetErrorText(err));
+            result = 0;
+        } else {
+            printf("[DEBUG]   Input test PASSED\n");
+            Pa_CloseStream(test_input);
+        }
+    }
+    
+    // Test output
+    if (device_info->maxOutputChannels > 0) {
+        output_params.device = device;
+        output_params.channelCount = 1;
+        output_params.sampleFormat = paFloat32;
+        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+        output_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError err = Pa_OpenStream(&test_output, NULL, &output_params, 48000, 1024, 
+                                   paClipOff, NULL, NULL);
+        if (err != paNoError) {
+            printf("[DEBUG]   Output test FAILED: %s\n", Pa_GetErrorText(err));
+            result = 0;
+        } else {
+            printf("[DEBUG]   Output test PASSED\n");
+            Pa_CloseStream(test_output);
+        }
+    }
+    
+    return result;
 }
 
 PaDeviceIndex get_device_for_channel(const char* channel) {
