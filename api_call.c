@@ -405,22 +405,6 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
     }
     
-    // Debug: Check if we have audio data
-    if (jitter->frame_count > 0) {
-        struct audio_frame *current_frame = &jitter->frames[jitter->read_index];
-        if (current_frame->valid) {
-            float max_sample = 0.0f;
-            for (int i = 0; i < current_frame->sample_count; i++) {
-                float abs_sample = fabsf(current_frame->samples[i]);
-                if (abs_sample > max_sample) max_sample = abs_sample;
-            }
-            if (callback_count % 100 == 0) {
-                printf("Audio frame has %d samples, max level: %.4f\n", 
-                       current_frame->sample_count, max_sample);
-            }
-        }
-    }
-    
     pthread_mutex_lock(&jitter->mutex);
     
     unsigned long frames_filled = 0;
@@ -817,7 +801,11 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("[INFO] Received WebSocket message (%d bytes): %.*s\n", (int)len, (int)len, (char *)in);
+            if (len > 0) {
+                printf("[INFO] Received WebSocket message (%d bytes): %.*s\n", (int)len, (int)len, (char *)in);
+            } else {
+                printf("[INFO] Received WebSocket message (0 bytes): \n");
+            }
             
             char *data = malloc(len + 1);
             if (data) {
@@ -1385,40 +1373,52 @@ void* gpio_monitor_worker(void* arg) {
             gpio_38_state = curr_val_38;
             printf("PIN 38: %s\n", curr_val_38 == 0 ? "ACTIVE" : "INACTIVE");
             send_websocket_transmit_event(global_channel_ids[0], curr_val_38 == 0 ? 1 : 0);
+            
+            // Set gpio_active flag for audio stream
+            if (channels[0].active) {
+                channels[0].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
+                printf("Channel %s audio %s\n", global_channel_ids[0], 
+                       channels[0].audio.gpio_active ? "ENABLED" : "DISABLED");
+            }
         }
 
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
             gpio_40_state = curr_val_40;
             printf("PIN 40: %s\n", curr_val_40 == 0 ? "ACTIVE" : "INACTIVE");
             send_websocket_transmit_event(global_channel_ids[1], curr_val_40 == 0 ? 1 : 0);
+            
+            // Set gpio_active flag for audio stream
+            if (channels[1].active) {
+                channels[1].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
+                printf("Channel %s audio %s\n", global_channel_ids[1], 
+                       channels[1].audio.gpio_active ? "ENABLED" : "DISABLED");
+            }
         }
 
         if (curr_val_16 != gpio_16_state && curr_val_16 != -1) {
             gpio_16_state = curr_val_16;
             printf("PIN 16: %s\n", curr_val_16 == 0 ? "ACTIVE" : "INACTIVE");
             send_websocket_transmit_event(global_channel_ids[2], curr_val_16 == 0 ? 1 : 0);
+            
+            // Set gpio_active flag for audio stream
+            if (channels[2].active) {
+                channels[2].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
+                printf("Channel %s audio %s\n", global_channel_ids[2], 
+                       channels[2].audio.gpio_active ? "ENABLED" : "DISABLED");
+            }
         }
 
         if (curr_val_18 != gpio_18_state && curr_val_18 != -1) {
             gpio_18_state = curr_val_18;
             printf("PIN 18: %s\n", curr_val_18 == 0 ? "ACTIVE" : "INACTIVE");
             send_websocket_transmit_event(global_channel_ids[3], curr_val_18 == 0 ? 1 : 0);
-        }
-
-        // Display status every 10 seconds (100 iterations * 100ms = 10 seconds)
-        status_counter++;
-        if (status_counter >= 30) {
-            printf("\n=== GPIO Status Report (every 10 seconds) ===\n");
-            printf("PIN 38 (GPIO 20): %s (Channel: %s)\n", 
-                   curr_val_38 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[0]);
-            printf("PIN 40 (GPIO 21): %s (Channel: %s)\n", 
-                   curr_val_40 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[1]);
-            printf("PIN 16 (GPIO 23): %s (Channel: %s)\n", 
-                   curr_val_16 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[2]);
-            printf("PIN 18 (GPIO 24): %s (Channel: %s)\n", 
-                   curr_val_18 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[3]);
-            printf("==========================================\n\n");
-            status_counter = 0;
+            
+            // Set gpio_active flag for audio stream
+            if (channels[3].active) {
+                channels[3].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
+                printf("Channel %s audio %s\n", global_channel_ids[3], 
+                       channels[3].audio.gpio_active ? "ENABLED" : "DISABLED");
+            }
         }
 
         pthread_mutex_unlock(&gpio_mutex);
@@ -1509,19 +1509,6 @@ void* udp_listener_worker(void* arg) {
                         if (encrypted_len > 0) {
                             printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
                             
-                            // Debug: Print first few bytes of encrypted data and key
-                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
-                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
-                                printf("%02x ", encrypted_data[k]);
-                            }
-                            printf("\n");
-                            
-                            printf("UDP Listener: Using key (first 16 bytes): ");
-                            for (int k = 0; k < 16; k++) {
-                                printf("%02x ", target_stream->key[k]);
-                            }
-                            printf("\n");
-                            
                             // Decrypt the data
                             size_t decrypted_len;
                             unsigned char* decrypted = decrypt_data(encrypted_data, encrypted_len, 
@@ -1557,7 +1544,6 @@ void* udp_listener_worker(void* arg) {
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
                                         
                                         // Convert PCM to float and copy to frame (with gain boost)
-                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1566,16 +1552,9 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
-                                            
-                                            // Track max sample for debugging
-                                            float abs_sample = fabsf(sample);
-                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
-                                        
-                                        printf("UDP: Audio frame queued for %s - %d samples, max level: %.4f\n", 
-                                               channel_id, samples, max_sample);
                                         
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
@@ -1588,7 +1567,6 @@ void* udp_listener_worker(void* arg) {
                                         jitter->frame_count--;
                                         
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
-                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1597,10 +1575,6 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
-                                            
-                                            // Track max sample for debugging
-                                            float abs_sample = fabsf(sample);
-                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
