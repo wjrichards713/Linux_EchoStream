@@ -405,6 +405,22 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
     }
     
+    // Debug: Check if we have audio data
+    if (jitter->frame_count > 0) {
+        struct audio_frame *current_frame = &jitter->frames[jitter->read_index];
+        if (current_frame->valid) {
+            float max_sample = 0.0f;
+            for (int i = 0; i < current_frame->sample_count; i++) {
+                float abs_sample = fabsf(current_frame->samples[i]);
+                if (abs_sample > max_sample) max_sample = abs_sample;
+            }
+            if (callback_count % 100 == 0) {
+                printf("Audio frame has %d samples, max level: %.4f\n", 
+                       current_frame->sample_count, max_sample);
+            }
+        }
+    }
+    
     pthread_mutex_lock(&jitter->mutex);
     
     unsigned long frames_filled = 0;
@@ -1541,6 +1557,7 @@ void* udp_listener_worker(void* arg) {
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
                                         
                                         // Convert PCM to float and copy to frame (with gain boost)
+                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1549,9 +1566,16 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
+                                            
+                                            // Track max sample for debugging
+                                            float abs_sample = fabsf(sample);
+                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
+                                        
+                                        printf("UDP: Audio frame queued for %s - %d samples, max level: %.4f\n", 
+                                               channel_id, samples, max_sample);
                                         
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
@@ -1564,6 +1588,7 @@ void* udp_listener_worker(void* arg) {
                                         jitter->frame_count--;
                                         
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
+                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1572,6 +1597,10 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
+                                            
+                                            // Track max sample for debugging
+                                            float abs_sample = fabsf(sample);
+                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
