@@ -22,7 +22,6 @@
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
-int test_device_capabilities(PaDeviceIndex device);
 int init_gpio_pin(int pin);
 int read_gpio_pin(int pin);
 void cleanup_gpio(int pin);
@@ -343,6 +342,12 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
+    static int callback_count = 0;
+    if (callback_count++ % 100 == 0) {
+        printf("Audio input callback called (frames=%lu, transmitting=%d, gpio_active=%d)\n", 
+               frames, audio_stream->transmitting, audio_stream->gpio_active);
+    }
+    
     if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
         return paContinue;
     }
@@ -403,6 +408,22 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     static int callback_count = 0;
     if (callback_count++ % 100 == 0) {
         printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
+    }
+    
+    // Debug: Check if we have audio data
+    if (jitter->frame_count > 0) {
+        struct audio_frame *current_frame = &jitter->frames[jitter->read_index];
+        if (current_frame->valid) {
+            float max_sample = 0.0f;
+            for (int i = 0; i < current_frame->sample_count; i++) {
+                float abs_sample = fabsf(current_frame->samples[i]);
+                if (abs_sample > max_sample) max_sample = abs_sample;
+            }
+            if (callback_count % 100 == 0) {
+                printf("Audio frame has %d samples, max level: %.4f\n", 
+                       current_frame->sample_count, max_sample);
+            }
+        }
     }
     
     pthread_mutex_lock(&jitter->mutex);
@@ -591,32 +612,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Verify device is valid
-    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(input_params.device);
-    if (!device_info) {
-        fprintf(stderr, "Invalid device %d for channel %s\n", 
-                input_params.device, audio_stream->channel_id);
-        return 0;
-    }
-    
-    printf("Using device %d for channel %s: %s\n", 
-           input_params.device, audio_stream->channel_id, device_info->name);
-    
-    // Check device capabilities and set appropriate channel count
-    const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(input_params.device);
-    if (input_device_info->maxInputChannels >= 1) {
-        input_params.channelCount = 1;  // Use mono for better compatibility
-    } else {
-        fprintf(stderr, "Device %d does not support input channels\n", input_params.device);
-        return 0;
-    }
-    
+    input_params.channelCount = 1;
     input_params.sampleFormat = paFloat32;
-    input_params.suggestedLatency = input_device_info->defaultLowInputLatency;
+    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
-    
-    printf("[DEBUG] Input device %d supports %d input channels, using %d\n", 
-           input_params.device, input_device_info->maxInputChannels, input_params.channelCount);
     
     PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
                                 paClipOff, audio_input_callback, audio_stream);
@@ -626,55 +625,20 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup output stream - use the SAME device as input (like original code)
+    // Setup output stream
     output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;  // Use mono for better compatibility
+    output_params.channelCount = 1;
     output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = input_device_info->defaultLowOutputLatency;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
-    
-    printf("[DEBUG] Using same device %d for both input and output (Input: %d, Output: %d)\n", 
-           output_params.device, input_device_info->maxInputChannels, input_device_info->maxOutputChannels);
     
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
                         paClipOff, audio_output_callback, audio_stream);
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
-        printf("[WARNING] Output stream failed for channel %s (device %d), trying input-only mode\n", 
-               audio_stream->channel_id, audio_stream->device_index);
-        
-        // Log device details for debugging
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-        if (device_info) {
-            printf("[DEBUG] Device info - Name: %s, MaxInputChannels: %d, MaxOutputChannels: %d\n",
-                   device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
-        }
-        
-        // Try input-only mode as fallback
         Pa_CloseStream(audio_stream->input_stream);
-        audio_stream->input_stream = NULL;
-        
-        // Reopen input stream
-        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
-                            paClipOff, audio_input_callback, audio_stream);
-        
-        if (err != paNoError) {
-            fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
-            return 0;
-        }
-        
-        // Start input stream only
-        err = Pa_StartStream(audio_stream->input_stream);
-        if (err != paNoError) {
-            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-            Pa_CloseStream(audio_stream->input_stream);
-            return 0;
-        }
-        
-        printf("[INFO] Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
-        audio_stream->transmitting = 1;
-        return 1;
+        return 0;
     }
     
     // Start both streams
@@ -801,11 +765,7 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            if (len > 0) {
-                printf("[INFO] Received WebSocket message (%d bytes): %.*s\n", (int)len, (int)len, (char *)in);
-            } else {
-                printf("[INFO] Received WebSocket message (0 bytes): \n");
-            }
+            printf("Received WebSocket message: %.*s\n", (int)len, (char *)in);
             
             char *data = malloc(len + 1);
             if (data) {
@@ -826,7 +786,6 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                             printf("UDP connection established\n");
                             
                             // Start transmission for all active channels
-                            int audio_channels_ready = 0;
                             for (int i = 0; i < 4; i++) {
                                 if (channels[i].active) {
                                     const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
@@ -838,18 +797,8 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                                     
                                     if (start_transmission_for_channel(&channels[i].audio)) {
                                         printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
-                                        audio_channels_ready++;
-                                    } else {
-                                        printf("Audio transmission failed for channel %s, but continuing with WebSocket functionality\n", channels[i].audio.channel_id);
                                     }
                                 }
-                            }
-                            
-                            if (audio_channels_ready == 0) {
-                                printf("No audio channels ready, but WebSocket communication and GPIO monitoring will continue\n");
-                                printf("The application will still send/receive WebSocket messages and monitor GPIO pins\n");
-                            } else {
-                                printf("Audio ready for %d out of 4 channels\n", audio_channels_ready);
                             }
                         }
                     }
@@ -1038,9 +987,7 @@ void auto_assign_usb_devices() {
     int usb_count = 0;
     
     printf("Scanning for USB audio devices...\n");
-    printf("Total PortAudio devices found: %d\n", num_devices);
     
-    // Look for USB devices - be more permissive like the original
     for (int i = 0; i < num_devices && usb_count < 4; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
@@ -1050,37 +997,8 @@ void auto_assign_usb_devices() {
                 if (strstr(name, "USB") || strstr(name, "usb") || 
                     strstr(name, "Audio Device") || strstr(name, "Headset")) {
                     usb_devices[usb_count] = i;
-                    printf("USB Device %d assigned to slot %d: %s (Input: %d, Output: %d)\n", 
-                           i, usb_count, name, device_info->maxInputChannels, device_info->maxOutputChannels);
+                    printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
                     usb_count++;
-                }
-            }
-        }
-    }
-    
-    // If we don't have enough USB devices, use any ALSA input device
-    if (usb_count < 4) {
-        printf("Only found %d USB devices, looking for other ALSA input devices...\n", usb_count);
-        for (int i = 0; i < num_devices && usb_count < 4; i++) {
-            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-            if (device_info && device_info->maxInputChannels > 0) {
-                const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-                if (host_info && host_info->type == paALSA) {
-                    // Check if we already assigned this device
-                    int already_assigned = 0;
-                    for (int j = 0; j < usb_count; j++) {
-                        if (usb_devices[j] == i) {
-                            already_assigned = 1;
-                            break;
-                        }
-                    }
-                    
-                    if (!already_assigned) {
-                        usb_devices[usb_count] = i;
-                        printf("ALSA Device %d assigned to slot %d: %s (Input: %d, Output: %d)\n", 
-                               i, usb_count, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
-                        usb_count++;
-                    }
                 }
             }
         }
@@ -1099,98 +1017,14 @@ void auto_assign_usb_devices() {
         }
     }
     
-    // Add fallback devices for better reliability
-    printf("Setting up device fallbacks for better reliability...\n");
+    printf("Channel assignments:\n");
     for (int i = 0; i < 4; i++) {
-        // If primary device is invalid, try to find a working alternative
-        if (usb_devices[i] == paNoDevice || !Pa_GetDeviceInfo(usb_devices[i])) {
-            printf("Device %d is invalid, finding fallback...\n", i);
-            for (int j = 0; j < num_devices; j++) {
-                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(j);
-                if (device_info && device_info->maxInputChannels > 0) {
-                    const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-                    if (host_info && host_info->type == paALSA) {
-                        usb_devices[i] = j;
-                        printf("Fallback device %d assigned to slot %d: %s\n", j, i, device_info->name);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    
-    printf("Final channel assignments:\n");
-    for (int i = 0; i < 4; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
-        printf("Channel %s -> Device %d: %s\n", 
-               global_channel_ids[i], usb_devices[i], 
-               device_info ? device_info->name : "Invalid Device");
-        
-        // Test device capabilities
-        if (device_info) {
-            printf("Testing device %d capabilities...\n", usb_devices[i]);
-            test_device_capabilities(usb_devices[i]);
-        }
+        printf("Channel %s -> Device %d\n", global_channel_ids[i], usb_devices[i]);
     }
     
     device_assigned = 1;
 }
 
-int test_device_capabilities(PaDeviceIndex device) {
-    if (device == paNoDevice) return 0;
-    
-    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(device);
-    if (!device_info) return 0;
-    
-    printf("[DEBUG] Testing device %d: %s\n", device, device_info->name);
-    printf("[DEBUG]   Input channels: %d, Output channels: %d\n", 
-           device_info->maxInputChannels, device_info->maxOutputChannels);
-    
-    // Test if we can open both input and output streams
-    PaStreamParameters input_params, output_params;
-    PaStream *test_input = NULL, *test_output = NULL;
-    int result = 1;
-    
-    // Test input
-    if (device_info->maxInputChannels > 0) {
-        input_params.device = device;
-        input_params.channelCount = 1;
-        input_params.sampleFormat = paFloat32;
-        input_params.suggestedLatency = device_info->defaultLowInputLatency;
-        input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&test_input, &input_params, NULL, 48000, 1024, 
-                                   paClipOff, NULL, NULL);
-        if (err != paNoError) {
-            printf("[DEBUG]   Input test FAILED: %s\n", Pa_GetErrorText(err));
-            result = 0;
-        } else {
-            printf("[DEBUG]   Input test PASSED\n");
-            Pa_CloseStream(test_input);
-        }
-    }
-    
-    // Test output
-    if (device_info->maxOutputChannels > 0) {
-        output_params.device = device;
-        output_params.channelCount = 1;
-        output_params.sampleFormat = paFloat32;
-        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
-        output_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&test_output, NULL, &output_params, 48000, 1024, 
-                                   paClipOff, NULL, NULL);
-        if (err != paNoError) {
-            printf("[DEBUG]   Output test FAILED: %s\n", Pa_GetErrorText(err));
-            result = 0;
-        } else {
-            printf("[DEBUG]   Output test PASSED\n");
-            Pa_CloseStream(test_output);
-        }
-    }
-    
-    return result;
-}
 
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
@@ -1372,53 +1206,85 @@ void* gpio_monitor_worker(void* arg) {
         if (curr_val_38 != gpio_38_state && curr_val_38 != -1) {
             gpio_38_state = curr_val_38;
             printf("PIN 38: %s\n", curr_val_38 == 0 ? "ACTIVE" : "INACTIVE");
-            send_websocket_transmit_event(global_channel_ids[0], curr_val_38 == 0 ? 1 : 0);
             
-            // Set gpio_active flag for audio stream
-            if (channels[0].active) {
-                channels[0].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
-                printf("Channel %s audio %s\n", global_channel_ids[0], 
-                       channels[0].audio.gpio_active ? "ENABLED" : "DISABLED");
+            // Find and set gpio_active flag for the correct audio stream
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[0]) == 0) {
+                    channels[i].audio.gpio_active = (curr_val_38 == 0) ? 1 : 0;
+                    printf("Channel %s audio %s\n", global_channel_ids[0], 
+                           channels[i].audio.gpio_active ? "ENABLED" : "DISABLED");
+                    break;
+                }
             }
+            
+            send_websocket_transmit_event(global_channel_ids[0], curr_val_38 == 0 ? 1 : 0);
         }
 
         if (curr_val_40 != gpio_40_state && curr_val_40 != -1) {
             gpio_40_state = curr_val_40;
             printf("PIN 40: %s\n", curr_val_40 == 0 ? "ACTIVE" : "INACTIVE");
-            send_websocket_transmit_event(global_channel_ids[1], curr_val_40 == 0 ? 1 : 0);
             
-            // Set gpio_active flag for audio stream
-            if (channels[1].active) {
-                channels[1].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
-                printf("Channel %s audio %s\n", global_channel_ids[1], 
-                       channels[1].audio.gpio_active ? "ENABLED" : "DISABLED");
+            // Find and set gpio_active flag for the correct audio stream
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[1]) == 0) {
+                    channels[i].audio.gpio_active = (curr_val_40 == 0) ? 1 : 0;
+                    printf("Channel %s audio %s\n", global_channel_ids[1], 
+                           channels[i].audio.gpio_active ? "ENABLED" : "DISABLED");
+                    break;
+                }
             }
+            
+            send_websocket_transmit_event(global_channel_ids[1], curr_val_40 == 0 ? 1 : 0);
         }
 
         if (curr_val_16 != gpio_16_state && curr_val_16 != -1) {
             gpio_16_state = curr_val_16;
             printf("PIN 16: %s\n", curr_val_16 == 0 ? "ACTIVE" : "INACTIVE");
-            send_websocket_transmit_event(global_channel_ids[2], curr_val_16 == 0 ? 1 : 0);
             
-            // Set gpio_active flag for audio stream
-            if (channels[2].active) {
-                channels[2].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
-                printf("Channel %s audio %s\n", global_channel_ids[2], 
-                       channels[2].audio.gpio_active ? "ENABLED" : "DISABLED");
+            // Find and set gpio_active flag for the correct audio stream
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[2]) == 0) {
+                    channels[i].audio.gpio_active = (curr_val_16 == 0) ? 1 : 0;
+                    printf("Channel %s audio %s\n", global_channel_ids[2], 
+                           channels[i].audio.gpio_active ? "ENABLED" : "DISABLED");
+                    break;
+                }
             }
+            
+            send_websocket_transmit_event(global_channel_ids[2], curr_val_16 == 0 ? 1 : 0);
         }
 
         if (curr_val_18 != gpio_18_state && curr_val_18 != -1) {
             gpio_18_state = curr_val_18;
             printf("PIN 18: %s\n", curr_val_18 == 0 ? "ACTIVE" : "INACTIVE");
-            send_websocket_transmit_event(global_channel_ids[3], curr_val_18 == 0 ? 1 : 0);
             
-            // Set gpio_active flag for audio stream
-            if (channels[3].active) {
-                channels[3].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
-                printf("Channel %s audio %s\n", global_channel_ids[3], 
-                       channels[3].audio.gpio_active ? "ENABLED" : "DISABLED");
+            // Find and set gpio_active flag for the correct audio stream
+            for (int i = 0; i < 4; i++) {
+                if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[3]) == 0) {
+                    channels[i].audio.gpio_active = (curr_val_18 == 0) ? 1 : 0;
+                    printf("Channel %s audio %s\n", global_channel_ids[3], 
+                           channels[i].audio.gpio_active ? "ENABLED" : "DISABLED");
+                    break;
+                }
             }
+            
+            send_websocket_transmit_event(global_channel_ids[3], curr_val_18 == 0 ? 1 : 0);
+        }
+
+        // Display status every 10 seconds (100 iterations * 100ms = 10 seconds)
+        status_counter++;
+        if (status_counter >= 30) {
+            printf("\n=== GPIO Status Report (every 10 seconds) ===\n");
+            printf("PIN 38 (GPIO 20): %s (Channel: %s)\n", 
+                   curr_val_38 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[0]);
+            printf("PIN 40 (GPIO 21): %s (Channel: %s)\n", 
+                   curr_val_40 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[1]);
+            printf("PIN 16 (GPIO 23): %s (Channel: %s)\n", 
+                   curr_val_16 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[2]);
+            printf("PIN 18 (GPIO 24): %s (Channel: %s)\n", 
+                   curr_val_18 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[3]);
+            printf("==========================================\n\n");
+            status_counter = 0;
         }
 
         pthread_mutex_unlock(&gpio_mutex);
@@ -1449,9 +1315,9 @@ void* udp_listener_worker(void* arg) {
         
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
-            // printf("UDP Listener: Received %d bytes from %s:%d\n", 
-            //        bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-            // printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
+            printf("UDP Listener: Received %d bytes from %s:%d\n", 
+                   bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+            printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
             
             // Parse JSON message
             struct json_object *json = json_tokener_parse(buffer);
@@ -1509,6 +1375,19 @@ void* udp_listener_worker(void* arg) {
                         if (encrypted_len > 0) {
                             printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
                             
+                            // Debug: Print first few bytes of encrypted data and key
+                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
+                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
+                                printf("%02x ", encrypted_data[k]);
+                            }
+                            printf("\n");
+                            
+                            printf("UDP Listener: Using key (first 16 bytes): ");
+                            for (int k = 0; k < 16; k++) {
+                                printf("%02x ", target_stream->key[k]);
+                            }
+                            printf("\n");
+                            
                             // Decrypt the data
                             size_t decrypted_len;
                             unsigned char* decrypted = decrypt_data(encrypted_data, encrypted_len, 
@@ -1544,6 +1423,7 @@ void* udp_listener_worker(void* arg) {
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
                                         
                                         // Convert PCM to float and copy to frame (with gain boost)
+                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1552,9 +1432,16 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
+                                            
+                                            // Track max sample for debugging
+                                            float abs_sample = fabsf(sample);
+                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
+                                        
+                                        printf("UDP: Audio frame queued for %s - %d samples, max level: %.4f\n", 
+                                               channel_id, samples, max_sample);
                                         
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
@@ -1567,6 +1454,7 @@ void* udp_listener_worker(void* arg) {
                                         jitter->frame_count--;
                                         
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
+                                        float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
                                             // Apply 10x gain boost for very quiet audio
@@ -1575,6 +1463,10 @@ void* udp_listener_worker(void* arg) {
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
                                             frame->samples[j] = sample;
+                                            
+                                            // Track max sample for debugging
+                                            float abs_sample = fabsf(sample);
+                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
                                         frame->sample_count = samples;
                                         frame->valid = 1;
