@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "tone_detect.h"
 #include "audio.h"
 #include <math.h>
@@ -337,7 +338,7 @@ int apply_frequency_filters(float* magnitudes, int count) {
 }
 
 // Detect new tones
-int detect_new_tones(float* magnitudes, int count) {
+int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
     // Simple new tone detection - look for strong peaks not in defined tones
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         float freq = global_tone_detection.peak_frequencies[i];
