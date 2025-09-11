@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2 -g
-LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lfftw3 -lm -lpthread
+LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lfftw3 -lm -lpthread -lcrypto -lssl
 
 # Source files
 SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
