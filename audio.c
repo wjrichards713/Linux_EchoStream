@@ -3,6 +3,7 @@
 #include "udp.h"
 #include "tone_detect.h"
 #include <math.h>
+#include <unistd.h>
 
 // Global audio state
 struct channel_context channels[MAX_CHANNELS] = {0};
@@ -31,10 +32,11 @@ int init_tone_detect_control(void) {
 int enable_tone_detection(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 1;
-    global_tone_detect.card1_input_enabled = 1;  // Enable Card 1 input
-    global_tone_detect.card3_passthrough_mode = 1;  // Switch Card 3 to passthrough
+    global_tone_detect.card1_input_enabled = 1;  // Enable Card 1 input for tone detection
+    global_tone_detect.card3_passthrough_mode = 1;  // Switch Card 3 to passthrough mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[INFO] Tone detection ENABLED - Card 1 input active, Card 3 passthrough mode\n");
+    printf("[INFO] Tone detection ENABLED - Card 1 input active for tone detection, Card 3 passthrough mode\n");
+    printf("[INFO] Card 1 output continues to play EchoStream audio\n");
     return 1;
 }
 
@@ -42,10 +44,11 @@ int enable_tone_detection(void) {
 int disable_tone_detection(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 0;
-    global_tone_detect.card1_input_enabled = 0;  // Disable Card 1 input
-    global_tone_detect.card3_passthrough_mode = 0;  // Switch Card 3 to EchoStream
+    global_tone_detect.card1_input_enabled = 0;  // Disable Card 1 input for tone detection
+    global_tone_detect.card3_passthrough_mode = 0;  // Switch Card 3 to EchoStream mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[INFO] Tone detection DISABLED - Card 1 input disabled, Card 3 EchoStream mode\n");
+    printf("[INFO] Tone detection DISABLED - Card 1 input disabled for tone detection, Card 3 EchoStream mode\n");
+    printf("[INFO] Card 1 output continues to play EchoStream audio\n");
     return 1;
 }
 
@@ -102,7 +105,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     int is_card1 = (strcmp(audio_stream->channel_id, "555") == 0);
     int input_enabled = is_card1 ? is_card1_input_enabled() : 1;
     
-    if (!audio_stream->transmitting || !input || !audio_stream->gpio_active || !input_enabled) {
+    if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
         return paContinue;
     }
     
@@ -125,12 +128,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Feed audio to tone detection system
-        feed_audio_to_tone_detection(samples, frames);
+        // Tone detection reads directly from shared buffer
     }
     
-    // Process audio for EchoStream (only if input is enabled AND tone detect is disabled)
-    if (input_enabled && !(is_card1 && is_tone_detect_enabled())) {
+    // Process audio for EchoStream (only if input is enabled for this channel)
+    if (input_enabled) {
         for (unsigned long i = 0; i < frames; i++) {
             audio_stream->input_buffer[audio_stream->input_buffer_pos++] = samples[i];
             
@@ -721,16 +723,4 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     ctx->active = 1;
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
-}
-
-// Feed audio to tone detection system
-void feed_audio_to_tone_detection(const float* samples, int sample_count) {
-    if (!global_tone_detect_context.active) {
-        return;
-    }
-    
-    // Add samples to tone detection buffer
-    for (int i = 0; i < sample_count && global_tone_detect_context.buffer_pos < global_tone_detect_context.buffer_size; i++) {
-        global_tone_detect_context.audio_buffer[global_tone_detect_context.buffer_pos++] = samples[i];
-    }
 }

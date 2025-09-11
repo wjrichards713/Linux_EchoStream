@@ -155,11 +155,19 @@ int main(int argc, char *argv[]) {
     add_frequency_filter("high_pass", 10000.0f, 0, "above");
     
     printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
-    printf("Tone detection control available:\n");
+    printf("\n=== SYSTEM BEHAVIOR ===\n");
+    printf("Card 1 (Channel 555):\n");
+    printf("  - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
+    printf("  - Input: %s (for tone detection and passthrough)\n", 
+           is_card1_input_enabled() ? "ENABLED" : "DISABLED");
+    printf("Card 3 (Channel 308e...):\n");
+    printf("  - Output: %s\n", 
+           is_card3_passthrough_mode() ? "PASSTHROUGH (Card 1 input)" : "ECHOSTREAM");
+    printf("\nTone detection control available:\n");
     printf("  - Call enable_tone_detection() to enable tone detect mode\n");
     printf("  - Call disable_tone_detection() to disable tone detect mode\n");
     printf("  - Current mode: %s\n", is_tone_detect_enabled() ? "ENABLED" : "DISABLED");
-    printf("Tone detection system started with example tones:\n");
+    printf("\nTone detection system started with example tones:\n");
     printf("  - Test Tone 1: 1000Hz -> 2000Hz\n");
     printf("  - Test Tone 2: 1500Hz -> 2500Hz\n");
     
@@ -167,7 +175,7 @@ int main(int argc, char *argv[]) {
     pthread_join(ws_thread, NULL);
     
     // Cleanup
-    stop_tone_detection_thread();
+    stop_tone_detection();
     stop_audio_passthrough();
     curl_global_cleanup();
     Pa_Terminate();
