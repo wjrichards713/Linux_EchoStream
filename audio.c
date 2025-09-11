@@ -457,7 +457,13 @@ void* audio_passthrough_thread(void* arg) {
     
     printf("[INFO] Audio passthrough thread started\n");
     
+    // Buffer for smoothing audio output
+    float output_buffer[SAMPLES_PER_FRAME];
+    int underflow_count = 0;
+    
     while (global_passthrough.active && !global_interrupted) {
+        int samples_to_copy = 0;
+        
         pthread_mutex_lock(&global_shared_buffer.mutex);
         
         // Wait for new audio data
@@ -466,19 +472,49 @@ void* audio_passthrough_thread(void* arg) {
         }
         
         if (global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
-            // Play audio on output device
-            PaError err = Pa_WriteStream(global_passthrough.output_stream, 
-                                       global_shared_buffer.samples, 
-                                       global_shared_buffer.sample_count);
+            // Copy audio data to output buffer
+            samples_to_copy = global_shared_buffer.sample_count;
+            if (samples_to_copy > SAMPLES_PER_FRAME) {
+                samples_to_copy = SAMPLES_PER_FRAME;
+            }
             
-            if (err != paNoError) {
-                fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
+            for (int i = 0; i < samples_to_copy; i++) {
+                output_buffer[i] = global_shared_buffer.samples[i];
             }
             
             global_shared_buffer.valid = 0; // Mark as consumed
         }
         
         pthread_mutex_unlock(&global_shared_buffer.mutex);
+        
+        // Write audio data to output stream
+        if (samples_to_copy > 0) {
+            static int write_count = 0;
+            write_count++;
+            
+            PaError err = Pa_WriteStream(global_passthrough.output_stream, 
+                                       output_buffer, 
+                                       samples_to_copy);
+            
+            if (err != paNoError) {
+                if (err == paOutputUnderflowed) {
+                    underflow_count++;
+                    if (underflow_count % 50 == 0) {
+                        printf("[DEBUG] Passthrough underflow count: %d (writes: %d)\n", underflow_count, write_count);
+                    }
+                } else {
+                    fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
+                }
+            } else {
+                underflow_count = 0; // Reset counter on successful write
+                if (write_count % 100 == 0) {
+                    printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
+                }
+            }
+        }
+        
+        // Small delay to prevent overwhelming the output device
+        usleep(5000); // 5ms delay to reduce underflow
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
@@ -499,8 +535,8 @@ int start_audio_passthrough(void) {
     int num_devices = Pa_GetDeviceCount();
     global_passthrough.output_device = paNoDevice;
     
-    // First try to use a different USB device for output
-    for (int i = 0; i < 4; i++) {
+    // First try to use a different USB device for output (not device 0)
+    for (int i = 1; i < 4; i++) {
         if (usb_devices[i] != paNoDevice) {
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
             if (device_info && device_info->maxOutputChannels > 0) {
