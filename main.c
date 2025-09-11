@@ -67,6 +67,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Initialize tone detection control
+    if (!init_tone_detect_control()) {
+        fprintf(stderr, "Failed to initialize tone detection control\n");
+        return 1;
+    }
+    
     // Initialize shared audio buffer and passthrough
     if (!init_shared_audio_buffer()) {
         fprintf(stderr, "Failed to initialize shared audio buffer\n");
@@ -105,17 +111,16 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Start audio passthrough now that devices are assigned
-    if (!start_audio_passthrough()) {
-        fprintf(stderr, "Failed to start audio passthrough\n");
+    // Connect global WebSocket for all channels
+    if (!connect_global_websocket()) {
+        fprintf(stderr, "Failed to connect WebSocket\n");
         curl_global_cleanup();
         return 1;
     }
     
-    // Connect global WebSocket for all channels
-    if (!connect_global_websocket()) {
-        fprintf(stderr, "Failed to connect WebSocket\n");
-        stop_audio_passthrough();
+    // Start audio passthrough after WebSocket is connected and channels are set up
+    if (!start_audio_passthrough()) {
+        fprintf(stderr, "Failed to start audio passthrough\n");
         curl_global_cleanup();
         return 1;
     }
@@ -128,6 +133,10 @@ int main(int argc, char *argv[]) {
     }
     
     printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
+    printf("Tone detection control available:\n");
+    printf("  - Call enable_tone_detection() to enable tone detect mode\n");
+    printf("  - Call disable_tone_detection() to disable tone detect mode\n");
+    printf("  - Current mode: %s\n", is_tone_detect_enabled() ? "ENABLED" : "DISABLED");
     
     // Wait for the WebSocket thread to complete
     pthread_join(ws_thread, NULL);
