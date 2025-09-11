@@ -78,7 +78,7 @@ sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
 # Install FFTW library for tone detection
 print_status "Installing FFTW library for tone detection..."
-sudo apt install -y libfftw3-dev libfftw3-3
+sudo apt install -y libfftw3-dev libfftw3-double3 libfftw3-single3
 
 # Verify FFTW installation
 print_status "Verifying FFTW installation..."
@@ -86,14 +86,10 @@ if make test-fftw >/dev/null 2>&1; then
     print_success "FFTW library installed and working correctly"
 else
     print_error "FFTW library installation failed or not working"
-    print_status "Trying alternative FFTW packages..."
-    sudo apt install -y libfftw3-double3 libfftw3-single3
-    if make test-fftw >/dev/null 2>&1; then
-        print_success "FFTW library working with alternative packages"
-    else
-        print_error "FFTW installation still failing. Please check manually."
-        exit 1
-    fi
+    print_status "Trying to find available FFTW packages..."
+    apt search libfftw3 | grep -E "libfftw3.*dev|libfftw3.*3"
+    print_error "Please install the correct FFTW packages manually and try again."
+    exit 1
 fi
 
 # Check if api_call.c exists
