@@ -2,9 +2,6 @@
 #include "audio.h"
 #include "crypto.h"
 #include "websocket.h"
-#include <math.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 
 // Global UDP state
 int global_udp_socket = -1;
@@ -80,7 +77,6 @@ int setup_global_udp(struct server_config* config) {
 }
 
 void* heartbeat_worker(void* arg) {
-    (void)arg; // Suppress unused parameter warning
     printf("Heartbeat worker started\n");
     
     while (!global_interrupted) {
@@ -106,7 +102,6 @@ void* heartbeat_worker(void* arg) {
 }
 
 void* udp_listener_worker(void* arg) {
-    (void)arg; // Suppress unused parameter warning
     printf("UDP listener worker started\n");
     
     if (global_udp_socket < 0) {
@@ -193,7 +188,7 @@ void* udp_listener_worker(void* arg) {
                             
                             // Debug: Print first few bytes of encrypted data and key
                             printf("UDP Listener: Encrypted data (first 16 bytes): ");
-                            for (int k = 0; k < 16 && k < (int)encrypted_len; k++) {
+                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
                                 printf("%02x ", encrypted_data[k]);
                             }
                             printf("\n");

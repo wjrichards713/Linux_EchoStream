@@ -1,6 +1,5 @@
 #include "gpio.h"
 #include "audio.h"
-#include <unistd.h>
 #include "websocket.h"
 
 // GPIO state variables
@@ -64,7 +63,6 @@ void cleanup_gpio(int pin) {
 }
 
 void* gpio_monitor_worker(void* arg) {
-    (void)arg; // Suppress unused parameter warning
     int gpio_pin_38 = 20;   // GPIO 20 (physical pin 38)
     int gpio_pin_40 = 21;   // GPIO 21 (physical pin 40)
     int gpio_pin_16 = 23;   // GPIO 23 (physical pin 16)

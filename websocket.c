@@ -1,7 +1,6 @@
 #include "websocket.h"
 #include "audio.h"
 #include "udp.h"
-#include "crypto.h"
 
 // Global WebSocket state
 struct lws_context *global_ws_context = NULL;
@@ -11,7 +10,6 @@ int global_config_initialized = 0;
 
 static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                              void *user, void *in, size_t len) {
-    (void)user; // Suppress unused parameter warning
     // Single WebSocket connection handles all channels
     if (wsi != global_ws_client) {
         return 0;
@@ -141,9 +139,8 @@ static struct lws_protocols protocols[] = {
         4096,
         0,  // id field
         NULL,  // user field
-        0,  // tx_packet_size
     },
-    { NULL, NULL, 0, 0, 0, NULL, 0 }
+    { NULL, NULL, 0, 0, 0, NULL }
 };
 
 int parse_websocket_config(const char *json_str, struct server_config *cfg) {
@@ -276,7 +273,6 @@ int connect_global_websocket() {
 }
 
 void* global_websocket_thread(void* arg) {
-    (void)arg; // Suppress unused parameter warning
     printf("Starting global WebSocket thread\n");
     
     // Reset global_interrupted to ensure it's not corrupted

@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -O2 -D_GNU_SOURCE -D_DEFAULT_SOURCE
+CFLAGS = -Wall -Wextra -std=c99 -I/usr/include
 LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod -lfftw3f -lm
 
 # Source files
@@ -9,33 +9,9 @@ OBJECTS = $(SOURCES:.c=.o)
 # Target executable
 TARGET = echostream
 
-# Check for required libraries
-CHECK_LIBS = curl json-c websockets portaudio opus ssl crypto gpiod fftw3f
-
-all: check-deps $(TARGET)
-
-# Check for required dependencies
-check-deps:
-	@echo "Checking for required libraries..."
-	@for lib in $(CHECK_LIBS); do \
-		if ! pkg-config --exists $$lib 2>/dev/null && ! ldconfig -p | grep -q "lib$$lib"; then \
-			echo "Warning: Library $$lib not found. Please install it."; \
-		fi; \
-	done
-	@echo "Checking FFTW3 specifically..."
-	@if pkg-config --exists fftw3f 2>/dev/null; then \
-		echo "✓ FFTW3 found via pkg-config"; \
-	elif ldconfig -p | grep -q "libfftw3f"; then \
-		echo "✓ FFTW3 found in system libraries"; \
-	elif [ -f "/usr/include/fftw3.h" ]; then \
-		echo "✓ FFTW3 headers found in /usr/include"; \
-	else \
-		echo "✗ FFTW3 not found. Install with: sudo apt install -y libfftw3-dev"; \
-	fi
-	@echo "Dependency check complete."
+all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
-	@echo "Linking $(TARGET) with tone detection support..."
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LIBS)
 
 # Compile individual object files
@@ -43,44 +19,7 @@ $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	@echo "Cleaning build files..."
 	rm -f $(TARGET) $(OBJECTS)
-	@echo "Clean complete."
-
-# Install dependencies (for development)
-install-deps:
-	@echo "Installing required dependencies..."
-	sudo apt update
-	sudo apt install -y build-essential cmake git pkg-config wget curl make
-	sudo apt install -y libportaudio2 libportaudiocpp0 portaudio19-dev alsa-utils
-	sudo apt install -y libopus-dev libopus0
-	sudo apt install -y libssl-dev openssl
-	sudo apt install -y libjson-c-dev libjson-c5
-	sudo apt install -y libcurl4-openssl-dev curl
-	sudo apt install -y libwebsockets-dev
-	sudo apt install -y libc6-dev
-	sudo apt install -y raspi-gpio gpiod libgpiod-dev
-	sudo apt install -y libfftw3-dev
-	@echo "Dependencies installed successfully!"
-
-# Install just FFTW3 (for troubleshooting)
-install-fftw3:
-	@echo "Installing FFTW3 library..."
-	sudo apt update
-	if sudo apt install -y libfftw3-dev; then \
-		echo "✓ FFTW3 installed successfully"; \
-	else \
-		echo "✗ Failed to install libfftw3-dev, trying alternatives..."; \
-		sudo apt install -y libfftw3-3-dev || echo "✗ All FFTW3 installation attempts failed"; \
-	fi
-
-# Debug build
-debug: CFLAGS += -g -DDEBUG
-debug: $(TARGET)
-
-# Release build
-release: CFLAGS += -O3 -DNDEBUG
-release: clean $(TARGET)
 
 install: $(TARGET)
 	sudo cp $(TARGET) /usr/local/bin/
@@ -90,8 +29,14 @@ install: $(TARGET)
 	@echo "Installation complete. Service will run at next boot."
 	@echo "To start now: sudo systemctl start echostream.service"
 
+# Test FFTW installation
+test-fftw: test_fftw.c
+	$(CC) $(CFLAGS) -o test_fftw test_fftw.c -lfftw3f -lm
+	./test_fftw
+	rm -f test_fftw
+
 # Legacy target for backward compatibility
 api_call: $(TARGET)
 	cp $(TARGET) api_call
 
-.PHONY: all clean install api_call check-deps install-deps install-fftw3 debug release
+.PHONY: all clean install api_call test-fftw

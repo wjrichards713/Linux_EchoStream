@@ -1,7 +1,6 @@
 #include "tone_detect.h"
 #include <math.h>
 #include <string.h>
-#include <unistd.h>
 
 // Global tone detection state
 struct tone_detect_channel tone_channels[TONE_DETECT_THREADS] = {0};

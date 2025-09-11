@@ -83,7 +83,6 @@ struct shared_audio_buffer {
     int write_pos;
     int read_pos;
     int available_samples;
-    int buffer_size;
     pthread_mutex_t mutex;
     pthread_cond_t data_available;
 };
