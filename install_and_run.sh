@@ -76,6 +76,10 @@ sudo apt install -y libc6-dev
 print_status "Installing GPIO utilities for RPi 5..."
 sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
+# Install FFTW3 library for tone detection
+print_status "Installing FFTW3 library for tone detection..."
+sudo apt install -y libfftw3-dev libfftw3-3
+
 # Check if api_call.c exists
 if [ ! -f "api_call.c" ]; then
     print_error "api_call.c not found in current directory!"
@@ -96,6 +100,7 @@ if [ $? -eq 0 ]; then
     print_success "Compilation successful!"
 else
     print_error "Compilation failed!"
+    print_error "Please check the error messages above and ensure all dependencies are installed."
     exit 1
 fi
 
