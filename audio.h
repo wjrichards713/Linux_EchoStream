@@ -2,6 +2,7 @@
 #define AUDIO_H
 
 #include "echostream.h"
+#include "tone_detect.h"
 
 // Audio structures
 struct audio_frame {
@@ -104,5 +105,8 @@ int is_card1_input_enabled(void);
 int is_card3_passthrough_mode(void);
 
 // Audio callback functions are static and defined in audio.c
+
+// Tone detection integration
+void feed_audio_to_tone_detection(const float* samples, int sample_count);
 
 #endif // AUDIO_H

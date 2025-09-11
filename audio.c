@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "crypto.h"
 #include "udp.h"
+#include "tone_detect.h"
 #include <math.h>
 
 // Global audio state
@@ -123,10 +124,13 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
+        
+        // Feed audio to tone detection system
+        feed_audio_to_tone_detection(samples, frames);
     }
     
-    // Process audio for EchoStream (only if input is enabled)
-    if (input_enabled) {
+    // Process audio for EchoStream (only if input is enabled AND tone detect is disabled)
+    if (input_enabled && !(is_card1 && is_tone_detect_enabled())) {
         for (unsigned long i = 0; i < frames; i++) {
             audio_stream->input_buffer[audio_stream->input_buffer_pos++] = samples[i];
             
@@ -717,4 +721,16 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     ctx->active = 1;
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
+}
+
+// Feed audio to tone detection system
+void feed_audio_to_tone_detection(const float* samples, int sample_count) {
+    if (!global_tone_detect_context.active) {
+        return;
+    }
+    
+    // Add samples to tone detection buffer
+    for (int i = 0; i < sample_count && global_tone_detect_context.buffer_pos < global_tone_detect_context.buffer_size; i++) {
+        global_tone_detect_context.audio_buffer[global_tone_detect_context.buffer_pos++] = samples[i];
+    }
 }

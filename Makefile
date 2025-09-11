@@ -1,55 +1,42 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99
-LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod
+CFLAGS = -Wall -Wextra -std=c99 -O2 -g
+LDFLAGS = -lportaudio -lopus -lopusfile -lcurl -lwebsockets -lfftw3 -lm -lpthread
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
 OBJECTS = $(SOURCES:.c=.o)
-
-# Target executable
 TARGET = echostream
 
+# Default target
 all: $(TARGET)
 
+# Build the main executable
 $(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LIBS)
+	$(CC) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
-# Compile individual object files
+# Compile source files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Clean build artifacts
 clean:
-	rm -f $(TARGET) $(OBJECTS)
+	rm -f $(OBJECTS) $(TARGET)
 
-install: $(TARGET)
-	sudo cp $(TARGET) /usr/local/bin/
-	@if [ -f "echostream.service" ]; then \
-		sudo cp echostream.service /etc/systemd/system/; \
-		sudo systemctl daemon-reload; \
-		sudo systemctl enable echostream.service; \
-		echo "Service installed and enabled."; \
-	else \
-		echo "Warning: echostream.service not found, skipping service installation."; \
-	fi
-	@echo "Installation complete. Binary installed to /usr/local/bin/$(TARGET)"
-	@echo "To start service: sudo systemctl start echostream.service"
+# Install dependencies (for Ubuntu/Debian)
+install-deps:
+	sudo apt-get update
+	sudo apt-get install -y libportaudio2-dev libopus-dev libopusfile-dev libcurl4-openssl-dev libwebsockets-dev libfftw3-dev
 
-# Install without service (binary only)
-install-bin: $(TARGET)
-	sudo cp $(TARGET) /usr/local/bin/
-	@echo "Binary installed to /usr/local/bin/$(TARGET)"
+# Run the program
+run: $(TARGET)
+	./$(TARGET)
 
-# Uninstall
-uninstall:
-	sudo rm -f /usr/local/bin/$(TARGET)
-	sudo systemctl stop echostream.service 2>/dev/null || true
-	sudo systemctl disable echostream.service 2>/dev/null || true
-	sudo rm -f /etc/systemd/system/echostream.service
-	sudo systemctl daemon-reload
-	@echo "Uninstallation complete."
+# Debug build
+debug: CFLAGS += -DDEBUG -g3
+debug: $(TARGET)
 
-# Legacy target for backward compatibility
-api_call: $(TARGET)
-	cp $(TARGET) api_call
+# Release build
+release: CFLAGS += -DNDEBUG -O3
+release: clean $(TARGET)
 
-.PHONY: all clean install install-bin uninstall api_call
+.PHONY: all clean install-deps run debug release

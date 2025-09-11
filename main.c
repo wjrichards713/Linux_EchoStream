@@ -46,6 +46,9 @@ static void handle_interrupt(int sig) {
     
     // Stop audio passthrough
     stop_audio_passthrough();
+    
+    // Stop tone detection
+    stop_tone_detection();
 }
 
 int main(int argc, char *argv[]) {
@@ -70,6 +73,12 @@ int main(int argc, char *argv[]) {
     // Initialize tone detection control
     if (!init_tone_detect_control()) {
         fprintf(stderr, "Failed to initialize tone detection control\n");
+        return 1;
+    }
+    
+    // Initialize tone detection system
+    if (!init_tone_detection()) {
+        fprintf(stderr, "Failed to initialize tone detection system\n");
         return 1;
     }
     
@@ -125,6 +134,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Start tone detection system
+    if (!start_tone_detection()) {
+        fprintf(stderr, "Failed to start tone detection\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
     pthread_t ws_thread;
     if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
         fprintf(stderr, "Failed to create WebSocket thread\n");
@@ -132,16 +148,26 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Add some example tone definitions for testing
+    add_tone_definition("test_tone_1", 1000.0f, 2000.0f, 500, 500, 50, 50, 3000);
+    add_tone_definition("test_tone_2", 1500.0f, 2500.0f, 300, 300, 30, 30, 2000);
+    add_frequency_filter("low_pass", 300.0f, 0, "below");
+    add_frequency_filter("high_pass", 10000.0f, 0, "above");
+    
     printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
     printf("Tone detection control available:\n");
     printf("  - Call enable_tone_detection() to enable tone detect mode\n");
     printf("  - Call disable_tone_detection() to disable tone detect mode\n");
     printf("  - Current mode: %s\n", is_tone_detect_enabled() ? "ENABLED" : "DISABLED");
+    printf("Tone detection system started with example tones:\n");
+    printf("  - Test Tone 1: 1000Hz -> 2000Hz\n");
+    printf("  - Test Tone 2: 1500Hz -> 2500Hz\n");
     
     // Wait for the WebSocket thread to complete
     pthread_join(ws_thread, NULL);
     
     // Cleanup
+    stop_tone_detection_thread();
     stop_audio_passthrough();
     curl_global_cleanup();
     Pa_Terminate();
