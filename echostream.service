@@ -1,24 +1,27 @@
 [Unit]
-Description=EchoStream Audio Communication Service
-After=network.target mosquitto.service sound.target
-Wants=mosquitto.service
+Description=EchoStream Audio Application
+After=network.target sound.target
+Wants=network.target
 
 [Service]
 Type=simple
 User=will
-WorkingDirectory=/home/will/Linux_EchoStream
-ExecStart=/usr/bin/stdbuf -oL -eL /home/will/Linux_EchoStream/api_call
+Group=audio
+WorkingDirectory=/home/will/.an
+ExecStart=/usr/local/bin/echostream
 Restart=always
-RestartSec=10
-
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
-StandardInput=null
 
-SupplementaryGroups=gpio,audio
-Environment=DISPLAY=:0
-LimitNOFILE=65536
-LimitNPROC=4096
+# GPIO permissions
+SupplementaryGroups=gpio
+
+# Audio permissions
+SupplementaryGroups=audio
+
+# Environment variables
+Environment=ALSA_CARD=0
 
 [Install]
 WantedBy=multi-user.target

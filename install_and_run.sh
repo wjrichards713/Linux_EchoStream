@@ -76,10 +76,29 @@ sudo apt install -y libc6-dev
 print_status "Installing GPIO utilities for RPi 5..."
 sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
-# Check if api_call.c exists
-if [ ! -f "api_call.c" ]; then
-    print_error "api_call.c not found in current directory!"
+# Check if main.c exists (modular structure)
+if [ ! -f "main.c" ]; then
+    print_error "main.c not found in current directory!"
     print_error "Please ensure you're running this script from the EchoStream directory."
+    exit 1
+fi
+
+# Check for all required source files
+required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c")
+missing_files=()
+
+for file in "${required_files[@]}"; do
+    if [ ! -f "$file" ]; then
+        missing_files+=("$file")
+    fi
+done
+
+if [ ${#missing_files[@]} -ne 0 ]; then
+    print_error "Missing required source files:"
+    for file in "${missing_files[@]}"; do
+        print_error "  - $file"
+    done
+    print_error "Please ensure you're running this script from the complete EchoStream directory."
     exit 1
 fi
 
@@ -100,7 +119,13 @@ else
 fi
 
 # Make executable
-chmod +x ./api_call
+chmod +x ./echostream
+
+# Create legacy symlink for backward compatibility
+if [ -f "./echostream" ]; then
+    ln -sf ./echostream ./api_call
+    print_success "Created legacy symlink: api_call -> echostream"
+fi
 
 # Check for USB audio devices
 print_status "Checking for USB audio devices..."
@@ -131,4 +156,4 @@ fi
 print_status "Starting EchoStream automatically..."
 echo "Press Ctrl+C to stop"
 echo ""
-./api_call
+./echostream
