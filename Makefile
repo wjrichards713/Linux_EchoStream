@@ -29,12 +29,6 @@ install: $(TARGET)
 	@echo "Installation complete. Service will run at next boot."
 	@echo "To start now: sudo systemctl start echostream.service"
 
-# Test FFTW installation
-test-fftw: test_fftw.c
-	$(CC) $(CFLAGS) -o test_fftw test_fftw.c -lfftw3f -lm
-	./test_fftw
-	rm -f test_fftw
-
 # Legacy target for backward compatibility
 api_call: $(TARGET)
 	cp $(TARGET) api_call
