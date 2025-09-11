@@ -98,13 +98,14 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Initialize and start audio passthrough
+    // Initialize audio passthrough (but don't start yet - need devices assigned first)
     if (!init_audio_passthrough()) {
         fprintf(stderr, "Failed to initialize audio passthrough\n");
         curl_global_cleanup();
         return 1;
     }
     
+    // Start audio passthrough now that devices are assigned
     if (!start_audio_passthrough()) {
         fprintf(stderr, "Failed to start audio passthrough\n");
         curl_global_cleanup();

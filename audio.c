@@ -427,6 +427,24 @@ int init_shared_audio_buffer(void) {
 int init_audio_passthrough(void) {
     memset(&global_passthrough, 0, sizeof(struct audio_passthrough));
     global_passthrough.shared_buffer = &global_shared_buffer;
+    
+    // Debug: Print all available devices
+    int num_devices = Pa_GetDeviceCount();
+    printf("[DEBUG] Available audio devices:\n");
+    for (int i = 0; i < num_devices; i++) {
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+        if (device_info) {
+            printf("  Device %d: %s (Input: %d, Output: %d)\n", 
+                   i, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
+        }
+    }
+    
+    // Debug: Print USB device assignments
+    printf("[DEBUG] USB device assignments:\n");
+    for (int i = 0; i < 4; i++) {
+        printf("  USB device %d: %d\n", i, usb_devices[i]);
+    }
+    
     global_passthrough.output_device = usb_devices[2]; // Card 3 (index 2)
     global_passthrough.active = 0;
     printf("[INFO] Audio passthrough initialized for device %d\n", global_passthrough.output_device);
@@ -473,6 +491,56 @@ int start_audio_passthrough(void) {
         printf("[WARNING] Audio passthrough already active\n");
         return 1;
     }
+    
+    // Ensure USB devices are assigned
+    auto_assign_usb_devices();
+    
+    // Try to find a suitable output device
+    int num_devices = Pa_GetDeviceCount();
+    global_passthrough.output_device = paNoDevice;
+    
+    // First try to use a different USB device for output
+    for (int i = 0; i < 4; i++) {
+        if (usb_devices[i] != paNoDevice) {
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
+            if (device_info && device_info->maxOutputChannels > 0) {
+                global_passthrough.output_device = usb_devices[i];
+                printf("[DEBUG] Using USB device %d for passthrough output\n", usb_devices[i]);
+                break;
+            }
+        }
+    }
+    
+    // If no USB device with output, try default output device
+    if (global_passthrough.output_device == paNoDevice) {
+        global_passthrough.output_device = Pa_GetDefaultOutputDevice();
+        printf("[DEBUG] Using default output device %d for passthrough\n", global_passthrough.output_device);
+    }
+    
+    // If still no device, try any device with output capability
+    if (global_passthrough.output_device == paNoDevice) {
+        for (int i = 0; i < num_devices; i++) {
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+            if (device_info && device_info->maxOutputChannels > 0) {
+                global_passthrough.output_device = i;
+                printf("[DEBUG] Using device %d for passthrough output\n", i);
+                break;
+            }
+        }
+    }
+    
+    // Last resort: try to use the same device as input (full-duplex)
+    if (global_passthrough.output_device == paNoDevice) {
+        if (usb_devices[0] != paNoDevice) {
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[0]);
+            if (device_info && device_info->maxOutputChannels > 0) {
+                global_passthrough.output_device = usb_devices[0];
+                printf("[DEBUG] Using same device as input for passthrough output (full-duplex)\n");
+            }
+        }
+    }
+    
+    printf("[DEBUG] Passthrough output device: %d\n", global_passthrough.output_device);
     
     if (global_passthrough.output_device == paNoDevice) {
         fprintf(stderr, "[ERROR] No output device available for passthrough\n");
