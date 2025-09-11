@@ -1,7 +1,6 @@
 #include "websocket.h"
 #include "audio.h"
 #include "udp.h"
-#include "crypto.h"
 
 // Global WebSocket state
 struct lws_context *global_ws_context = NULL;

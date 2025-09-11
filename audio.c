@@ -34,11 +34,6 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     const float *samples = (const float*)input;
     
-    // Write to shared buffer for tone detection (if enabled for this channel)
-    if (audio_stream->tone_detect_enabled) {
-        shared_buffer_write(samples, frames);
-    }
-    
     for (unsigned long i = 0; i < frames; i++) {
         audio_stream->input_buffer[audio_stream->input_buffer_pos++] = samples[i];
         
@@ -401,68 +396,4 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     ctx->active = 1;
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
-}
-
-// Tone detection integration functions
-int enable_tone_detection_for_channel(int channel_index) {
-    if (channel_index >= MAX_CHANNELS) {
-        fprintf(stderr, "Invalid channel index for tone detection: %d\n", channel_index);
-        return 0;
-    }
-    
-    channels[channel_index].audio.tone_detect_enabled = 1;
-    printf("Tone detection enabled for channel %d\n", channel_index);
-    return 1;
-}
-
-int setup_tone_detection_for_channel(int channel_index, const char* config_json) {
-    if (channel_index >= MAX_CHANNELS) {
-        fprintf(stderr, "Invalid channel index for tone detection setup: %d\n", channel_index);
-        return 0;
-    }
-    
-    // Enable tone detection for this channel
-    channels[channel_index].audio.tone_detect_enabled = 1;
-    
-    // Setup tone detection configuration
-    if (!tone_detect_setup_channel(channel_index, config_json)) {
-        fprintf(stderr, "Failed to setup tone detection for channel %d\n", channel_index);
-        return 0;
-    }
-    
-    printf("Tone detection configured for channel %d\n", channel_index);
-    return 1;
-}
-
-void start_tone_detection_threads(void) {
-    // Start tone detection threads for enabled channels
-    for (int i = 0; i < TONE_DETECT_THREADS; i++) {
-        // Check if any audio channel has tone detection enabled
-        int audio_channel_with_tone_detect = -1;
-        for (int j = 0; j < MAX_CHANNELS; j++) {
-            if (channels[j].audio.tone_detect_enabled) {
-                audio_channel_with_tone_detect = j;
-                break;
-            }
-        }
-        
-        if (audio_channel_with_tone_detect >= 0 && !tone_channels[i].active) {
-            // Activate tone detection channel for the first audio channel with tone detection
-            tone_channels[i].active = 1;
-            tone_channels[i].channel_index = audio_channel_with_tone_detect;
-        }
-        
-        if (tone_channels[i].active) {
-            pthread_t tone_thread;
-            int *channel_index = malloc(sizeof(int));
-            *channel_index = i;
-            
-            if (pthread_create(&tone_thread, NULL, tone_detect_thread, channel_index)) {
-                fprintf(stderr, "Failed to create tone detection thread for channel %d\n", i);
-                free(channel_index);
-            } else {
-                printf("Tone detection thread started for channel %d (monitoring audio channel %d)\n", i, audio_channel_with_tone_detect);
-            }
-        }
-    }
 }

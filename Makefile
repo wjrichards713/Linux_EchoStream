@@ -1,9 +1,9 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -I/usr/include
-LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod -lfftw3f -lm
+CFLAGS = -Wall -Wextra -std=c99
+LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
 OBJECTS = $(SOURCES:.c=.o)
 
 # Target executable
@@ -33,4 +33,4 @@ install: $(TARGET)
 api_call: $(TARGET)
 	cp $(TARGET) api_call
 
-.PHONY: all clean install api_call test-fftw
+.PHONY: all clean install api_call

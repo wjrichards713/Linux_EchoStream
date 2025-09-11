@@ -2,7 +2,6 @@
 #define AUDIO_H
 
 #include "echostream.h"
-#include "tone_detect.h"
 
 // Audio structures
 struct audio_frame {
@@ -34,7 +33,6 @@ struct audio_stream {
     int current_output_frame_pos;
     PaDeviceIndex device_index;
     char channel_id[CHANNEL_ID_LEN];
-    int tone_detect_enabled;  // Flag to enable tone detection for this channel
 };
 
 struct channel_context {
@@ -55,11 +53,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream);
 void auto_assign_usb_devices(void);
 PaDeviceIndex get_device_for_channel(const char* channel);
 int setup_channel(struct channel_context *ctx, const char *channel_id);
-
-// Tone detection integration
-int enable_tone_detection_for_channel(int channel_index);
-int setup_tone_detection_for_channel(int channel_index, const char* config_json);
-void start_tone_detection_threads(void);
 
 // Audio callback functions are static and defined in audio.c
 

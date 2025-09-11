@@ -1,7 +1,6 @@
 #include "gpio.h"
 #include "audio.h"
 #include "websocket.h"
-#include <unistd.h>
 
 // GPIO state variables
 int gpio_38_state = 0;
