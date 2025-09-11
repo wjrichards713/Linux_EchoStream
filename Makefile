@@ -1,19 +1,36 @@
 CC = gcc
-CFLAGS = -Wall -Wextra
+CFLAGS = -Wall -Wextra -std=c99
 LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod
 
-all: api_call
+# Source files
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
+OBJECTS = $(SOURCES:.c=.o)
 
-api_call: api_call.c
-	$(CC) $(CFLAGS) -o api_call api_call.c $(LIBS)
+# Target executable
+TARGET = echostream
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJECTS) $(LIBS)
+
+# Compile individual object files
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f api_call
+	rm -f $(TARGET) $(OBJECTS)
 
-install: api_call
-	sudo cp api_call /usr/local/bin/
-	sudo cp api_call.service /etc/systemd/system/
+install: $(TARGET)
+	sudo cp $(TARGET) /usr/local/bin/
+	sudo cp echostream.service /etc/systemd/system/
 	sudo systemctl daemon-reload
-	sudo systemctl enable api_call.service
+	sudo systemctl enable echostream.service
 	@echo "Installation complete. Service will run at next boot."
-	@echo "To start now: sudo systemctl start api_call.service"
+	@echo "To start now: sudo systemctl start echostream.service"
+
+# Legacy target for backward compatibility
+api_call: $(TARGET)
+	cp $(TARGET) api_call
+
+.PHONY: all clean install api_call
