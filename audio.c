@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "crypto.h"
 #include "udp.h"
+#include <math.h>
 
 // Global audio state
 struct channel_context channels[MAX_CHANNELS] = {0};
@@ -10,6 +11,9 @@ int device_assigned = 0;
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo* time_info,
                                 PaStreamCallbackFlags flags, void *user_data) {
+    (void)output; // Suppress unused parameter warning
+    (void)time_info; // Suppress unused parameter warning
+    (void)flags; // Suppress unused parameter warning
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
@@ -82,6 +86,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 static int audio_output_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo* time_info,
                                 PaStreamCallbackFlags flags, void *user_data) {
+    (void)input; // Suppress unused parameter warning
+    (void)time_info; // Suppress unused parameter warning
+    (void)flags; // Suppress unused parameter warning
     
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     float *out = (float*)output;
@@ -122,8 +129,8 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
                 int remaining_in_frame = current_frame->sample_count - audio_stream->current_output_frame_pos;
                 unsigned long frames_to_copy = frames - frames_filled;
                 
-                if (frames_to_copy > remaining_in_frame) {
-                    frames_to_copy = remaining_in_frame;
+                if (frames_to_copy > (unsigned long)remaining_in_frame) {
+                    frames_to_copy = (unsigned long)remaining_in_frame;
                 }
                 
                 // Copy samples from current frame

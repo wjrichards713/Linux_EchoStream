@@ -3,6 +3,9 @@
 
 #include "echostream.h"
 
+// Forward declaration
+struct server_config;
+
 // Global UDP state
 extern int global_udp_socket;
 extern struct sockaddr_in global_server_addr;

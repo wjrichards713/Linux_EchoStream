@@ -11,6 +11,7 @@ volatile int global_interrupted = 0;
 char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN] = {"555", "666", "308e2478-072c-4d8b-ffff24d-51854e06711a", "94415b61-8007-430d-ffffea0-10fc9fee2d8e"};
 
 static void handle_interrupt(int sig) {
+    (void)sig; // Suppress unused parameter warning
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
     
@@ -45,6 +46,8 @@ static void handle_interrupt(int sig) {
 }
 
 int main(int argc, char *argv[]) {
+    (void)argc; // Suppress unused parameter warning
+    (void)argv; // Suppress unused parameter warning
     // Initialize global variables
     global_interrupted = 0;
     

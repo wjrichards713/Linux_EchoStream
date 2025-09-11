@@ -54,13 +54,6 @@ void auto_assign_usb_devices(void);
 PaDeviceIndex get_device_for_channel(const char* channel);
 int setup_channel(struct channel_context *ctx, const char *channel_id);
 
-// Audio callback functions
-int audio_input_callback(const void *input, void *output, unsigned long frames,
-                        const PaStreamCallbackTimeInfo* time_info,
-                        PaStreamCallbackFlags flags, void *user_data);
-
-int audio_output_callback(const void *input, void *output, unsigned long frames,
-                         const PaStreamCallbackTimeInfo* time_info,
-                         PaStreamCallbackFlags flags, void *user_data);
+// Audio callback functions are static and defined in audio.c
 
 #endif // AUDIO_H
