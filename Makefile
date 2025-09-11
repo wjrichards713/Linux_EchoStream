@@ -22,6 +22,16 @@ check-deps:
 			echo "Warning: Library $$lib not found. Please install it."; \
 		fi; \
 	done
+	@echo "Checking FFTW3 specifically..."
+	@if pkg-config --exists fftw3f 2>/dev/null; then \
+		echo "✓ FFTW3 found via pkg-config"; \
+	elif ldconfig -p | grep -q "libfftw3f"; then \
+		echo "✓ FFTW3 found in system libraries"; \
+	elif [ -f "/usr/include/fftw3.h" ]; then \
+		echo "✓ FFTW3 headers found in /usr/include"; \
+	else \
+		echo "✗ FFTW3 not found. Install with: sudo apt install -y libfftw3-dev"; \
+	fi
 	@echo "Dependency check complete."
 
 $(TARGET): $(OBJECTS)
@@ -50,8 +60,19 @@ install-deps:
 	sudo apt install -y libwebsockets-dev
 	sudo apt install -y libc6-dev
 	sudo apt install -y raspi-gpio gpiod libgpiod-dev
-	sudo apt install -y libfftw3-dev libfftw3-3
+	sudo apt install -y libfftw3-dev
 	@echo "Dependencies installed successfully!"
+
+# Install just FFTW3 (for troubleshooting)
+install-fftw3:
+	@echo "Installing FFTW3 library..."
+	sudo apt update
+	if sudo apt install -y libfftw3-dev; then \
+		echo "✓ FFTW3 installed successfully"; \
+	else \
+		echo "✗ Failed to install libfftw3-dev, trying alternatives..."; \
+		sudo apt install -y libfftw3-3-dev || echo "✗ All FFTW3 installation attempts failed"; \
+	fi
 
 # Debug build
 debug: CFLAGS += -g -DDEBUG
@@ -73,4 +94,4 @@ install: $(TARGET)
 api_call: $(TARGET)
 	cp $(TARGET) api_call
 
-.PHONY: all clean install api_call check-deps install-deps debug release
+.PHONY: all clean install api_call check-deps install-deps install-fftw3 debug release

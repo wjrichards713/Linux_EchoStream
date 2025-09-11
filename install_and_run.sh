@@ -78,7 +78,18 @@ sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
 # Install FFTW3 library for tone detection
 print_status "Installing FFTW3 library for tone detection..."
-sudo apt install -y libfftw3-dev libfftw3-3
+if ! sudo apt install -y libfftw3-dev; then
+    print_warning "Failed to install libfftw3-dev, trying alternative package names..."
+    if sudo apt install -y libfftw3-3-dev; then
+        print_success "FFTW3 installed with alternative package name"
+    else
+        print_error "Failed to install FFTW3 library. Tone detection will not work."
+        print_error "Please install FFTW3 manually: sudo apt install -y libfftw3-dev"
+        exit 1
+    fi
+else
+    print_success "FFTW3 library installed successfully"
+fi
 
 # Check if api_call.c exists
 if [ ! -f "api_call.c" ]; then
@@ -88,6 +99,20 @@ if [ ! -f "api_call.c" ]; then
 fi
 
 print_success "All dependencies installed successfully!"
+
+# Verify FFTW3 installation
+print_status "Verifying FFTW3 installation..."
+if ! pkg-config --exists fftw3f 2>/dev/null && ! ldconfig -p | grep -q "libfftw3f"; then
+    print_warning "FFTW3 library not found in system. Checking for alternative locations..."
+    if [ -f "/usr/include/fftw3.h" ] || [ -f "/usr/local/include/fftw3.h" ]; then
+        print_success "FFTW3 headers found, proceeding with compilation"
+    else
+        print_error "FFTW3 library not properly installed. Compilation may fail."
+        print_error "Please run: sudo apt install -y libfftw3-dev"
+    fi
+else
+    print_success "FFTW3 library verified"
+fi
 
 # Compile the application
 print_status "Cleaning previous build..."
