@@ -41,10 +41,32 @@ struct channel_context {
     int active;
 };
 
+// Shared audio buffer for real-time passthrough
+struct shared_audio_buffer {
+    float samples[SAMPLES_PER_FRAME];
+    int sample_count;
+    int valid;
+    pthread_mutex_t mutex;
+    pthread_cond_t data_ready;
+};
+
+// Audio passthrough context
+struct audio_passthrough {
+    struct shared_audio_buffer *shared_buffer;
+    PaStream *output_stream;
+    PaDeviceIndex output_device;
+    int active;
+    pthread_t thread;
+};
+
 // Global audio state
 extern struct channel_context channels[MAX_CHANNELS];
 extern PaDeviceIndex usb_devices[MAX_CHANNELS];
 extern int device_assigned;
+
+// Global shared audio buffer and passthrough
+extern struct shared_audio_buffer global_shared_buffer;
+extern struct audio_passthrough global_passthrough;
 
 // Function declarations
 int initialize_portaudio(void);
@@ -53,6 +75,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream);
 void auto_assign_usb_devices(void);
 PaDeviceIndex get_device_for_channel(const char* channel);
 int setup_channel(struct channel_context *ctx, const char *channel_id);
+
+// Audio passthrough functions
+int init_shared_audio_buffer(void);
+int init_audio_passthrough(void);
+void* audio_passthrough_thread(void* arg);
+int start_audio_passthrough(void);
+void stop_audio_passthrough(void);
 
 // Audio callback functions are static and defined in audio.c
 

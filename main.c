@@ -43,6 +43,9 @@ static void handle_interrupt(int sig) {
         close(global_udp_socket);
         global_udp_socket = -1;
     }
+    
+    // Stop audio passthrough
+    stop_audio_passthrough();
 }
 
 int main(int argc, char *argv[]) {
@@ -61,6 +64,12 @@ int main(int argc, char *argv[]) {
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
+        return 1;
+    }
+    
+    // Initialize shared audio buffer and passthrough
+    if (!init_shared_audio_buffer()) {
+        fprintf(stderr, "Failed to initialize shared audio buffer\n");
         return 1;
     }
     
@@ -89,9 +98,23 @@ int main(int argc, char *argv[]) {
         }
     }
     
+    // Initialize and start audio passthrough
+    if (!init_audio_passthrough()) {
+        fprintf(stderr, "Failed to initialize audio passthrough\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
+    if (!start_audio_passthrough()) {
+        fprintf(stderr, "Failed to start audio passthrough\n");
+        curl_global_cleanup();
+        return 1;
+    }
+    
     // Connect global WebSocket for all channels
     if (!connect_global_websocket()) {
         fprintf(stderr, "Failed to connect WebSocket\n");
+        stop_audio_passthrough();
         curl_global_cleanup();
         return 1;
     }
@@ -108,6 +131,8 @@ int main(int argc, char *argv[]) {
     // Wait for the WebSocket thread to complete
     pthread_join(ws_thread, NULL);
     
+    // Cleanup
+    stop_audio_passthrough();
     curl_global_cleanup();
     Pa_Terminate();
     return 0;
