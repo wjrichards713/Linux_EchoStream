@@ -2,6 +2,8 @@
 #include "audio.h"
 #include "crypto.h"
 #include "websocket.h"
+#include <math.h>
+#include <unistd.h>
 
 // Global UDP state
 int global_udp_socket = -1;
