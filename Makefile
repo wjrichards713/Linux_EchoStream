@@ -1,9 +1,9 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99
-LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod
+LIBS = -lcurl -ljson-c -lwebsockets -lportaudio -lopus -lssl -lcrypto -lpthread -lgpiod -lfftw3f
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
 OBJECTS = $(SOURCES:.c=.o)
 
 # Target executable
