@@ -551,7 +551,47 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
     
-    // Setup input stream
+    // Check if this is Card 3 (Channel 308e...) - reserve for passthrough only
+    int is_card3 = (strcmp(audio_stream->channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0);
+    
+    if (is_card3) {
+        printf("[INFO] Channel %s (Card 3) reserved for passthrough - running input-only mode\n", 
+               audio_stream->channel_id);
+        
+        // Setup input stream only for Card 3
+        input_params.device = audio_stream->device_index;
+        if (input_params.device == paNoDevice) {
+            fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
+            return 0;
+        }
+        
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                    paClipOff, audio_input_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        // Start input stream only
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
+        
+        printf("Channel %s running in input-only mode (reserved for passthrough)\n", audio_stream->channel_id);
+        audio_stream->transmitting = 1;
+        return 1;
+    }
+    
+    // Setup input stream for other channels
     input_params.device = audio_stream->device_index;
     if (input_params.device == paNoDevice) {
         fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
@@ -571,7 +611,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup output stream
+    // Setup output stream for other channels
     output_params.device = audio_stream->device_index;
     output_params.channelCount = 1;
     output_params.sampleFormat = paFloat32;
