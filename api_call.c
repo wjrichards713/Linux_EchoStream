@@ -106,6 +106,13 @@ static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
 static char global_channel_ids[4][64] = {"555", "666", "308e2478-072c-4d8b-ffff24d-51854e06711a", "94415b61-8007-430d-ffffea0-10fc9fee2d8e"};
 
+// Add worker thread for heavy initialization work
+static pthread_t ws_init_worker_thread;
+static pthread_mutex_t ws_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ws_init_cond = PTHREAD_COND_INITIALIZER;
+static int ws_init_ready = 0;
+static char ws_init_json[8192] = {0};
+
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
@@ -812,32 +819,15 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
                 if (strstr(data, "udp_host") && strstr(data, "udp_port") && strstr(data, "websocket_id")) {
                     printf("Received UDP connection info: %s\n", data);
                     
-                    // Parse the WebSocket configuration
-                    if (parse_websocket_config(data, &global_config)) {
-                        printf("Successfully parsed UDP connection info\n");
-                        global_config_initialized = 1;
-                        
-                        // Setup UDP connection
-                        if (setup_global_udp(&global_config)) {
-                            printf("UDP connection established\n");
-                            
-                            // Start transmission for all active channels
-                            for (int i = 0; i < 4; i++) {
-                                if (channels[i].active) {
-                                    const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
-                                    if (!decode_base64(key_b64, channels[i].audio.key)) {
-                                        fprintf(stderr, "Key decode failed for channel %s\n", channels[i].audio.channel_id);
-                                        continue;
-                                    }
-                                    printf("AES key decoded for channel %s\n", channels[i].audio.channel_id);
-                                    
-                                    if (start_transmission_for_channel(&channels[i].audio)) {
-                                        printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Copy JSON to worker thread queue and signal
+                    pthread_mutex_lock(&ws_init_mutex);
+                    strncpy(ws_init_json, data, sizeof(ws_init_json) - 1);
+                    ws_init_json[sizeof(ws_init_json) - 1] = '\0';
+                    ws_init_ready = 1;
+                    pthread_cond_signal(&ws_init_cond);
+                    pthread_mutex_unlock(&ws_init_mutex);
+                    
+                    printf("UDP config queued for worker thread\n");
                 }
                 else if (strstr(data, "users_connected")) {
                     printf("Users connected message received, but UDP not yet configured\n");
@@ -929,6 +919,18 @@ int connect_global_websocket() {
     connect_info.protocol = protocols[0].name;
     connect_info.pwsi = &global_ws_client;
     
+    // Add retry policy for better reliability
+    static lws_retry_bo_t retry_policy = {
+        .retry_ms_table = (unsigned int[]){ 1000, 2000, 5000, 10000, 20000, 30000, 60000, 120000, 300000, 600000, 0 },
+        .retry_ms_table_count = 11,
+        .conceal_count = 0,
+        .secs_since_valid_ping = 0,
+        .secs_since_valid_hangup = 0,
+        .jitter_percent = 20,
+    };
+    connect_info.retry_and_idle_policy = &retry_policy;
+    connect_info.alpn = "http/1.1";
+    
     printf("[INFO] Attempting WebSocket connection to %s:%d%s\n", address, port, path);
     global_ws_client = lws_client_connect_via_info(&connect_info);
     
@@ -941,8 +943,75 @@ int connect_global_websocket() {
     return 1;
 }
 
+// Worker thread to handle heavy initialization work
+void* ws_init_worker(void* arg) {
+    printf("WebSocket init worker started\n");
+    
+    while (!global_interrupted) {
+        pthread_mutex_lock(&ws_init_mutex);
+        
+        // Wait for UDP config or interrupt
+        while (!ws_init_ready && !global_interrupted) {
+            pthread_cond_wait(&ws_init_cond, &ws_init_mutex);
+        }
+        
+        if (global_interrupted) {
+            pthread_mutex_unlock(&ws_init_mutex);
+            break;
+        }
+        
+        // Copy the JSON and reset the flag
+        char json_copy[8192];
+        strncpy(json_copy, ws_init_json, sizeof(json_copy) - 1);
+        json_copy[sizeof(json_copy) - 1] = '\0';
+        ws_init_ready = 0;
+        
+        pthread_mutex_unlock(&ws_init_mutex);
+        
+        printf("Worker: Processing UDP config: %s\n", json_copy);
+        
+        // Parse the WebSocket configuration
+        if (parse_websocket_config(json_copy, &global_config)) {
+            printf("Worker: Successfully parsed UDP connection info\n");
+            global_config_initialized = 1;
+            
+            // Setup UDP connection
+            if (setup_global_udp(&global_config)) {
+                printf("Worker: UDP connection established\n");
+                
+                // Start transmission for all active channels
+                for (int i = 0; i < 4; i++) {
+                    if (channels[i].active) {
+                        const char* key_b64 = "46dR4QR5KH7JhPyyjh/ZS4ki/3QBVwwOTkkQTdZQkC0=";
+                        if (!decode_base64(key_b64, channels[i].audio.key)) {
+                            fprintf(stderr, "Key decode failed for channel %s\n", channels[i].audio.channel_id);
+                            continue;
+                        }
+                        printf("Worker: AES key decoded for channel %s\n", channels[i].audio.channel_id);
+                        
+                        if (start_transmission_for_channel(&channels[i].audio)) {
+                            printf("Worker: Audio transmission ready for channel %s (waiting for GPIO activation)\n", channels[i].audio.channel_id);
+                        }
+                    }
+                }
+                
+                // Audio bridge functionality can be added here if needed
+                printf("Worker: All channels initialized successfully\n");
+            }
+        }
+    }
+    
+    printf("WebSocket init worker stopped\n");
+    return NULL;
+}
+
 void* global_websocket_thread(void* arg) {
     printf("Starting global WebSocket thread\n");
+    
+    // Start the init worker thread
+    if (pthread_create(&ws_init_worker_thread, NULL, ws_init_worker, NULL)) {
+        fprintf(stderr, "Failed to create WebSocket init worker thread\n");
+    }
     
     // Reset global_interrupted to ensure it's not corrupted
     global_interrupted = 0;
@@ -955,10 +1024,21 @@ void* global_websocket_thread(void* arg) {
     
     printf("DEBUG: WebSocket thread exiting. Context: %p, Interrupted: %d\n", (void*)global_ws_context, global_interrupted);
     
-    // Close the single WebSocket connection
+    // Close the single WebSocket connection properly
     if (global_ws_client) {
-        // Don't call lws_close_reason() - let the context destruction handle it
+        lws_close_reason(global_ws_client, LWS_CLOSE_STATUS_GOINGAWAY, NULL, 0);
         global_ws_client = NULL;
+    }
+    
+    // Signal the init worker to stop
+    pthread_mutex_lock(&ws_init_mutex);
+    ws_init_ready = 1;
+    pthread_cond_signal(&ws_init_cond);
+    pthread_mutex_unlock(&ws_init_mutex);
+    
+    // Wait for init worker to finish
+    if (ws_init_worker_thread) {
+        pthread_join(ws_init_worker_thread, NULL);
     }
     
     // Cleanup all channels
