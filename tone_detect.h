@@ -121,4 +121,7 @@ int is_frequency_in_range(float freq, float target, int range);
 void print_tone_detection_stats(void);
 void reset_tone_detection_stats(void);
 
+// Tone passthrough integration
+void trigger_tone_passthrough(void);
+
 #endif // TONE_DETECT_H

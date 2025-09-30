@@ -252,6 +252,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                 global_tone_detection.recording_start_time = current_time;
                 printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
                 
+                // Trigger tone passthrough if configured
+                trigger_tone_passthrough();
+                
                 global_tone_detection.total_detections++;
             }
         }
@@ -401,6 +404,45 @@ void reset_tone_detection_stats(void) {
     global_tone_detection.tone_a_detections = 0;
     global_tone_detection.tone_b_detections = 0;
     global_tone_detection.new_tone_detections = 0;
+}
+
+// Trigger tone passthrough when tones are detected
+void trigger_tone_passthrough(void) {
+    // Check if tone passthrough is configured for channel 1 (index 0)
+    struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
+    
+    if (tone_config && tone_config->tone_passthrough) {
+        printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
+        
+        // Parse passthrough channel name to get channel index
+        int target_channel = -1;
+        if (strcmp(tone_config->passthrough_channel, "channel_four") == 0) {
+            target_channel = 3; // Channel 4 (index 3)
+        } else if (strcmp(tone_config->passthrough_channel, "channel_three") == 0) {
+            target_channel = 2; // Channel 3 (index 2)
+        } else if (strcmp(tone_config->passthrough_channel, "channel_two") == 0) {
+            target_channel = 1; // Channel 2 (index 1)
+        } else if (strcmp(tone_config->passthrough_channel, "channel_one") == 0) {
+            target_channel = 0; // Channel 1 (index 0)
+        }
+        
+        if (target_channel >= 0) {
+            // Setup and start tone passthrough from channel 1 to target channel
+            if (setup_tone_passthrough(0, target_channel)) {
+                if (start_tone_passthrough()) {
+                    printf("[TONE PASSTHROUGH] Successfully started: Channel 1 -> Channel %d\n", target_channel + 1);
+                } else {
+                    printf("[ERROR] Failed to start tone passthrough\n");
+                }
+            } else {
+                printf("[ERROR] Failed to setup tone passthrough\n");
+            }
+        } else {
+            printf("[ERROR] Invalid passthrough channel: %s\n", tone_config->passthrough_channel);
+        }
+    } else {
+        printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
+    }
 }
 
 // Configuration functions

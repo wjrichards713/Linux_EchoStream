@@ -68,6 +68,15 @@ struct tone_detect_control {
     pthread_mutex_t mutex;
 };
 
+// Tone passthrough control
+struct tone_passthrough_control {
+    int active;                     // 1 = passthrough active, 0 = disabled
+    int source_channel;             // Source channel index (0-3)
+    int target_channel;             // Target channel index (0-3)
+    PaStream *passthrough_stream;   // Direct audio passthrough stream
+    pthread_mutex_t mutex;
+};
+
 // Global audio state
 extern struct channel_context channels[MAX_CHANNELS];
 extern PaDeviceIndex usb_devices[MAX_CHANNELS];
@@ -79,6 +88,9 @@ extern struct audio_passthrough global_passthrough;
 
 // Global tone detection control
 extern struct tone_detect_control global_tone_detect;
+
+// Global tone passthrough control
+extern struct tone_passthrough_control global_tone_passthrough;
 
 // Function declarations
 int initialize_portaudio(void);
@@ -103,6 +115,16 @@ int set_card3_output_mode(int passthrough_mode);
 int is_tone_detect_enabled(void);
 int is_card1_input_enabled(void);
 int is_card3_passthrough_mode(void);
+
+// Tone passthrough control functions
+int init_tone_passthrough_control(void);
+int setup_tone_passthrough(int source_channel, int target_channel);
+int start_tone_passthrough(void);
+int stop_tone_passthrough(void);
+int is_tone_passthrough_active(void);
+void* tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                               const PaStreamCallbackTimeInfo* time_info,
+                               PaStreamCallbackFlags flags, void *user_data);
 
 // Audio callback functions are static and defined in audio.c
 

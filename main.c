@@ -65,6 +65,14 @@ int main(int argc, char *argv[]) {
         printf("Using default channel IDs\n");
     }
     
+    // Load complete configuration including tone detection settings
+    printf("Loading complete configuration...\n");
+    if (load_complete_config()) {
+        printf("Complete configuration loaded successfully\n");
+    } else {
+        printf("Using default configuration\n");
+    }
+    
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
         return 1;
@@ -73,6 +81,12 @@ int main(int argc, char *argv[]) {
     // Initialize tone detection control
     if (!init_tone_detect_control()) {
         fprintf(stderr, "Failed to initialize tone detection control\n");
+        return 1;
+    }
+    
+    // Initialize tone passthrough control
+    if (!init_tone_passthrough_control()) {
+        fprintf(stderr, "Failed to initialize tone passthrough control\n");
         return 1;
     }
     
@@ -176,6 +190,7 @@ int main(int argc, char *argv[]) {
     
     // Cleanup
     stop_tone_detection();
+    stop_tone_passthrough();
     stop_audio_passthrough();
     curl_global_cleanup();
     Pa_Terminate();

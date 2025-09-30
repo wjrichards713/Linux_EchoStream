@@ -17,6 +17,9 @@ struct audio_passthrough global_passthrough = {0};
 // Global tone detection control
 struct tone_detect_control global_tone_detect = {0};
 
+// Global tone passthrough control
+struct tone_passthrough_control global_tone_passthrough = {0};
+
 // Initialize tone detection control
 int init_tone_detect_control(void) {
     memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
@@ -763,4 +766,157 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     ctx->active = 1;
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
+}
+
+// Initialize tone passthrough control
+int init_tone_passthrough_control(void) {
+    memset(&global_tone_passthrough, 0, sizeof(struct tone_passthrough_control));
+    global_tone_passthrough.active = 0;
+    global_tone_passthrough.source_channel = -1;
+    global_tone_passthrough.target_channel = -1;
+    global_tone_passthrough.passthrough_stream = NULL;
+    pthread_mutex_init(&global_tone_passthrough.mutex, NULL);
+    printf("[INFO] Tone passthrough control initialized\n");
+    return 1;
+}
+
+// Setup tone passthrough routing
+int setup_tone_passthrough(int source_channel, int target_channel) {
+    if (source_channel < 0 || source_channel >= MAX_CHANNELS || 
+        target_channel < 0 || target_channel >= MAX_CHANNELS) {
+        printf("[ERROR] Invalid channel indices for tone passthrough\n");
+        return 0;
+    }
+    
+    pthread_mutex_lock(&global_tone_passthrough.mutex);
+    global_tone_passthrough.source_channel = source_channel;
+    global_tone_passthrough.target_channel = target_channel;
+    pthread_mutex_unlock(&global_tone_passthrough.mutex);
+    
+    printf("[INFO] Tone passthrough configured: Channel %d -> Channel %d\n", 
+           source_channel + 1, target_channel + 1);
+    return 1;
+}
+
+// Start tone passthrough
+int start_tone_passthrough(void) {
+    pthread_mutex_lock(&global_tone_passthrough.mutex);
+    
+    if (global_tone_passthrough.active) {
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        printf("[WARNING] Tone passthrough already active\n");
+        return 1;
+    }
+    
+    if (global_tone_passthrough.source_channel < 0 || global_tone_passthrough.target_channel < 0) {
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        printf("[ERROR] Tone passthrough not configured\n");
+        return 0;
+    }
+    
+    // Get source and target audio devices
+    PaDeviceIndex source_device = channels[global_tone_passthrough.source_channel].audio.device_index;
+    PaDeviceIndex target_device = channels[global_tone_passthrough.target_channel].audio.device_index;
+    
+    if (source_device == paNoDevice || target_device == paNoDevice) {
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        printf("[ERROR] Invalid audio devices for tone passthrough\n");
+        return 0;
+    }
+    
+    // Setup passthrough stream parameters
+    PaStreamParameters input_params, output_params;
+    
+    input_params.device = source_device;
+    input_params.channelCount = 1;
+    input_params.sampleFormat = paFloat32;
+    input_params.suggestedLatency = Pa_GetDeviceInfo(source_device)->defaultLowInputLatency;
+    input_params.hostApiSpecificStreamInfo = NULL;
+    
+    output_params.device = target_device;
+    output_params.channelCount = 1;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(target_device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    // Open passthrough stream
+    PaError err = Pa_OpenStream(&global_tone_passthrough.passthrough_stream,
+                               &input_params, &output_params, 48000, 1024,
+                               paClipOff, tone_passthrough_callback, NULL);
+    
+    if (err != paNoError) {
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        printf("[ERROR] Failed to open tone passthrough stream: %s\n", Pa_GetErrorText(err));
+        return 0;
+    }
+    
+    // Start the stream
+    err = Pa_StartStream(global_tone_passthrough.passthrough_stream);
+    if (err != paNoError) {
+        Pa_CloseStream(global_tone_passthrough.passthrough_stream);
+        global_tone_passthrough.passthrough_stream = NULL;
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        printf("[ERROR] Failed to start tone passthrough stream: %s\n", Pa_GetErrorText(err));
+        return 0;
+    }
+    
+    global_tone_passthrough.active = 1;
+    pthread_mutex_unlock(&global_tone_passthrough.mutex);
+    
+    printf("[INFO] Tone passthrough started: Channel %d -> Channel %d\n", 
+           global_tone_passthrough.source_channel + 1, global_tone_passthrough.target_channel + 1);
+    return 1;
+}
+
+// Stop tone passthrough
+int stop_tone_passthrough(void) {
+    pthread_mutex_lock(&global_tone_passthrough.mutex);
+    
+    if (!global_tone_passthrough.active) {
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+        return 1;
+    }
+    
+    if (global_tone_passthrough.passthrough_stream) {
+        Pa_AbortStream(global_tone_passthrough.passthrough_stream);
+        Pa_CloseStream(global_tone_passthrough.passthrough_stream);
+        global_tone_passthrough.passthrough_stream = NULL;
+    }
+    
+    global_tone_passthrough.active = 0;
+    pthread_mutex_unlock(&global_tone_passthrough.mutex);
+    
+    printf("[INFO] Tone passthrough stopped\n");
+    return 1;
+}
+
+// Check if tone passthrough is active
+int is_tone_passthrough_active(void) {
+    pthread_mutex_lock(&global_tone_passthrough.mutex);
+    int active = global_tone_passthrough.active;
+    pthread_mutex_unlock(&global_tone_passthrough.mutex);
+    return active;
+}
+
+// Tone passthrough callback
+void* tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                               const PaStreamCallbackTimeInfo* time_info,
+                               PaStreamCallbackFlags flags, void *user_data) {
+    (void)time_info; // Suppress unused parameter warning
+    (void)flags;     // Suppress unused parameter warning
+    (void)user_data; // Suppress unused parameter warning
+    
+    if (!input || !output) {
+        return (void*)paContinue;
+    }
+    
+    // Direct audio passthrough - copy input to output
+    const float *in = (const float*)input;
+    float *out = (float*)output;
+    
+    for (unsigned long i = 0; i < frames; i++) {
+        out[i] = in[i];
+    }
+    
+    return (void*)paContinue;
 }
