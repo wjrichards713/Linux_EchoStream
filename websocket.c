@@ -1,6 +1,7 @@
 #include "websocket.h"
 #include "audio.h"
 #include "udp.h"
+#include "crypto.h"
 #include <unistd.h>
 
 // Global WebSocket state

@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "tone_detect.h"
 #include "audio.h"
+#include "config.h"
 #include <math.h>
 #include <string.h>
 #include <time.h>

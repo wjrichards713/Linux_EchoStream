@@ -122,9 +122,9 @@ int setup_tone_passthrough(int source_channel, int target_channel);
 int start_tone_passthrough(void);
 int stop_tone_passthrough(void);
 int is_tone_passthrough_active(void);
-void* tone_passthrough_callback(const void *input, void *output, unsigned long frames,
-                               const PaStreamCallbackTimeInfo* time_info,
-                               PaStreamCallbackFlags flags, void *user_data);
+int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                              const PaStreamCallbackTimeInfo* time_info,
+                              PaStreamCallbackFlags flags, void *user_data);
 
 // Audio callback functions are static and defined in audio.c
 

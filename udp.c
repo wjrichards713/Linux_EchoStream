@@ -3,6 +3,8 @@
 #include "crypto.h"
 #include "websocket.h"
 #include <math.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 // Global UDP state
 int global_udp_socket = -1;

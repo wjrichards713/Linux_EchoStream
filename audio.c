@@ -899,15 +899,15 @@ int is_tone_passthrough_active(void) {
 }
 
 // Tone passthrough callback
-void* tone_passthrough_callback(const void *input, void *output, unsigned long frames,
-                               const PaStreamCallbackTimeInfo* time_info,
-                               PaStreamCallbackFlags flags, void *user_data) {
+int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                              const PaStreamCallbackTimeInfo* time_info,
+                              PaStreamCallbackFlags flags, void *user_data) {
     (void)time_info; // Suppress unused parameter warning
     (void)flags;     // Suppress unused parameter warning
     (void)user_data; // Suppress unused parameter warning
     
     if (!input || !output) {
-        return (void*)paContinue;
+        return paContinue;
     }
     
     // Direct audio passthrough - copy input to output
@@ -918,5 +918,5 @@ void* tone_passthrough_callback(const void *input, void *output, unsigned long f
         out[i] = in[i];
     }
     
-    return (void*)paContinue;
+    return paContinue;
 }
