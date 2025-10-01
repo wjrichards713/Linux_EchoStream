@@ -42,6 +42,14 @@ int init_tone_detection(void) {
     global_tone_detection.tone_sequence_active = 0;
     global_tone_detection.recording_active = 0;
     
+    // Initialize duration tracking
+    global_tone_detection.tone_a_tracking = 0;
+    global_tone_detection.tone_b_tracking = 0;
+    global_tone_detection.tone_a_confirmed = 0;
+    global_tone_detection.tone_b_confirmed = 0;
+    global_tone_detection.tone_a_tracking_start = 0;
+    global_tone_detection.tone_b_tracking_start = 0;
+    
     global_tone_detection.active = 0;
     
     printf("[INFO] Tone detection system initialized\n");
@@ -132,9 +140,12 @@ void* tone_detection_thread(void* arg) {
                 audio_buffer[i] *= global_tone_detection.config.gain;
             }
             
+            // Apply frequency filters to actual audio samples
+            apply_audio_frequency_filters(audio_buffer, samples_to_process);
+            
             // Analyze frequency spectrum
             if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
-                // Detect tone sequences
+                // Detect tone sequences with proper duration tracking
                 detect_tone_sequence(audio_buffer, samples_to_process);
             }
             
@@ -212,7 +223,7 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
     return 1;
 }
 
-// Detect tone sequences
+// Detect tone sequences with proper duration tracking
 int detect_tone_sequence(float* audio_samples, int sample_count) {
     (void)audio_samples; // Suppress unused parameter warning
     (void)sample_count;  // Suppress unused parameter warning
@@ -228,34 +239,77 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         }
         
         // Check for tone A
-        if (!global_tone_detection.current_tone_a_detected) {
+        if (!global_tone_detection.tone_a_confirmed) {
             if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
-                global_tone_detection.current_tone_a_detected = 1;
-                global_tone_detection.tone_a_start_time = current_time;
-                global_tone_detection.tone_sequence_active = 1;
-                printf("[TONE] Tone A detected: %.1f Hz (ID: %s)\n", 
-                       tone_def->tone_a_freq, tone_def->tone_id);
-                global_tone_detection.tone_a_detections++;
+                // Tone A frequency detected
+                if (!global_tone_detection.tone_a_tracking) {
+                    // Start tracking tone A
+                    global_tone_detection.tone_a_tracking = 1;
+                    global_tone_detection.tone_a_tracking_start = current_time;
+                    printf("[TONE] Tone A tracking started: %.1f Hz (ID: %s)\n", 
+                           tone_def->tone_a_freq, tone_def->tone_id);
+                } else {
+                    // Check if minimum duration has been met
+                    if (check_tone_duration(0, current_time, tone_def)) {
+                        global_tone_detection.tone_a_confirmed = 1;
+                        global_tone_detection.current_tone_a_detected = 1;
+                        global_tone_detection.tone_a_start_time = current_time;
+                        global_tone_detection.tone_sequence_active = 1;
+                        printf("[TONE] Tone A CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
+                               tone_def->tone_a_freq, tone_def->tone_id,
+                               current_time - global_tone_detection.tone_a_tracking_start);
+                        global_tone_detection.tone_a_detections++;
+                    }
+                }
+            } else {
+                // Tone A frequency not detected - reset tracking
+                if (global_tone_detection.tone_a_tracking) {
+                    global_tone_detection.tone_a_tracking = 0;
+                    global_tone_detection.tone_a_tracking_start = 0;
+                    printf("[TONE] Tone A tracking reset - frequency lost\n");
+                }
             }
         }
-        // Check for tone B (only if tone A was detected)
-        else if (!global_tone_detection.current_tone_b_detected) {
+        
+        // Check for tone B (only if tone A was confirmed)
+        else if (!global_tone_detection.tone_b_confirmed) {
             if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
-                global_tone_detection.current_tone_b_detected = 1;
-                global_tone_detection.tone_b_start_time = current_time;
-                printf("[TONE] Tone B detected: %.1f Hz (ID: %s)\n", 
-                       tone_def->tone_b_freq, tone_def->tone_id);
-                global_tone_detection.tone_b_detections++;
-                
-                // Start recording
-                global_tone_detection.recording_active = 1;
-                global_tone_detection.recording_start_time = current_time;
-                printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
-                
-                // Trigger tone passthrough if configured
-                trigger_tone_passthrough();
-                
-                global_tone_detection.total_detections++;
+                // Tone B frequency detected
+                if (!global_tone_detection.tone_b_tracking) {
+                    // Start tracking tone B
+                    global_tone_detection.tone_b_tracking = 1;
+                    global_tone_detection.tone_b_tracking_start = current_time;
+                    printf("[TONE] Tone B tracking started: %.1f Hz (ID: %s)\n", 
+                           tone_def->tone_b_freq, tone_def->tone_id);
+                } else {
+                    // Check if minimum duration has been met
+                    if (check_tone_duration(1, current_time, tone_def)) {
+                        global_tone_detection.tone_b_confirmed = 1;
+                        global_tone_detection.current_tone_b_detected = 1;
+                        global_tone_detection.tone_b_start_time = current_time;
+                        printf("[TONE] Tone B CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
+                               tone_def->tone_b_freq, tone_def->tone_id,
+                               current_time - global_tone_detection.tone_b_tracking_start);
+                        global_tone_detection.tone_b_detections++;
+                        
+                        // Start recording
+                        global_tone_detection.recording_active = 1;
+                        global_tone_detection.recording_start_time = current_time;
+                        printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
+                        
+                        // Trigger tone passthrough if configured
+                        trigger_tone_passthrough();
+                        
+                        global_tone_detection.total_detections++;
+                    }
+                }
+            } else {
+                // Tone B frequency not detected - reset tracking
+                if (global_tone_detection.tone_b_tracking) {
+                    global_tone_detection.tone_b_tracking = 0;
+                    global_tone_detection.tone_b_tracking_start = 0;
+                    printf("[TONE] Tone B tracking reset - frequency lost\n");
+                }
             }
         }
     }
@@ -282,10 +336,12 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     if (global_tone_detection.tone_sequence_active) {
         int time_since_tone_a = current_time - global_tone_detection.tone_a_start_time;
         if (time_since_tone_a > 5000) { // 5 second timeout
+            reset_tone_tracking();
             global_tone_detection.current_tone_a_detected = 0;
             global_tone_detection.current_tone_b_detected = 0;
             global_tone_detection.tone_sequence_active = 0;
             global_tone_detection.recording_active = 0;
+            printf("[TONE] Sequence reset due to timeout\n");
         }
     }
     
@@ -338,6 +394,70 @@ int apply_frequency_filters(float* magnitudes, int count) {
     }
     
     return 1;
+}
+
+// Apply frequency filters to actual audio samples (not just FFT magnitudes)
+int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
+    // This function removes audio outside the specified frequency ranges
+    // This is different from apply_frequency_filters() which only affects FFT magnitudes
+    
+    for (int f = 0; f < MAX_FILTERS; f++) {
+        struct frequency_filter* filter = &global_tone_detection.filters[f];
+        
+        if (!filter->valid) {
+            continue;
+        }
+        
+        // Convert frequency to bin for audio processing
+        int target_bin = (int)frequency_to_bin(filter->frequency);
+        
+        if (strcmp(filter->type, "below") == 0) {
+            // Remove frequencies below the target - apply high-pass filter effect
+            for (int i = 0; i < sample_count; i++) {
+                // Simple high-pass filter approximation
+                if (i < target_bin) {
+                    audio_samples[i] *= 0.1f; // Reduce amplitude
+                }
+            }
+        } else if (strcmp(filter->type, "above") == 0) {
+            // Remove frequencies above the target - apply low-pass filter effect
+            for (int i = target_bin; i < sample_count; i++) {
+                audio_samples[i] *= 0.1f; // Reduce amplitude
+            }
+        } else if (strcmp(filter->type, "center") == 0) {
+            // Keep only frequencies around the target - apply band-pass filter effect
+            for (int i = 0; i < sample_count; i++) {
+                if (abs(i - target_bin) > filter->filter_range_hz) {
+                    audio_samples[i] *= 0.1f; // Reduce amplitude
+                }
+            }
+        }
+    }
+    
+    return 1;
+}
+
+// Check if a tone has been present for the minimum required duration
+int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def) {
+    int required_duration = (tone_type == 0) ? tone_def->tone_a_length_ms : tone_def->tone_b_length_ms;
+    int tracking_start = (tone_type == 0) ? global_tone_detection.tone_a_tracking_start : global_tone_detection.tone_b_tracking_start;
+    
+    if (tracking_start == 0) {
+        return 0; // Not tracking yet
+    }
+    
+    int duration = current_time - tracking_start;
+    return (duration >= required_duration) ? 1 : 0;
+}
+
+// Reset tone tracking state
+void reset_tone_tracking(void) {
+    global_tone_detection.tone_a_tracking = 0;
+    global_tone_detection.tone_b_tracking = 0;
+    global_tone_detection.tone_a_confirmed = 0;
+    global_tone_detection.tone_b_confirmed = 0;
+    global_tone_detection.tone_a_tracking_start = 0;
+    global_tone_detection.tone_b_tracking_start = 0;
 }
 
 // Detect new tones

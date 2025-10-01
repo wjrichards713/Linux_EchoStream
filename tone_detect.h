@@ -70,6 +70,14 @@ struct tone_detection_state {
     int tone_a_start_time;
     int tone_b_start_time;
     
+    // Duration tracking for proper tone detection
+    int tone_a_tracking;          // 1 if currently tracking tone A
+    int tone_b_tracking;          // 1 if currently tracking tone B
+    int tone_a_confirmed;         // 1 if tone A has been confirmed (duration met)
+    int tone_b_confirmed;         // 1 if tone B has been confirmed (duration met)
+    int tone_a_tracking_start;    // Start time when tone A tracking began
+    int tone_b_tracking_start;    // Start time when tone B tracking began
+    
     // New tone detection
     float detected_frequencies[100];  // Buffer for detected frequencies
     int detected_frequency_count;
@@ -123,5 +131,10 @@ void reset_tone_detection_stats(void);
 
 // Tone passthrough integration
 void trigger_tone_passthrough(void);
+
+// Audio filtering and duration detection functions
+int apply_audio_frequency_filters(float* audio_samples, int sample_count);
+int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def);
+void reset_tone_tracking(void);
 
 #endif // TONE_DETECT_H
