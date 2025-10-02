@@ -162,11 +162,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Add some example tone definitions for testing
-    add_tone_definition("test_tone_1", 1000.0f, 2000.0f, 500, 500, 50, 50, 3000);
-    add_tone_definition("test_tone_2", 1500.0f, 2500.0f, 300, 300, 30, 30, 2000);
-    add_frequency_filter("low_pass", 300.0f, 0, "below");
-    add_frequency_filter("high_pass", 10000.0f, 0, "above");
+    // Tone definitions and filters are now loaded from JSON configuration in ~/.an/config.json
+    // No hardcoded test tones needed
     
     printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
     printf("\n=== SYSTEM BEHAVIOR ===\n");

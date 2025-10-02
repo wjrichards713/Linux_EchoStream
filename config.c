@@ -1,4 +1,5 @@
 #include "config.h"
+#include <errno.h>
 
 // Global configuration instance
 struct global_config global_app_config = {0};
@@ -83,11 +84,14 @@ int load_channel_config(char channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN]) {
 // Load complete configuration including tone detection settings
 int load_complete_config(void) {
     const char* config_path = "/home/will/.an/config.json";
+    printf("[CONFIG] Attempting to load configuration from: %s\n", config_path);
     FILE *file = fopen(config_path, "r");
     if (!file) {
-        printf("Warning: Could not open config file %s, using default configuration\n", config_path);
+        printf("[ERROR] Could not open config file %s: %s\n", config_path, strerror(errno));
+        printf("Using default configuration\n");
         return 0;
     }
+    printf("[CONFIG] Successfully opened config file\n");
     
     // Read the entire file
     fseek(file, 0, SEEK_END);
@@ -235,10 +239,12 @@ int load_complete_config(void) {
                                     tone_b = atof(json_object_get_string(tone_b_obj));
                                 }
                                 if (json_object_object_get_ex(tone_obj, "tone_a_length", &tone_a_length_obj)) {
-                                    tone_a_length = json_object_get_int(tone_a_length_obj);
+                                    // Convert seconds to milliseconds
+                                    tone_a_length = (int)(json_object_get_double(tone_a_length_obj) * 1000);
                                 }
                                 if (json_object_object_get_ex(tone_obj, "tone_b_length", &tone_b_length_obj)) {
-                                    tone_b_length = json_object_get_int(tone_b_length_obj);
+                                    // Convert seconds to milliseconds  
+                                    tone_b_length = (int)(json_object_get_double(tone_b_length_obj) * 1000);
                                 }
                                 if (json_object_object_get_ex(tone_obj, "tone_a_range", &tone_a_range_obj)) {
                                     tone_a_range = json_object_get_int(tone_a_range_obj);
@@ -247,10 +253,13 @@ int load_complete_config(void) {
                                     tone_b_range = json_object_get_int(tone_b_range_obj);
                                 }
                                 if (json_object_object_get_ex(tone_obj, "record_length", &record_length_obj)) {
-                                    record_length = json_object_get_int(record_length_obj);
+                                    // Convert seconds to milliseconds
+                                    record_length = json_object_get_int(record_length_obj) * 1000;
                                 }
                                 
                                 // Add tone definition
+                                printf("[CONFIG] Loading tone from JSON: ID=%s, A=%.1f Hz±%d (dur:%dms), B=%.1f Hz±%d (dur:%dms), rec:%dms\n",
+                                       tone_id, tone_a, tone_a_range, tone_a_length, tone_b, tone_b_range, tone_b_length, record_length);
                                 add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length);
                             }
                         }
@@ -284,6 +293,8 @@ int load_complete_config(void) {
                                 }
                                 
                                 // Add frequency filter
+                                printf("[CONFIG] Loading filter from JSON: ID=%s, freq=%.1f Hz, range=%d, type=%s\n",
+                                       filter_id, frequency, filter_range, type);
                                 add_frequency_filter(filter_id, frequency, filter_range, type);
                             }
                         }
