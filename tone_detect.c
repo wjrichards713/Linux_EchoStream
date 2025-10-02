@@ -227,14 +227,26 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
         // Check if this is a peak and above dB threshold
         if (current > prev && current > next && current > magnitude_threshold) {
             if (global_tone_detection.peak_count < 10) {
-                float peak_freq = bin_to_frequency(i);
+                // Quadratic (parabolic) interpolation around the peak to estimate sub-bin location
+                // delta = 0.5 * (prev - next) / (prev - 2*current + next)
+                float denominator = (prev - 2.0f * current + next);
+                float delta = 0.0f;
+                if (fabsf(denominator) > 1e-12f) {
+                    delta = 0.5f * (prev - next) / denominator;
+                    // Clamp delta to [-0.5, 0.5] to avoid wild jumps
+                    if (delta > 0.5f) delta = 0.5f;
+                    if (delta < -0.5f) delta = -0.5f;
+                }
+                float refined_bin = (float)i + delta;
+                float peak_freq = (refined_bin * (float)SAMPLE_RATE) / (float)FFT_SIZE;
+                
                 global_tone_detection.peak_frequencies[global_tone_detection.peak_count] = peak_freq;
                 global_tone_detection.peak_count++;
                 
                 // Debug output for peak detection (reduced verbosity)
                 if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
-                    printf("[DEBUG] Peak detected: %.1f Hz (bin %d, mag=%.6f, thresh=%.6f)\n",
-                           peak_freq, i, current, magnitude_threshold);
+                    printf("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
+                           peak_freq, i, delta, current, magnitude_threshold);
                 }
             }
         }
