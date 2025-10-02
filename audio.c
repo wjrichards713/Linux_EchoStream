@@ -99,7 +99,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
     static int callback_count = 0;
-    if (callback_count++ % 10000 == 0) {  // Much less frequent logging
+    if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
         printf("Audio input callback called (frames=%lu, transmitting=%d, gpio_active=%d)\n", 
                frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
@@ -113,7 +113,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     static int audio_processing_count = 0;
-    if (audio_processing_count++ % 10000 == 0) {  // Much less frequent logging
+    if (audio_processing_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
         printf("Audio processing for channel %s (frames=%lu, input_enabled=%d)\n", 
                audio_stream->channel_id, frames, input_enabled);
     }
@@ -167,7 +167,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                                    (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
                             
                             static int audio_send_count = 0;
-                            if (audio_send_count++ % 1000 == 0) {  // Much less frequent logging
+                            if (audio_send_count++ % 10000 == 0) {  // Even less frequent logging
                                 printf("Audio sent for channel %s (%d bytes, UDP result: %d)\n", 
                                        audio_stream->channel_id, (int)strlen(msg), sent);
                             }
@@ -199,7 +199,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     struct jitter_buffer *jitter = &audio_stream->output_jitter;
     
     static int callback_count = 0;
-    if (callback_count++ % 10000 == 0) {  // Much less frequent logging
+    if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
         printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
     }
     
