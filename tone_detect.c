@@ -279,9 +279,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     static int b_hit_streak = 0, b_miss_streak = 0;
     static int a_last_seen_ms = 0, b_last_seen_ms = 0;
     static int a_present = 0, b_present = 0;
-    const int HIT_REQUIRED = 3;      // require K hits
-    const int MISS_REQUIRED = 3;     // require K misses
-    const int GRACE_MS = 100;        // allow brief gaps without resetting
+    const int HIT_REQUIRED = 2;      // require K hits
+    const int MISS_REQUIRED = 2;     // require K misses
+    const int GRACE_MS = 250;        // allow brief gaps without resetting
 
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
@@ -469,6 +469,7 @@ int apply_frequency_filters(float* magnitudes, int count) {
         }
         
         int target_bin = (int)frequency_to_bin(filter->frequency);
+        int range_bins = (int)lroundf(((float)filter->filter_range_hz * (float)FFT_SIZE) / (float)SAMPLE_RATE);
         
         if (strcmp(filter->type, "below") == 0) {
             // Completely remove frequencies below the target
@@ -483,7 +484,7 @@ int apply_frequency_filters(float* magnitudes, int count) {
         } else if (strcmp(filter->type, "center") == 0) {
             // Keep only frequencies around the target, remove all others
             for (int i = 0; i < count; i++) {
-                if (abs(i - target_bin) > filter->filter_range_hz) {
+                if (abs(i - target_bin) > range_bins) {
                     magnitudes[i] = 0.0f; // Completely remove
                 }
             }
@@ -544,6 +545,7 @@ int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
             }
             
             int target_bin = (int)frequency_to_bin(filter->frequency);
+            int range_bins = (int)lroundf(((float)filter->filter_range_hz * (float)FFT_SIZE) / (float)SAMPLE_RATE);
             
             if (strcmp(filter->type, "below") == 0) {
                 // Completely remove frequencies below the target
@@ -560,7 +562,7 @@ int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
             } else if (strcmp(filter->type, "center") == 0) {
                 // Keep only frequencies around the target, remove all others
                 for (int i = 0; i < FREQ_BINS; i++) {
-                    if (abs(i - target_bin) > filter->filter_range_hz) {
+                    if (abs(i - target_bin) > range_bins) {
                         filter_fft_output[i][0] = 0.0;
                         filter_fft_output[i][1] = 0.0;
                     }
@@ -647,7 +649,10 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                 global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
                 global_tone_detection.detected_frequency_count++;
                 global_tone_detection.new_tone_detections++;
-                printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
+                // Suppress NEW TONE logs for frequencies within any configured tone window
+                if (!is_known_tone) {
+                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
+                }
             }
         }
     }
