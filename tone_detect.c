@@ -152,10 +152,10 @@ void* tone_detection_thread(void* arg) {
             
             samples_processed += samples_to_process;
             
-            // Print statistics every 1000 samples
-            if (samples_processed % 1000 == 0) {
+            // Print statistics much less frequently - every 50000 samples (about every 1 second at 48kHz)
+            if (samples_processed % 50000 == 0) {
                 static int stats_count = 0;
-                if (stats_count++ % 10 == 0) {
+                if (stats_count++ % 30 == 0) {  // Only every 30th time (about every 30 seconds)
                     print_tone_detection_stats();
                 }
             }
@@ -202,14 +202,20 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
         }
     }
     
-    // Find peak frequencies
+    // Convert dB threshold to linear magnitude threshold
+    float db_threshold_linear = powf(10.0f, global_tone_detection.config.db_threshold / 20.0f);
+    float magnitude_threshold = max_magnitude * db_threshold_linear;
+    
+    // Find peak frequencies above dB threshold
     for (int i = 1; i < FREQ_BINS - 1; i++) {
         float current = global_tone_detection.frequency_magnitudes[i];
         float prev = global_tone_detection.frequency_magnitudes[i-1];
         float next = global_tone_detection.frequency_magnitudes[i+1];
         
-        // Check if this is a peak
-        if (current > prev && current > next && current > max_magnitude * 0.1f) {
+        // Check if this is a peak and above dB threshold
+        if (current > prev && current > next && 
+            current > magnitude_threshold && 
+            current > max_magnitude * 0.1f) {
             if (global_tone_detection.peak_count < 10) {
                 global_tone_detection.peak_frequencies[global_tone_detection.peak_count] = 
                     bin_to_frequency(i);
@@ -375,20 +381,20 @@ int apply_frequency_filters(float* magnitudes, int count) {
         int target_bin = (int)frequency_to_bin(filter->frequency);
         
         if (strcmp(filter->type, "below") == 0) {
-            // Remove frequencies below the target
+            // Completely remove frequencies below the target
             for (int i = 0; i < target_bin; i++) {
-                magnitudes[i] *= 0.1f; // Reduce magnitude
+                magnitudes[i] = 0.0f; // Completely remove
             }
         } else if (strcmp(filter->type, "above") == 0) {
-            // Remove frequencies above the target
+            // Completely remove frequencies above the target
             for (int i = target_bin; i < count; i++) {
-                magnitudes[i] *= 0.1f; // Reduce magnitude
+                magnitudes[i] = 0.0f; // Completely remove
             }
         } else if (strcmp(filter->type, "center") == 0) {
-            // Keep only frequencies around the target
+            // Keep only frequencies around the target, remove all others
             for (int i = 0; i < count; i++) {
                 if (abs(i - target_bin) > filter->filter_range_hz) {
-                    magnitudes[i] *= 0.1f; // Reduce magnitude
+                    magnitudes[i] = 0.0f; // Completely remove
                 }
             }
         }
@@ -397,42 +403,90 @@ int apply_frequency_filters(float* magnitudes, int count) {
     return 1;
 }
 
-// Apply frequency filters to actual audio samples (not just FFT magnitudes)
+// Apply frequency filters to actual audio samples using FFT-based filtering
 int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
-    // This function removes audio outside the specified frequency ranges
-    // This is different from apply_frequency_filters() which only affects FFT magnitudes
+    // This function completely removes audio in the specified frequency ranges
+    // Uses FFT-based filtering for precise frequency domain manipulation
     
-    for (int f = 0; f < MAX_FILTERS; f++) {
-        struct frequency_filter* filter = &global_tone_detection.filters[f];
-        
-        if (!filter->valid) {
-            continue;
+    if (sample_count < FFT_SIZE) {
+        return 1; // Not enough samples for FFT filtering
+    }
+    
+    // Create temporary FFT buffers for filtering
+    static double filter_fft_input[FFT_SIZE];
+    static fftw_complex filter_fft_output[FFT_SIZE];
+    static fftw_plan forward_plan = NULL;
+    static fftw_plan inverse_plan = NULL;
+    
+    // Initialize FFT plans if not already done
+    if (!forward_plan) {
+        forward_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, filter_fft_input, filter_fft_output, FFTW_ESTIMATE);
+        inverse_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, filter_fft_output, filter_fft_input, FFTW_ESTIMATE);
+    }
+    
+    if (!forward_plan || !inverse_plan) {
+        return 0; // FFT plan creation failed
+    }
+    
+    // Process audio in FFT_SIZE chunks
+    int processed_samples = 0;
+    while (processed_samples + FFT_SIZE <= sample_count) {
+        // Copy audio samples to FFT input buffer
+        for (int i = 0; i < FFT_SIZE; i++) {
+            filter_fft_input[i] = (double)audio_samples[processed_samples + i];
         }
         
-        // Convert frequency to bin for audio processing
-        int target_bin = (int)frequency_to_bin(filter->frequency);
+        // Apply window function (Hanning window)
+        for (int i = 0; i < FFT_SIZE; i++) {
+            double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
+            filter_fft_input[i] *= window;
+        }
         
-        if (strcmp(filter->type, "below") == 0) {
-            // Remove frequencies below the target - apply high-pass filter effect
-            for (int i = 0; i < sample_count; i++) {
-                // Simple high-pass filter approximation
-                if (i < target_bin) {
-                    audio_samples[i] *= 0.1f; // Reduce amplitude
+        // Forward FFT
+        fftw_execute(forward_plan);
+        
+        // Apply frequency filters in frequency domain
+        for (int f = 0; f < MAX_FILTERS; f++) {
+            struct frequency_filter* filter = &global_tone_detection.filters[f];
+            
+            if (!filter->valid) {
+                continue;
+            }
+            
+            int target_bin = (int)frequency_to_bin(filter->frequency);
+            
+            if (strcmp(filter->type, "below") == 0) {
+                // Completely remove frequencies below the target
+                for (int i = 0; i < target_bin && i < FREQ_BINS; i++) {
+                    filter_fft_output[i][0] = 0.0;
+                    filter_fft_output[i][1] = 0.0;
                 }
-            }
-        } else if (strcmp(filter->type, "above") == 0) {
-            // Remove frequencies above the target - apply low-pass filter effect
-            for (int i = target_bin; i < sample_count; i++) {
-                audio_samples[i] *= 0.1f; // Reduce amplitude
-            }
-        } else if (strcmp(filter->type, "center") == 0) {
-            // Keep only frequencies around the target - apply band-pass filter effect
-            for (int i = 0; i < sample_count; i++) {
-                if (abs(i - target_bin) > filter->filter_range_hz) {
-                    audio_samples[i] *= 0.1f; // Reduce amplitude
+            } else if (strcmp(filter->type, "above") == 0) {
+                // Completely remove frequencies above the target
+                for (int i = target_bin; i < FREQ_BINS; i++) {
+                    filter_fft_output[i][0] = 0.0;
+                    filter_fft_output[i][1] = 0.0;
+                }
+            } else if (strcmp(filter->type, "center") == 0) {
+                // Keep only frequencies around the target, remove all others
+                for (int i = 0; i < FREQ_BINS; i++) {
+                    if (abs(i - target_bin) > filter->filter_range_hz) {
+                        filter_fft_output[i][0] = 0.0;
+                        filter_fft_output[i][1] = 0.0;
+                    }
                 }
             }
         }
+        
+        // Inverse FFT
+        fftw_execute(inverse_plan);
+        
+        // Copy filtered samples back to audio buffer with normalization
+        for (int i = 0; i < FFT_SIZE; i++) {
+            audio_samples[processed_samples + i] = (float)(filter_fft_input[i] / FFT_SIZE);
+        }
+        
+        processed_samples += FFT_SIZE;
     }
     
     return 1;
@@ -467,6 +521,7 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         float freq = global_tone_detection.peak_frequencies[i];
         int is_known_tone = 0;
+        int is_duplicate = 0;
         
         // Check if this frequency matches any defined tone
         for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
@@ -481,8 +536,16 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
         }
         
         if (!is_known_tone) {
-            // This is a new tone
-            if (global_tone_detection.detected_frequency_count < 100) {
+            // Check if we've already detected this frequency recently (within 3 Hz)
+            for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
+                if (fabs(global_tone_detection.detected_frequencies[k] - freq) < 3.0f) {
+                    is_duplicate = 1;
+                    break;
+                }
+            }
+            
+            if (!is_duplicate && global_tone_detection.detected_frequency_count < 100) {
+                // This is a genuinely new tone - only log once per frequency
                 global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
                 global_tone_detection.detected_frequency_count++;
                 global_tone_detection.new_tone_detections++;
@@ -513,11 +576,17 @@ int is_frequency_in_range(float freq, float target, int range) {
 
 // Statistics functions
 void print_tone_detection_stats(void) {
-    printf("[TONE STATS] Total: %d, Tone A: %d, Tone B: %d, New: %d\n",
-           global_tone_detection.total_detections,
-           global_tone_detection.tone_a_detections,
-           global_tone_detection.tone_b_detections,
-           global_tone_detection.new_tone_detections);
+    // Only print stats if there are any detections to report
+    if (global_tone_detection.total_detections > 0 || 
+        global_tone_detection.tone_a_detections > 0 || 
+        global_tone_detection.tone_b_detections > 0 || 
+        global_tone_detection.new_tone_detections > 0) {
+        printf("[TONE STATS] Total: %d, Tone A: %d, Tone B: %d, New: %d\n",
+               global_tone_detection.total_detections,
+               global_tone_detection.tone_a_detections,
+               global_tone_detection.tone_b_detections,
+               global_tone_detection.new_tone_detections);
+    }
 }
 
 void reset_tone_detection_stats(void) {

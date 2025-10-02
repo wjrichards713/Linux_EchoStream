@@ -289,8 +289,17 @@ int load_complete_config(void) {
                         }
                         
                         tone_config->valid = 1;
+                        
+                        // Apply tone configuration to the detection system
+                        set_tone_config(tone_config->threshold, tone_config->gain, 
+                                      tone_config->db_threshold, tone_config->detect_new_tones,
+                                      tone_config->new_tone_length_ms, tone_config->new_tone_range_hz);
+                        
                         printf("Loaded tone detection config for channel %d: passthrough=%d, channel=%s\n", 
                                i+1, tone_config->tone_passthrough, tone_config->passthrough_channel);
+                        printf("Applied tone config: threshold=%.2f, gain=%.2f, db=%d, detect_new=%d\n",
+                               tone_config->threshold, tone_config->gain, tone_config->db_threshold, 
+                               tone_config->detect_new_tones);
                     }
                 }
             }

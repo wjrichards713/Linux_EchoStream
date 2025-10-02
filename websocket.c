@@ -68,7 +68,15 @@ static int websocket_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
             
         case LWS_CALLBACK_CLIENT_RECEIVE: {
-            printf("Received WebSocket message: %.*s\n", (int)len, (char *)in);
+            static int ws_message_count = 0;
+            ws_message_count++;
+            // Only log every 50th WebSocket message (or important ones)
+            int is_important = (strstr((char*)in, "udp_host") != NULL) || 
+                              (strstr((char*)in, "error") != NULL) ||
+                              (strstr((char*)in, "disconnect") != NULL);
+            if ((ws_message_count % 50 == 0) || is_important) {
+                printf("Received WebSocket message (#%d): %.*s\n", ws_message_count, (int)len, (char *)in);
+            }
             
             char *data = malloc(len + 1);
             if (data) {

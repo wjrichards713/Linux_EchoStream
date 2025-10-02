@@ -88,8 +88,13 @@ void* heartbeat_worker(void* arg) {
             int result = sendto(global_udp_socket, heartbeat_msg, strlen(heartbeat_msg), 0,
                                (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
             
+            static int heartbeat_count = 0;
             if (result >= 0) {
-                printf("Heartbeat sent to keep NAT mapping active\n");
+                heartbeat_count++;
+                // Only log every 60th heartbeat (about every 10 minutes)
+                if (heartbeat_count % 60 == 0) {
+                    printf("Heartbeat sent to keep NAT mapping active (count: %d)\n", heartbeat_count);
+                }
             } else {
                 printf("Heartbeat error: %s\n", strerror(errno));
             }
@@ -123,15 +128,19 @@ void* udp_listener_worker(void* arg) {
                                     (struct sockaddr*)&client_addr, &client_len);
         
         static int udp_debug_count = 0;
-        if (udp_debug_count++ % 1000 == 0) {
+        if (udp_debug_count++ % 100000 == 0) {  // Much less frequent - about every 10 minutes
             printf("UDP Listener: Still listening... (attempt %d)\n", udp_debug_count);
         }
         
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
-            printf("UDP Listener: Received %d bytes from %s:%d\n", 
-                   bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-            printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
+            static int receive_count = 0;
+            receive_count++;
+            // Only log every 1000th UDP message received
+            if (receive_count % 1000 == 0) {
+                printf("UDP Listener: Received %d bytes from %s:%d (count: %d)\n", 
+                       bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port), receive_count);
+            }
             
             // Parse JSON message
             struct json_object *json = json_tokener_parse(buffer);
