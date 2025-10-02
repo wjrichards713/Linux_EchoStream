@@ -218,6 +218,9 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
                absolute_db_threshold, relative_threshold, magnitude_threshold);
     }
     
+    // Apply frequency filters BEFORE peak picking so peaks reflect configured filters
+    apply_frequency_filters(global_tone_detection.frequency_magnitudes, FREQ_BINS);
+
     // Find peak frequencies above dB threshold
     for (int i = 1; i < FREQ_BINS - 1; i++) {
         float current = global_tone_detection.frequency_magnitudes[i];
@@ -251,9 +254,6 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
             }
         }
     }
-    
-    // Apply frequency filters
-    apply_frequency_filters(global_tone_detection.frequency_magnitudes, FREQ_BINS);
     
     return 1;
 }
