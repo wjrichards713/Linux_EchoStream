@@ -96,6 +96,7 @@ int load_complete_config(void) {
     // Read the entire file
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
+    printf("[CONFIG] Config file size: %ld bytes\n", file_size);
     fseek(file, 0, SEEK_SET);
     
     char *json_string = malloc(file_size + 1);
@@ -110,6 +111,7 @@ int load_complete_config(void) {
     fclose(file);
     
     // Parse JSON
+    printf("[CONFIG] Parsing JSON configuration...\n");
     struct json_object *json = json_tokener_parse(json_string);
     free(json_string);
     

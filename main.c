@@ -66,11 +66,13 @@ int main(int argc, char *argv[]) {
     }
     
     // Load complete configuration including tone detection settings
-    printf("Loading complete configuration...\n");
+    printf("[MAIN] Loading complete configuration from /home/will/.an/config.json...\n");
     if (load_complete_config()) {
-        printf("Complete configuration loaded successfully\n");
+        printf("[MAIN] Complete configuration loaded successfully\n");
     } else {
-        printf("Using default configuration\n");
+        printf("[MAIN] ERROR: Failed to load JSON config - NO TONE DETECTION AVAILABLE\n");
+        printf("[MAIN] Please check /home/will/.an/config.json file exists and is readable\n");
+        return 1;  // Exit if config cannot be loaded
     }
     
     if (!initialize_portaudio()) {

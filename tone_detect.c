@@ -141,8 +141,8 @@ void* tone_detection_thread(void* arg) {
                 audio_buffer[i] *= global_tone_detection.config.gain;
             }
             
-            // Apply frequency filters to actual audio samples (temporarily disabled for debugging)
-            // apply_audio_frequency_filters(audio_buffer, samples_to_process);
+            // Apply frequency filters to actual audio samples
+            apply_audio_frequency_filters(audio_buffer, samples_to_process);
             
             // Analyze frequency spectrum
             if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
