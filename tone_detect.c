@@ -231,8 +231,8 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
                 global_tone_detection.peak_frequencies[global_tone_detection.peak_count] = peak_freq;
                 global_tone_detection.peak_count++;
                 
-                // Debug output for peak detection (especially around 1000 Hz)
-                if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) || debug_count % 200 == 0) {
+                // Debug output for peak detection (reduced verbosity)
+                if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
                     printf("[DEBUG] Peak detected: %.1f Hz (bin %d, mag=%.6f, thresh=%.6f)\n",
                            peak_freq, i, current, magnitude_threshold);
                 }
@@ -251,7 +251,16 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     (void)audio_samples; // Suppress unused parameter warning
     (void)sample_count;  // Suppress unused parameter warning
     
-    int current_time = (int)(time(NULL) * 1000); // Current time in milliseconds
+    // Use milliseconds since program start to avoid overflow
+    static struct timespec start_time = {0};
+    if (start_time.tv_sec == 0) {
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+    }
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
+                            (now.tv_nsec - start_time.tv_nsec) / 1000000);
     
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
@@ -539,9 +548,9 @@ int check_tone_duration(int tone_type, int current_time, struct tone_definition*
     
     int duration = current_time - tracking_start;
     
-    // Debug output for duration checking
+    // Debug output for duration checking (only when close to meeting requirement)
     static int duration_debug_count = 0;
-    if (duration_debug_count++ % 50 == 0) {
+    if (duration_debug_count++ % 100 == 0 || duration >= (required_duration * 0.8)) {
         printf("[DEBUG] Tone %c duration check: %d ms (required: %d ms, tracking_start: %d)\n",
                (tone_type == 0) ? 'A' : 'B', duration, required_duration, tracking_start);
     }
