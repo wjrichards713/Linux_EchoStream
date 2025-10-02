@@ -274,6 +274,15 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
                             (now.tv_nsec - start_time.tv_nsec) / 1000000);
     
+    // Presence smoothing state (N-of-M + grace) for stability
+    static int a_hit_streak = 0, a_miss_streak = 0;
+    static int b_hit_streak = 0, b_miss_streak = 0;
+    static int a_last_seen_ms = 0, b_last_seen_ms = 0;
+    static int a_present = 0, b_present = 0;
+    const int HIT_REQUIRED = 3;      // require K hits
+    const int MISS_REQUIRED = 3;     // require K misses
+    const int GRACE_MS = 100;        // allow brief gaps without resetting
+
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
@@ -285,8 +294,15 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         // Check for tone A
         if (!global_tone_detection.tone_a_confirmed) {
             if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
+                // Hit update
+                a_hit_streak++;
+                a_miss_streak = 0;
+                a_last_seen_ms = current_time;
+                if (!a_present && a_hit_streak >= HIT_REQUIRED) {
+                    a_present = 1;
+                }
                 // Tone A frequency detected
-                if (!global_tone_detection.tone_a_tracking) {
+                if (!global_tone_detection.tone_a_tracking && a_present) {
                     // Start tracking tone A
                     global_tone_detection.tone_a_tracking = 1;
                     global_tone_detection.tone_a_tracking_start = current_time;
@@ -299,7 +315,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     }
                 } else {
                     // Check if minimum duration has been met
-                    if (check_tone_duration(0, current_time, tone_def)) {
+                    if (a_present && check_tone_duration(0, current_time, tone_def)) {
                         global_tone_detection.tone_a_confirmed = 1;
                         global_tone_detection.current_tone_a_detected = 1;
                         global_tone_detection.tone_a_start_time = current_time;
@@ -311,15 +327,20 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     }
                 }
             } else {
-                // Tone A frequency not detected - reset tracking
-                if (global_tone_detection.tone_a_tracking) {
-                    global_tone_detection.tone_a_tracking = 0;
-                    global_tone_detection.tone_a_tracking_start = 0;
-                    // Only log reset if we haven't logged recently (debounce)
-                    static int last_tone_a_reset_log = 0;
-                    if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
-                        printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                        last_tone_a_reset_log = current_time;
+                // Miss update with grace
+                a_miss_streak++;
+                if ((current_time - a_last_seen_ms) > GRACE_MS && a_miss_streak >= MISS_REQUIRED) {
+                    a_present = 0;
+                    a_hit_streak = 0;
+                    if (global_tone_detection.tone_a_tracking) {
+                        global_tone_detection.tone_a_tracking = 0;
+                        global_tone_detection.tone_a_tracking_start = 0;
+                        // Only log reset if we haven't logged recently (debounce)
+                        static int last_tone_a_reset_log = 0;
+                        if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_a_reset_log = current_time;
+                        }
                     }
                 }
             }
@@ -328,8 +349,15 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         // Check for tone B (only if tone A was confirmed)
         else if (!global_tone_detection.tone_b_confirmed) {
             if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
+                // Hit update
+                b_hit_streak++;
+                b_miss_streak = 0;
+                b_last_seen_ms = current_time;
+                if (!b_present && b_hit_streak >= HIT_REQUIRED) {
+                    b_present = 1;
+                }
                 // Tone B frequency detected
-                if (!global_tone_detection.tone_b_tracking) {
+                if (!global_tone_detection.tone_b_tracking && b_present) {
                     // Start tracking tone B
                     global_tone_detection.tone_b_tracking = 1;
                     global_tone_detection.tone_b_tracking_start = current_time;
@@ -342,7 +370,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     }
                 } else {
                     // Check if minimum duration has been met
-                    if (check_tone_duration(1, current_time, tone_def)) {
+                    if (b_present && check_tone_duration(1, current_time, tone_def)) {
                         global_tone_detection.tone_b_confirmed = 1;
                         global_tone_detection.current_tone_b_detected = 1;
                         global_tone_detection.tone_b_start_time = current_time;
@@ -363,15 +391,20 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     }
                 }
             } else {
-                // Tone B frequency not detected - reset tracking
-                if (global_tone_detection.tone_b_tracking) {
-                    global_tone_detection.tone_b_tracking = 0;
-                    global_tone_detection.tone_b_tracking_start = 0;
-                    // Only log reset if we haven't logged recently (debounce)
-                    static int last_tone_b_reset_log = 0;
-                    if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
-                        printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                        last_tone_b_reset_log = current_time;
+                // Miss update with grace
+                b_miss_streak++;
+                if ((current_time - b_last_seen_ms) > GRACE_MS && b_miss_streak >= MISS_REQUIRED) {
+                    b_present = 0;
+                    b_hit_streak = 0;
+                    if (global_tone_detection.tone_b_tracking) {
+                        global_tone_detection.tone_b_tracking = 0;
+                        global_tone_detection.tone_b_tracking_start = 0;
+                        // Only log reset if we haven't logged recently (debounce)
+                        static int last_tone_b_reset_log = 0;
+                        if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_b_reset_log = current_time;
+                        }
                     }
                 }
             }
