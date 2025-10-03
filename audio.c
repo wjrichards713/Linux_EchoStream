@@ -21,6 +21,19 @@ struct tone_detect_control global_tone_detect = {0};
 // Global tone passthrough control
 struct tone_passthrough_control global_tone_passthrough = {0};
 
+// Helper: check if a channel_id matches the configured passthrough_channel from JSON
+static int is_configured_passthrough_channel_id(const char* channel_id) {
+    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    if (!tone_cfg || !tone_cfg->tone_passthrough) return 0;
+    int idx = -1;
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) idx = 1;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) idx = 0;
+    if (idx < 0) return 0;
+    return (strcmp(channel_id, global_channel_ids[idx]) == 0) ? 1 : 0;
+}
+
 // Initialize tone detection control
 int init_tone_detect_control(void) {
     memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
@@ -204,12 +217,12 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
     }
     
-    // Check if this is Card 3 and if it should be in passthrough mode
-    int is_card3 = (strcmp(audio_stream->channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0);
-    int passthrough_mode = is_card3 ? is_card3_passthrough_mode() : 0;
+    // Check if this channel is the configured passthrough target
+    int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+    int passthrough_mode = is_configured_target ? is_card3_passthrough_mode() : 0;
     
     if (passthrough_mode) {
-        // Card 3 in passthrough mode - don't play EchoStream audio
+        // Configured passthrough target in passthrough mode - don't play EchoStream audio
         memset(out, 0, frames * sizeof(float));
         return paContinue;
     }
@@ -598,45 +611,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
     
-    // Check if this is Card 3 (Channel 308e...) - reserve for passthrough only
-    int is_card3 = (strcmp(audio_stream->channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0);
-    
-    if (is_card3) {
-        printf("[INFO] Channel %s (Card 3) reserved for passthrough - running input-only mode\n", 
-               audio_stream->channel_id);
-        
-        // Setup input stream only for Card 3
-        input_params.device = audio_stream->device_index;
-        if (input_params.device == paNoDevice) {
-            fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
-            return 0;
-        }
-        
-        input_params.channelCount = 1;
-        input_params.sampleFormat = paFloat32;
-        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-        input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
-                                    paClipOff, audio_input_callback, audio_stream);
-        
-        if (err != paNoError) {
-            fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
-            return 0;
-        }
-        
-        // Start input stream only
-        err = Pa_StartStream(audio_stream->input_stream);
-        if (err != paNoError) {
-            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-            Pa_CloseStream(audio_stream->input_stream);
-            return 0;
-        }
-        
-        printf("Channel %s running in input-only mode (reserved for passthrough)\n", audio_stream->channel_id);
-        audio_stream->transmitting = 1;
-        return 1;
-    }
+    // No channel is hard-reserved for passthrough; selection is driven by JSON.
     
     // Setup input stream for other channels
     input_params.device = audio_stream->device_index;
