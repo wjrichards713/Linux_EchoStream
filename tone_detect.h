@@ -41,6 +41,7 @@ struct tone_config {
     int detect_new_tones;     // 1 to detect unknown tones
     int new_tone_length_ms;   // Minimum length for new tone detection
     int new_tone_range_hz;    // Frequency range for new tone detection
+    int log_only_confirmed;   // 1 to log only confirmed tone events (internal-only)
     int valid;                // 1 if config is valid
 };
 
