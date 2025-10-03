@@ -141,7 +141,8 @@ void* tone_detection_thread(void* arg) {
                 audio_buffer[i] *= global_tone_detection.config.gain;
             }
             
-            // Filters disabled for channel 1: skip audio-domain filtering
+            // Apply frequency filters to actual audio samples
+            apply_audio_frequency_filters(audio_buffer, samples_to_process);
             
             // Analyze frequency spectrum
             if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
@@ -217,7 +218,8 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
                absolute_db_threshold, relative_threshold, magnitude_threshold);
     }
     
-    // Filters disabled for channel 1: skip spectrum-domain filtering before peak picking
+    // Apply frequency filters BEFORE peak picking so peaks reflect configured filters
+    apply_frequency_filters(global_tone_detection.frequency_magnitudes, FREQ_BINS);
 
     // Find peak frequencies above dB threshold
     for (int i = 1; i < FREQ_BINS - 1; i++) {
