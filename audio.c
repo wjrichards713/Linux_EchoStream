@@ -1,5 +1,6 @@
 #include "audio.h"
 #include "crypto.h"
+#include "config.h"
 #include "udp.h"
 #include "tone_detect.h"
 #include <math.h>
@@ -374,23 +375,45 @@ int init_audio_passthrough(void) {
         printf("  USB device %d: %d\n", i, usb_devices[i]);
     }
     
-    // Use Device 2 (Card 3) specifically for passthrough output
-    if (usb_devices[2] != paNoDevice) {
+    // Prefer output device from JSON passthrough_channel configuration
+    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    if (tone_cfg && tone_cfg->tone_passthrough) {
+        int target_channel = -1;
+        if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+            target_channel = 3;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+            target_channel = 2;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+            target_channel = 1;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+            target_channel = 0;
+        }
+
+        if (target_channel >= 0) {
+            PaDeviceIndex dev = channels[target_channel].audio.device_index;
+            if (dev != paNoDevice) {
+                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(dev);
+                if (device_info && device_info->maxOutputChannels > 0) {
+                    global_passthrough.output_device = dev;
+                    printf("[DEBUG] Using configured passthrough_channel device %d for passthrough output (channel %d)\n", (int)dev, target_channel + 1);
+                }
+            }
+        }
+    }
+
+    // Fallbacks if config not available or unsuitable
+    if (global_passthrough.output_device == paNoDevice && usb_devices[2] != paNoDevice) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[2]);
         if (device_info && device_info->maxOutputChannels > 0) {
             global_passthrough.output_device = usb_devices[2];
-            printf("[DEBUG] Using USB device 2 (Card 3) for passthrough output\n");
+            printf("[DEBUG] Fallback: Using USB device 2 (Card 3) for passthrough output\n");
         }
     }
-    
-    // If Device 2 not available, try Device 3
-    if (global_passthrough.output_device == paNoDevice) {
-        if (usb_devices[3] != paNoDevice) {
-            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[3]);
-            if (device_info && device_info->maxOutputChannels > 0) {
-                global_passthrough.output_device = usb_devices[3];
-                printf("[DEBUG] Using USB device 3 (Card 4) for passthrough output\n");
-            }
+    if (global_passthrough.output_device == paNoDevice && usb_devices[3] != paNoDevice) {
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[3]);
+        if (device_info && device_info->maxOutputChannels > 0) {
+            global_passthrough.output_device = usb_devices[3];
+            printf("[DEBUG] Fallback: Using USB device 3 (Card 4) for passthrough output\n");
         }
     }
     
@@ -415,12 +438,29 @@ int start_audio_passthrough(void) {
     // Ensure USB devices are assigned
     auto_assign_usb_devices();
     
-    // Update output device after assignment
-    if (usb_devices[2] != paNoDevice) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[2]);
-        if (device_info && device_info->maxOutputChannels > 0) {
-            global_passthrough.output_device = usb_devices[2];
-            printf("[DEBUG] Using USB device 2 (Card 3) for passthrough output\n");
+    // Update output device from JSON passthrough_channel after device assignment
+    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    if (tone_cfg && tone_cfg->tone_passthrough) {
+        int target_channel = -1;
+        if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+            target_channel = 3;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+            target_channel = 2;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+            target_channel = 1;
+        } else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+            target_channel = 0;
+        }
+
+        if (target_channel >= 0) {
+            PaDeviceIndex dev = channels[target_channel].audio.device_index;
+            if (dev != paNoDevice) {
+                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(dev);
+                if (device_info && device_info->maxOutputChannels > 0) {
+                    global_passthrough.output_device = dev;
+                    printf("[DEBUG] Using configured passthrough_channel device %d for passthrough output (channel %d)\n", (int)dev, target_channel + 1);
+                }
+            }
         }
     }
     

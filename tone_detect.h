@@ -41,7 +41,6 @@ struct tone_config {
     int detect_new_tones;     // 1 to detect unknown tones
     int new_tone_length_ms;   // Minimum length for new tone detection
     int new_tone_range_hz;    // Frequency range for new tone detection
-    int log_only_confirmed;   // 1 to log only confirmed tone events (internal-only)
     int valid;                // 1 if config is valid
 };
 
@@ -116,7 +115,7 @@ int set_tone_config(float threshold, float gain, int db_threshold, int detect_ne
 // Detection functions
 int detect_tone_sequence(float* audio_samples, int sample_count);
 int analyze_frequency_spectrum(float* audio_samples, int sample_count);
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b, float* matched_freq_out);
+int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b);
 int apply_frequency_filters(float* magnitudes, int count);
 int detect_new_tones(float* magnitudes, int count);
 

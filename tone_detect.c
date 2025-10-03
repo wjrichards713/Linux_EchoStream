@@ -53,8 +53,6 @@ int init_tone_detection(void) {
     
     global_tone_detection.active = 0;
     
-    // Default to quiet: only confirmed tone events
-    global_tone_detection.config.log_only_confirmed = 1;
     printf("[INFO] Tone detection system initialized\n");
     return 1;
 }
@@ -74,9 +72,7 @@ int start_tone_detection(void) {
         return 0;
     }
     
-    if (!global_tone_detection.config.log_only_confirmed) {
-        printf("[INFO] Tone detection thread started\n");
-    }
+    printf("[INFO] Tone detection thread started\n");
     return 1;
 }
 
@@ -96,9 +92,7 @@ void stop_tone_detection(void) {
     // Wait for thread to finish
     pthread_join(global_tone_detection.thread, NULL);
     
-    if (!global_tone_detection.config.log_only_confirmed) {
-        printf("[INFO] Tone detection thread stopped\n");
-    }
+    printf("[INFO] Tone detection thread stopped\n");
 }
 
 // Main tone detection thread
@@ -218,12 +212,10 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
     
     // Debug output for threshold analysis
     static int debug_count = 0;
-    if (!global_tone_detection.config.log_only_confirmed) {
-        if (debug_count++ % 100 == 0) {
-            printf("[DEBUG] FFT: max_mag=%.6f, db_thresh=%d, abs_thresh=%.6f, rel_thresh=%.6f, final_thresh=%.6f\n",
-                   max_magnitude, global_tone_detection.config.db_threshold, 
-                   absolute_db_threshold, relative_threshold, magnitude_threshold);
-        }
+    if (debug_count++ % 100 == 0) {
+        printf("[DEBUG] FFT: max_mag=%.6f, db_thresh=%d, abs_thresh=%.6f, rel_thresh=%.6f, final_thresh=%.6f\n",
+               max_magnitude, global_tone_detection.config.db_threshold, 
+               absolute_db_threshold, relative_threshold, magnitude_threshold);
     }
     
     // Apply frequency filters BEFORE peak picking so peaks reflect configured filters
@@ -255,11 +247,9 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
                 global_tone_detection.peak_count++;
                 
                 // Debug output for peak detection (reduced verbosity)
-                if (!global_tone_detection.config.log_only_confirmed) {
-                    if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
-                        printf("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
-                               peak_freq, i, delta, current, magnitude_threshold);
-                    }
+                if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
+                    printf("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
+                           peak_freq, i, delta, current, magnitude_threshold);
                 }
             }
         }
@@ -293,8 +283,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     const int MISS_REQUIRED = 2;     // require K misses
     const int GRACE_MS = 250;        // allow brief gaps without resetting
 
-    int quiet = global_tone_detection.config.log_only_confirmed;
-
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
@@ -305,19 +293,11 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone A
         if (!global_tone_detection.tone_a_confirmed) {
-            float matched_a_freq = 0.0f;
-            if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0, &matched_a_freq)) {
+            if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
                 // Hit update
                 a_hit_streak++;
                 a_miss_streak = 0;
                 a_last_seen_ms = current_time;
-                // Log first hit entering in-range (debounced) even in quiet mode
-                static int last_a_inrange_log = 0;
-                if (current_time - last_a_inrange_log > 1000) {
-                    printf("[TONE] Tone A in-range: target=%.1f Hz (±%d), matched=%.1f Hz (ID: %s)\n",
-                           tone_def->tone_a_freq, tone_def->tone_a_range_hz, matched_a_freq, tone_def->tone_id);
-                    last_a_inrange_log = current_time;
-                }
                 if (!a_present && a_hit_streak >= HIT_REQUIRED) {
                     a_present = 1;
                 }
@@ -328,12 +308,10 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     global_tone_detection.tone_a_tracking_start = current_time;
                     // Only log if we haven't been tracking recently (debounce)
                     static int last_tone_a_start_log = 0;
-                    if (!global_tone_detection.config.log_only_confirmed) {
-                        if (current_time - last_tone_a_start_log > 5000) { // 5 second debounce
-                            printf("[TONE] Tone A tracking started: %.1f Hz (ID: %s)\n", 
-                                   tone_def->tone_a_freq, tone_def->tone_id);
-                            last_tone_a_start_log = current_time;
-                        }
+                    if (current_time - last_tone_a_start_log > 5000) { // 5 second debounce
+                        printf("[TONE] Tone A tracking started: %.1f Hz (ID: %s)\n", 
+                               tone_def->tone_a_freq, tone_def->tone_id);
+                        last_tone_a_start_log = current_time;
                     }
                 } else {
                     // Check if minimum duration has been met
@@ -359,11 +337,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         global_tone_detection.tone_a_tracking_start = 0;
                         // Only log reset if we haven't logged recently (debounce)
                         static int last_tone_a_reset_log = 0;
-                        if (!global_tone_detection.config.log_only_confirmed) {
-                            if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
-                                printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                                last_tone_a_reset_log = current_time;
-                            }
+                        if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_a_reset_log = current_time;
                         }
                     }
                 }
@@ -372,19 +348,11 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone B (only if tone A was confirmed)
         else if (!global_tone_detection.tone_b_confirmed) {
-            float matched_b_freq = 0.0f;
-            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1, &matched_b_freq)) {
+            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
                 // Hit update
                 b_hit_streak++;
                 b_miss_streak = 0;
                 b_last_seen_ms = current_time;
-                // Log first hit entering in-range (debounced) even in quiet mode
-                static int last_b_inrange_log = 0;
-                if (current_time - last_b_inrange_log > 1000) {
-                    printf("[TONE] Tone B in-range: target=%.1f Hz (±%d), matched=%.1f Hz (ID: %s)\n",
-                           tone_def->tone_b_freq, tone_def->tone_b_range_hz, matched_b_freq, tone_def->tone_id);
-                    last_b_inrange_log = current_time;
-                }
                 if (!b_present && b_hit_streak >= HIT_REQUIRED) {
                     b_present = 1;
                 }
@@ -395,12 +363,10 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     global_tone_detection.tone_b_tracking_start = current_time;
                     // Only log if we haven't been tracking recently (debounce)
                     static int last_tone_b_start_log = 0;
-                    if (!global_tone_detection.config.log_only_confirmed) {
-                        if (current_time - last_tone_b_start_log > 5000) { // 5 second debounce
-                            printf("[TONE] Tone B tracking started: %.1f Hz (ID: %s)\n", 
-                                   tone_def->tone_b_freq, tone_def->tone_id);
-                            last_tone_b_start_log = current_time;
-                        }
+                    if (current_time - last_tone_b_start_log > 5000) { // 5 second debounce
+                        printf("[TONE] Tone B tracking started: %.1f Hz (ID: %s)\n", 
+                               tone_def->tone_b_freq, tone_def->tone_id);
+                        last_tone_b_start_log = current_time;
                     }
                 } else {
                     // Check if minimum duration has been met
@@ -416,9 +382,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         // Start recording
                         global_tone_detection.recording_active = 1;
                         global_tone_detection.recording_start_time = current_time;
-                        if (!quiet) {
-                            printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
-                        }
+                        printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
                         
                         // Trigger tone passthrough if configured
                         trigger_tone_passthrough();
@@ -437,11 +401,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         global_tone_detection.tone_b_tracking_start = 0;
                         // Only log reset if we haven't logged recently (debounce)
                         static int last_tone_b_reset_log = 0;
-                        if (!global_tone_detection.config.log_only_confirmed) {
-                            if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
-                                printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                                last_tone_b_reset_log = current_time;
-                            }
+                        if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_b_reset_log = current_time;
                         }
                     }
                 }
@@ -450,7 +412,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     }
     
     // Check for new tone detection
-    if (global_tone_detection.config.detect_new_tones && !global_tone_detection.config.log_only_confirmed) {
+    if (global_tone_detection.config.detect_new_tones) {
         detect_new_tones(global_tone_detection.frequency_magnitudes, FREQ_BINS);
     }
     
@@ -476,9 +438,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             global_tone_detection.current_tone_b_detected = 0;
             global_tone_detection.tone_sequence_active = 0;
             global_tone_detection.recording_active = 0;
-            if (!global_tone_detection.config.log_only_confirmed) {
-                printf("[TONE] Sequence reset due to timeout\n");
-            }
+            printf("[TONE] Sequence reset due to timeout\n");
         }
     }
     
@@ -486,15 +446,12 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
 }
 
 // Check if a specific tone definition matches current frequencies
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b, float* matched_freq_out) {
+int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b) {
     int range = is_tone_b ? tone_def->tone_b_range_hz : tone_def->tone_a_range_hz;
     
     // Check if the target frequency is present in peak frequencies
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         if (is_frequency_in_range(global_tone_detection.peak_frequencies[i], frequency, range)) {
-            if (matched_freq_out) {
-                *matched_freq_out = global_tone_detection.peak_frequencies[i];
-            }
             return 1;
         }
     }

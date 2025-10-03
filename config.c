@@ -307,8 +307,6 @@ int load_complete_config(void) {
                         set_tone_config(tone_config->threshold, tone_config->gain, 
                                       tone_config->db_threshold, tone_config->detect_new_tones,
                                       tone_config->new_tone_length_ms, tone_config->new_tone_range_hz);
-
-                        // log_only_confirmed is controlled internally, not via JSON
                         
                         printf("Loaded tone detection config for channel %d: passthrough=%d, channel=%s\n", 
                                i+1, tone_config->tone_passthrough, tone_config->passthrough_channel);
