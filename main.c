@@ -173,16 +173,17 @@ int main(int argc, char *argv[]) {
     printf("  - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
     printf("  - Input: %s (for tone detection and passthrough)\n", 
            is_card1_input_enabled() ? "ENABLED" : "DISABLED");
-    printf("Card 3 (Channel 308e...):\n");
-    printf("  - Output: %s\n", 
-           is_card3_passthrough_mode() ? "PASSTHROUGH (Card 1 input)" : "ECHOSTREAM");
+    // Reflect configured passthrough channel from JSON
+    struct tone_detect_config* __tdcfg = get_tone_detect_config(0);
+    if (__tdcfg && __tdcfg->tone_passthrough) {
+        const char* pt = __tdcfg->passthrough_channel;
+        printf("Passthrough output target: %s\n", pt);
+    }
     printf("\nTone detection control available:\n");
     printf("  - Call enable_tone_detection() to enable tone detect mode\n");
     printf("  - Call disable_tone_detection() to disable tone detect mode\n");
     printf("  - Current mode: %s\n", is_tone_detect_enabled() ? "ENABLED" : "DISABLED");
-    printf("\nTone detection system started with example tones:\n");
-    printf("  - Test Tone 1: 1000Hz -> 2000Hz\n");
-    printf("  - Test Tone 2: 1500Hz -> 2500Hz\n");
+    // Remove stale example tones output; tones are from JSON only
     
     // Wait for the WebSocket thread to complete
     pthread_join(ws_thread, NULL);
