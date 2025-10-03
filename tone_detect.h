@@ -116,7 +116,7 @@ int set_tone_config(float threshold, float gain, int db_threshold, int detect_ne
 // Detection functions
 int detect_tone_sequence(float* audio_samples, int sample_count);
 int analyze_frequency_spectrum(float* audio_samples, int sample_count);
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b);
+int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b, float* matched_freq_out);
 int apply_frequency_filters(float* magnitudes, int count);
 int detect_new_tones(float* magnitudes, int count);
 

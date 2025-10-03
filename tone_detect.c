@@ -305,11 +305,19 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone A
         if (!global_tone_detection.tone_a_confirmed) {
-            if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
+            float matched_a_freq = 0.0f;
+            if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0, &matched_a_freq)) {
                 // Hit update
                 a_hit_streak++;
                 a_miss_streak = 0;
                 a_last_seen_ms = current_time;
+                // Log first hit entering in-range (debounced) even in quiet mode
+                static int last_a_inrange_log = 0;
+                if (current_time - last_a_inrange_log > 1000) {
+                    printf("[TONE] Tone A in-range: target=%.1f Hz (±%d), matched=%.1f Hz (ID: %s)\n",
+                           tone_def->tone_a_freq, tone_def->tone_a_range_hz, matched_a_freq, tone_def->tone_id);
+                    last_a_inrange_log = current_time;
+                }
                 if (!a_present && a_hit_streak >= HIT_REQUIRED) {
                     a_present = 1;
                 }
@@ -364,11 +372,19 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone B (only if tone A was confirmed)
         else if (!global_tone_detection.tone_b_confirmed) {
-            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
+            float matched_b_freq = 0.0f;
+            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1, &matched_b_freq)) {
                 // Hit update
                 b_hit_streak++;
                 b_miss_streak = 0;
                 b_last_seen_ms = current_time;
+                // Log first hit entering in-range (debounced) even in quiet mode
+                static int last_b_inrange_log = 0;
+                if (current_time - last_b_inrange_log > 1000) {
+                    printf("[TONE] Tone B in-range: target=%.1f Hz (±%d), matched=%.1f Hz (ID: %s)\n",
+                           tone_def->tone_b_freq, tone_def->tone_b_range_hz, matched_b_freq, tone_def->tone_id);
+                    last_b_inrange_log = current_time;
+                }
                 if (!b_present && b_hit_streak >= HIT_REQUIRED) {
                     b_present = 1;
                 }
@@ -470,12 +486,15 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
 }
 
 // Check if a specific tone definition matches current frequencies
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b) {
+int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b, float* matched_freq_out) {
     int range = is_tone_b ? tone_def->tone_b_range_hz : tone_def->tone_a_range_hz;
     
     // Check if the target frequency is present in peak frequencies
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         if (is_frequency_in_range(global_tone_detection.peak_frequencies[i], frequency, range)) {
+            if (matched_freq_out) {
+                *matched_freq_out = global_tone_detection.peak_frequencies[i];
+            }
             return 1;
         }
     }
