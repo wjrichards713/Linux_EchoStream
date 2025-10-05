@@ -293,6 +293,12 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone A
         if (!global_tone_detection.tone_a_confirmed) {
+            // Debug: Show when we're checking for tone A
+            static int tone_a_check_count = 0;
+            if (tone_a_check_count++ % 200 == 0) {
+                printf("[DEBUG] Checking for Tone A: %.1f Hz ±%d Hz\n", tone_def->tone_a_freq, tone_def->tone_a_range_hz);
+            }
+            
             if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
                 // Hit update
                 a_hit_streak++;
@@ -359,6 +365,12 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone B (only if tone A was confirmed)
         else if (!global_tone_detection.tone_b_confirmed) {
+            // Debug: Show when we're checking for tone B
+            static int tone_b_check_count = 0;
+            if (tone_b_check_count++ % 200 == 0) {
+                printf("[DEBUG] Checking for Tone B: %.1f Hz ±%d Hz\n", tone_def->tone_b_freq, tone_def->tone_b_range_hz);
+            }
+            
             if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
                 // Hit update
                 b_hit_streak++;
@@ -471,9 +483,20 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
 int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b) {
     int range = is_tone_b ? tone_def->tone_b_range_hz : tone_def->tone_a_range_hz;
     
+    // Debug: Show what we're checking
+    static int debug_count = 0;
+    if (debug_count++ % 100 == 0) {
+        printf("[DEBUG] Checking tone %s: target=%.1f Hz ±%d Hz, peaks=%d\n", 
+               is_tone_b ? "B" : "A", frequency, range, global_tone_detection.peak_count);
+    }
+    
     // Check if the target frequency is present in peak frequencies
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         if (is_frequency_in_range(global_tone_detection.peak_frequencies[i], frequency, range)) {
+            if (debug_count % 50 == 0) {
+                printf("[DEBUG] Tone %s MATCH: %.1f Hz matches peak %.1f Hz (range ±%d Hz)\n", 
+                       is_tone_b ? "B" : "A", frequency, global_tone_detection.peak_frequencies[i], range);
+            }
             return 1;
         }
     }
