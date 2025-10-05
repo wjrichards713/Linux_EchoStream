@@ -7,6 +7,9 @@
 #include <time.h>
 #include <unistd.h>
 
+// Silence noisy logs while keeping confirmations
+#define NOISY_LOG(...) do { (void)0; } while(0)
+
 // Global tone detection state
 struct tone_detection_state global_tone_detection = {0};
 
@@ -47,7 +50,7 @@ int init_tone_detection(void) {
         global_tone_detection.filters[i] = saved_filters[i];
     }
     
-    printf("[DEBUG] init_tone_detection() preserved %d tone definitions and %d filters\n", 
+    NOISY_LOG("[DEBUG] init_tone_detection() preserved %d tone definitions and %d filters\n", 
            saved_tone_count, saved_filter_count);
     
     // Initialize FFT
@@ -89,7 +92,7 @@ int init_tone_detection(void) {
     
     global_tone_detection.active = 0;
     
-    printf("[INFO] Tone detection system initialized\n");
+    NOISY_LOG("[INFO] Tone detection system initialized\n");
     return 1;
 }
 
@@ -108,7 +111,7 @@ int start_tone_detection(void) {
         return 0;
     }
     
-    printf("[INFO] Tone detection thread started\n");
+    NOISY_LOG("[INFO] Tone detection thread started\n");
     return 1;
 }
 
@@ -128,7 +131,7 @@ void stop_tone_detection(void) {
     // Wait for thread to finish
     pthread_join(global_tone_detection.thread, NULL);
     
-    printf("[INFO] Tone detection thread stopped\n");
+    NOISY_LOG("[INFO] Tone detection thread stopped\n");
 }
 
 // Main tone detection thread
@@ -249,7 +252,7 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
     // Debug output for threshold analysis
     static int debug_count = 0;
     if (debug_count++ % 100 == 0) {
-        printf("[DEBUG] FFT: max_mag=%.6f, db_thresh=%d, abs_thresh=%.6f, rel_thresh=%.6f, final_thresh=%.6f\n",
+        NOISY_LOG("[DEBUG] FFT: max_mag=%.6f, db_thresh=%d, abs_thresh=%.6f, rel_thresh=%.6f, final_thresh=%.6f\n",
                max_magnitude, global_tone_detection.config.db_threshold, 
                absolute_db_threshold, relative_threshold, magnitude_threshold);
     }
@@ -284,7 +287,7 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
                 
                 // Debug output for peak detection (reduced verbosity)
                 if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
-                    printf("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
+                    NOISY_LOG("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
                            peak_freq, i, delta, current, magnitude_threshold);
                 }
             }
@@ -302,7 +305,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     // Debug: Show when tone detection is called
     static int detect_count = 0;
     if (detect_count++ % 500 == 0) {
-        printf("[DEBUG] detect_tone_sequence() called - peak_count=%d\n", 
+        NOISY_LOG("[DEBUG] detect_tone_sequence() called - peak_count=%d\n", 
                global_tone_detection.peak_count);
     }
     
@@ -320,7 +323,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         }
     }
     if (detect_count % 1000 == 0) {
-        printf("[DEBUG] Loaded tone definitions: %d\n", tone_def_count);
+        NOISY_LOG("[DEBUG] Loaded tone definitions: %d\n", tone_def_count);
         tone_def_count = 0; // Reset counter
     }
     
@@ -351,7 +354,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             // Debug: Show when we're checking for tone A
             static int tone_a_check_count = 0;
             if (tone_a_check_count++ % 200 == 0) {
-                printf("[DEBUG] Checking for Tone A: %.1f Hz ±%d Hz\n", tone_def->tone_a_freq, tone_def->tone_a_range_hz);
+                NOISY_LOG("[DEBUG] Checking for Tone A: %.1f Hz ±%d Hz\n", tone_def->tone_a_freq, tone_def->tone_a_range_hz);
             }
             
             if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
@@ -423,7 +426,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             // Debug: Show when we're checking for tone B
             static int tone_b_check_count = 0;
             if (tone_b_check_count++ % 200 == 0) {
-                printf("[DEBUG] Checking for Tone B: %.1f Hz ±%d Hz\n", tone_def->tone_b_freq, tone_def->tone_b_range_hz);
+                NOISY_LOG("[DEBUG] Checking for Tone B: %.1f Hz ±%d Hz\n", tone_def->tone_b_freq, tone_def->tone_b_range_hz);
             }
             
             if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
@@ -541,7 +544,7 @@ int check_tone_definition(float frequency, struct tone_definition* tone_def, int
     // Debug: Show what we're checking
     static int debug_count = 0;
     if (debug_count++ % 100 == 0) {
-        printf("[DEBUG] Checking tone %s: target=%.1f Hz ±%d Hz, peaks=%d\n", 
+        NOISY_LOG("[DEBUG] Checking tone %s: target=%.1f Hz ±%d Hz, peaks=%d\n", 
                is_tone_b ? "B" : "A", frequency, range, global_tone_detection.peak_count);
     }
     
@@ -549,7 +552,7 @@ int check_tone_definition(float frequency, struct tone_definition* tone_def, int
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         if (is_frequency_in_range(global_tone_detection.peak_frequencies[i], frequency, range)) {
             if (debug_count % 50 == 0) {
-                printf("[DEBUG] Tone %s MATCH: %.1f Hz matches peak %.1f Hz (range ±%d Hz)\n", 
+                NOISY_LOG("[DEBUG] Tone %s MATCH: %.1f Hz matches peak %.1f Hz (range ±%d Hz)\n", 
                        is_tone_b ? "B" : "A", frequency, global_tone_detection.peak_frequencies[i], range);
             }
             return 1;
@@ -698,7 +701,7 @@ int check_tone_duration(int tone_type, int current_time, struct tone_definition*
     // Debug output for duration checking (only when close to meeting requirement)
     static int duration_debug_count = 0;
     if (duration_debug_count++ % 100 == 0 || duration >= (required_duration * 0.8)) {
-        printf("[DEBUG] Tone %c duration check: %d ms (required: %d ms, tracking_start: %d)\n",
+        NOISY_LOG("[DEBUG] Tone %c duration check: %d ms (required: %d ms, tracking_start: %d)\n",
                (tone_type == 0) ? 'A' : 'B', duration, required_duration, tracking_start);
     }
     
