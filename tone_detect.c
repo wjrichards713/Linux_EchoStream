@@ -12,7 +12,43 @@ struct tone_detection_state global_tone_detection = {0};
 
 // Initialize tone detection system
 int init_tone_detection(void) {
+    // Save existing tone definitions before clearing
+    struct tone_definition saved_tone_definitions[MAX_TONE_DEFINITIONS];
+    struct frequency_filter saved_filters[MAX_FILTERS];
+    int saved_tone_count = 0;
+    int saved_filter_count = 0;
+    
+    // Backup existing tone definitions
+    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
+        if (global_tone_detection.tone_definitions[i].valid) {
+            saved_tone_definitions[saved_tone_count] = global_tone_detection.tone_definitions[i];
+            saved_tone_count++;
+        }
+    }
+    
+    // Backup existing filters
+    for (int i = 0; i < MAX_FILTERS; i++) {
+        if (global_tone_detection.filters[i].valid) {
+            saved_filters[saved_filter_count] = global_tone_detection.filters[i];
+            saved_filter_count++;
+        }
+    }
+    
+    // Clear the structure
     memset(&global_tone_detection, 0, sizeof(struct tone_detection_state));
+    
+    // Restore tone definitions
+    for (int i = 0; i < saved_tone_count; i++) {
+        global_tone_detection.tone_definitions[i] = saved_tone_definitions[i];
+    }
+    
+    // Restore filters
+    for (int i = 0; i < saved_filter_count; i++) {
+        global_tone_detection.filters[i] = saved_filters[i];
+    }
+    
+    printf("[DEBUG] init_tone_detection() preserved %d tone definitions and %d filters\n", 
+           saved_tone_count, saved_filter_count);
     
     // Initialize FFT
     global_tone_detection.fft_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, 
