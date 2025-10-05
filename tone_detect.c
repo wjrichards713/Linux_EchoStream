@@ -266,8 +266,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     // Debug: Show when tone detection is called
     static int detect_count = 0;
     if (detect_count++ % 500 == 0) {
-        printf("[DEBUG] detect_tone_sequence() called - enabled=%d, peak_count=%d\n", 
-               global_tone_detection.enabled, global_tone_detection.peak_count);
+        printf("[DEBUG] detect_tone_sequence() called - peak_count=%d\n", 
+               global_tone_detection.peak_count);
     }
     
     // Use milliseconds since program start to avoid overflow
