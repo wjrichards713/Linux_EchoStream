@@ -222,8 +222,23 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     int passthrough_mode = is_configured_target ? is_card3_passthrough_mode() : 0;
     
     if (passthrough_mode) {
-        // Configured passthrough target in passthrough mode - don't play EchoStream audio
-        memset(out, 0, frames * sizeof(float));
+        // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
+        unsigned long frames_filled = 0;
+        pthread_mutex_lock(&global_shared_buffer.mutex);
+        if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+            unsigned long to_copy = global_shared_buffer.sample_count;
+            if (to_copy > frames) to_copy = frames;
+            for (unsigned long i = 0; i < to_copy; i++) {
+                out[i] = global_shared_buffer.samples[i];
+            }
+            frames_filled = to_copy;
+            // do not invalidate; tone detection thread also reads; this is a tap
+        }
+        pthread_mutex_unlock(&global_shared_buffer.mutex);
+        // Fill any remainder with silence
+        for (unsigned long i = frames_filled; i < frames; i++) {
+            out[i] = 0.0f;
+        }
         return paContinue;
     }
     
