@@ -263,10 +263,29 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     (void)audio_samples; // Suppress unused parameter warning
     (void)sample_count;  // Suppress unused parameter warning
     
+    // Debug: Show when tone detection is called
+    static int detect_count = 0;
+    if (detect_count++ % 500 == 0) {
+        printf("[DEBUG] detect_tone_sequence() called - enabled=%d, peak_count=%d\n", 
+               global_tone_detection.enabled, global_tone_detection.peak_count);
+    }
+    
     // Use milliseconds since program start to avoid overflow
     static struct timespec start_time = {0};
     if (start_time.tv_sec == 0) {
         clock_gettime(CLOCK_MONOTONIC, &start_time);
+    }
+    
+    // Debug: Show tone definitions count
+    static int tone_def_count = 0;
+    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
+        if (global_tone_detection.tone_definitions[i].valid) {
+            tone_def_count++;
+        }
+    }
+    if (detect_count % 1000 == 0) {
+        printf("[DEBUG] Loaded tone definitions: %d\n", tone_def_count);
+        tone_def_count = 0; // Reset counter
     }
     
     struct timespec now;
