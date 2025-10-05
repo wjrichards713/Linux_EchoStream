@@ -806,6 +806,9 @@ void trigger_tone_passthrough(void) {
 int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
                        int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
                        int record_length) {
+    printf("[DEBUG] add_tone_definition() called: ID=%s, A=%.1f Hz±%d, B=%.1f Hz±%d\n", 
+           tone_id, tone_a_freq, tone_a_range, tone_b_freq, tone_b_range);
+    
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         if (!global_tone_detection.tone_definitions[i].valid) {
             strncpy(global_tone_detection.tone_definitions[i].tone_id, tone_id, 63);
@@ -820,6 +823,16 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
             
             printf("[TONE CONFIG] Added tone definition: %s (A: %.1f Hz ±%d Hz, %d ms, B: %.1f Hz ±%d Hz, %d ms)\n",
                    tone_id, tone_a_freq, tone_a_range, tone_a_length, tone_b_freq, tone_b_range, tone_b_length);
+            
+            // Debug: Show total count after adding
+            int total_count = 0;
+            for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
+                if (global_tone_detection.tone_definitions[j].valid) {
+                    total_count++;
+                }
+            }
+            printf("[DEBUG] Total tone definitions now: %d\n", total_count);
+            
             return 1;
         }
     }
