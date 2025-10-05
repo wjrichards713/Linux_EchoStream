@@ -279,9 +279,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     static int b_hit_streak = 0, b_miss_streak = 0;
     static int a_last_seen_ms = 0, b_last_seen_ms = 0;
     static int a_present = 0, b_present = 0;
-    const int HIT_REQUIRED = 2;      // require K hits
-    const int MISS_REQUIRED = 2;     // require K misses
-    const int GRACE_MS = 250;        // allow brief gaps without resetting
+    const int HIT_REQUIRED = 1;      // require K hits (reduced from 2 to 1 for faster confirmation)
+    const int MISS_REQUIRED = 3;     // require K misses (increased from 2 to 3 for stability)
+    const int GRACE_MS = 500;        // allow brief gaps without resetting (increased from 250ms)
 
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
@@ -298,6 +298,14 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                 a_hit_streak++;
                 a_miss_streak = 0;
                 a_last_seen_ms = current_time;
+                
+                // Debug: Show hit progress
+                if (a_hit_streak == HIT_REQUIRED) {
+                    printf("[TONE] Tone A hit streak reached %d - starting confirmation process\n", HIT_REQUIRED);
+                }
+                if (a_hit_streak >= HIT_REQUIRED && !a_present) {
+                    printf("[TONE] Tone A present flag set - now tracking duration\n");
+                }
                 if (!a_present && a_hit_streak >= HIT_REQUIRED) {
                     a_present = 1;
                 }
@@ -306,6 +314,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     // Start tracking tone A
                     global_tone_detection.tone_a_tracking = 1;
                     global_tone_detection.tone_a_tracking_start = current_time;
+                    printf("[TONE] Tone A duration tracking started - need %d ms\n", tone_def->tone_a_length_ms);
                     // Only log if we haven't been tracking recently (debounce)
                     static int last_tone_a_start_log = 0;
                     if (current_time - last_tone_a_start_log > 5000) { // 5 second debounce
@@ -320,6 +329,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         global_tone_detection.current_tone_a_detected = 1;
                         global_tone_detection.tone_a_start_time = current_time;
                         global_tone_detection.tone_sequence_active = 1;
+                        printf("[TONE CONFIRMED] Tone A confirmed! (%.1f Hz ±%d Hz, %d ms duration)\n", 
+                               tone_def->tone_a_freq, tone_def->tone_a_range_hz, tone_def->tone_a_length_ms);
                         printf("[TONE] Tone A CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
                                tone_def->tone_a_freq, tone_def->tone_id,
                                current_time - global_tone_detection.tone_a_tracking_start);
@@ -353,6 +364,14 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                 b_hit_streak++;
                 b_miss_streak = 0;
                 b_last_seen_ms = current_time;
+                
+                // Debug: Show hit progress
+                if (b_hit_streak == HIT_REQUIRED) {
+                    printf("[TONE] Tone B hit streak reached %d - starting confirmation process\n", HIT_REQUIRED);
+                }
+                if (b_hit_streak >= HIT_REQUIRED && !b_present) {
+                    printf("[TONE] Tone B present flag set - now tracking duration\n");
+                }
                 if (!b_present && b_hit_streak >= HIT_REQUIRED) {
                     b_present = 1;
                 }
@@ -361,6 +380,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     // Start tracking tone B
                     global_tone_detection.tone_b_tracking = 1;
                     global_tone_detection.tone_b_tracking_start = current_time;
+                    printf("[TONE] Tone B duration tracking started - need %d ms\n", tone_def->tone_b_length_ms);
                     // Only log if we haven't been tracking recently (debounce)
                     static int last_tone_b_start_log = 0;
                     if (current_time - last_tone_b_start_log > 5000) { // 5 second debounce
@@ -374,6 +394,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         global_tone_detection.tone_b_confirmed = 1;
                         global_tone_detection.current_tone_b_detected = 1;
                         global_tone_detection.tone_b_start_time = current_time;
+                        printf("[TONE CONFIRMED] Tone B confirmed! (%.1f Hz ±%d Hz, %d ms duration)\n", 
+                               tone_def->tone_b_freq, tone_def->tone_b_range_hz, tone_def->tone_b_length_ms);
                         printf("[TONE] Tone B CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
                                tone_def->tone_b_freq, tone_def->tone_id,
                                current_time - global_tone_detection.tone_b_tracking_start);
