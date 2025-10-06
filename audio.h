@@ -64,7 +64,7 @@ struct audio_passthrough {
 struct tone_detect_control {
     int enabled;                    // 1 = enabled, 0 = disabled
     int card1_input_enabled;       // 1 = Card 1 input active, 0 = disabled
-    int card3_passthrough_mode;    // 1 = passthrough, 0 = echostream
+    int passthrough_mode;          // 1 = passthrough, 0 = echostream
     pthread_mutex_t mutex;
 };
 

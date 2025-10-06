@@ -37,9 +37,11 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
 // Initialize tone detection control
 int init_tone_detect_control(void) {
     memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
+    // Initialize based on shadow config
+    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
     global_tone_detect.enabled = 1;  // Start enabled by default
-    global_tone_detect.card1_input_enabled = 1;  // Card 1 input enabled by default
-    global_tone_detect.card3_passthrough_mode = 1;  // Card 3 passthrough mode by default
+    global_tone_detect.card1_input_enabled = 1;  // Channel 1 input enabled by default
+    global_tone_detect.passthrough_mode = (tone_cfg && tone_cfg->tone_passthrough) ? 1 : 0;
     pthread_mutex_init(&global_tone_detect.mutex, NULL);
     printf("[INFO] Tone detection control initialized (enabled by default)\n");
     return 1;
@@ -52,8 +54,8 @@ int enable_tone_detection(void) {
     global_tone_detect.card1_input_enabled = 1;  // Enable Card 1 input for tone detection
     global_tone_detect.card3_passthrough_mode = 1;  // Switch Card 3 to passthrough mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[INFO] Tone detection ENABLED - Card 1 input active for tone detection, Card 3 passthrough mode\n");
-    printf("[INFO] Card 1 output continues to play EchoStream audio\n");
+    printf("[INFO] Tone detection ENABLED - source input active for tone detection, passthrough mode enabled\n");
+    printf("[INFO] Primary output continues to play EchoStream audio\n");
     return 1;
 }
 
@@ -62,17 +64,17 @@ int disable_tone_detection(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 0;
     global_tone_detect.card1_input_enabled = 0;  // Disable Card 1 input for tone detection
-    global_tone_detect.card3_passthrough_mode = 0;  // Switch Card 3 to EchoStream mode
+    global_tone_detect.passthrough_mode = 0;  // Switch output to EchoStream mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[INFO] Tone detection DISABLED - Card 1 input disabled for tone detection, Card 3 EchoStream mode\n");
-    printf("[INFO] Card 1 output continues to play EchoStream audio\n");
+    printf("[INFO] Tone detection DISABLED - source input disabled for tone detection, EchoStream mode\n");
+    printf("[INFO] Primary output continues to play EchoStream audio\n");
     return 1;
 }
 
 // Set passthrough output mode (for configured target channel)
 int set_passthrough_output_mode(int passthrough_mode) {
     pthread_mutex_lock(&global_tone_detect.mutex);
-    global_tone_detect.card3_passthrough_mode = passthrough_mode;
+    global_tone_detect.passthrough_mode = passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
     printf("[INFO] Passthrough output mode set to %s for configured target\n", passthrough_mode ? "PASSTHROUGH" : "ECHOSTREAM");
     return 1;
@@ -97,7 +99,7 @@ int is_card1_input_enabled(void) {
 // Check if passthrough mode is enabled
 int is_passthrough_mode(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
-    int passthrough = global_tone_detect.card3_passthrough_mode;
+    int passthrough = global_tone_detect.passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
     return passthrough;
 }
@@ -296,7 +298,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     return paContinue;
 }
 
-// Modified passthrough thread to handle Card 3 output switching
+// Passthrough thread outputs the shared input when in passthrough mode
 void* audio_passthrough_thread(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
@@ -309,7 +311,7 @@ void* audio_passthrough_thread(void* arg) {
     while (global_passthrough.active && !global_interrupted) {
         int samples_to_copy = 0;
         
-        // Only process if Card 3 is in passthrough mode
+        // Only process if passthrough mode is enabled
         if (!is_passthrough_mode()) {
             usleep(10000); // 10ms delay when not in passthrough mode
             continue;
@@ -438,7 +440,7 @@ int init_audio_passthrough(void) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[2]);
         if (device_info && device_info->maxOutputChannels > 0) {
             global_passthrough.output_device = usb_devices[2];
-            printf("[DEBUG] Fallback: Using USB device 2 (Card 3) for passthrough output\n");
+            printf("[DEBUG] Fallback: Using USB device 2 for passthrough output\n");
         }
     }
     if (global_passthrough.output_device == paNoDevice && usb_devices[3] != paNoDevice) {
