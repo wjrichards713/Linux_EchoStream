@@ -809,33 +809,8 @@ void trigger_tone_passthrough(void) {
     
     if (tone_config && tone_config->tone_passthrough) {
         printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
-        
-        // Parse passthrough channel name to get channel index
-        int target_channel = -1;
-        if (strcmp(tone_config->passthrough_channel, "channel_four") == 0) {
-            target_channel = 3; // Channel 4 (index 3)
-        } else if (strcmp(tone_config->passthrough_channel, "channel_three") == 0) {
-            target_channel = 2; // Channel 3 (index 2)
-        } else if (strcmp(tone_config->passthrough_channel, "channel_two") == 0) {
-            target_channel = 1; // Channel 2 (index 1)
-        } else if (strcmp(tone_config->passthrough_channel, "channel_one") == 0) {
-            target_channel = 0; // Channel 1 (index 0)
-        }
-        
-        if (target_channel >= 0) {
-            // Setup and start tone passthrough from channel 1 to target channel
-            if (setup_tone_passthrough(0, target_channel)) {
-                if (start_tone_passthrough()) {
-                    printf("[TONE PASSTHROUGH] Successfully started: Channel 1 -> Channel %d\n", target_channel + 1);
-                } else {
-                    printf("[ERROR] Failed to start tone passthrough\n");
-                }
-            } else {
-                printf("[ERROR] Failed to setup tone passthrough\n");
-            }
-        } else {
-            printf("[ERROR] Invalid passthrough channel: %s\n", tone_config->passthrough_channel);
-        }
+        // Enable passthrough mode (Channel 4 output callback will play from shared buffer)
+        set_card3_output_mode(1);
     } else {
         printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
     }
