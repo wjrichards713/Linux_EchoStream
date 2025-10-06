@@ -111,10 +111,10 @@ void stop_audio_passthrough(void);
 int init_tone_detect_control(void);
 int enable_tone_detection(void);
 int disable_tone_detection(void);
-int set_card3_output_mode(int passthrough_mode);
+int set_passthrough_output_mode(int passthrough_mode);
 int is_tone_detect_enabled(void);
 int is_card1_input_enabled(void);
-int is_card3_passthrough_mode(void);
+int is_passthrough_mode(void);
 
 // Tone passthrough control functions
 int init_tone_passthrough_control(void);
