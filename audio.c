@@ -405,141 +405,15 @@ int init_audio_passthrough(void) {
         printf("  USB device %d: %d\n", i, usb_devices[i]);
     }
     
-    // Ensure devices are assigned before selecting passthrough device
-    auto_assign_usb_devices();
-
-    // Prefer output device from JSON passthrough_channel configuration
-    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    if (tone_cfg && tone_cfg->tone_passthrough) {
-        int target_channel = -1;
-        if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
-            target_channel = 3;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
-            target_channel = 2;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
-            target_channel = 1;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
-            target_channel = 0;
-        }
-
-        if (target_channel >= 0) {
-            // Use fresh device mapping for the configured channel
-            PaDeviceIndex dev = get_device_for_channel(global_channel_ids[target_channel]);
-            if (dev != paNoDevice) {
-                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(dev);
-                if (device_info && device_info->maxOutputChannels > 0) {
-                    global_passthrough.output_device = dev;
-                    printf("[DEBUG] Using configured passthrough_channel device %d for passthrough output (channel %d)\n", (int)dev, target_channel + 1);
-                }
-            }
-        }
-    }
-
-    // Fallbacks if config not available or unsuitable
-    if (global_passthrough.output_device == paNoDevice && usb_devices[2] != paNoDevice) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[2]);
-        if (device_info && device_info->maxOutputChannels > 0) {
-            global_passthrough.output_device = usb_devices[2];
-            printf("[DEBUG] Fallback: Using USB device 2 for passthrough output\n");
-        }
-    }
-    if (global_passthrough.output_device == paNoDevice && usb_devices[3] != paNoDevice) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[3]);
-        if (device_info && device_info->maxOutputChannels > 0) {
-            global_passthrough.output_device = usb_devices[3];
-            printf("[DEBUG] Fallback: Using USB device 3 (Card 4) for passthrough output\n");
-        }
-    }
-    
-    // If still no device, try default output device
-    if (global_passthrough.output_device == paNoDevice) {
-        global_passthrough.output_device = Pa_GetDefaultOutputDevice();
-        printf("[DEBUG] Using default output device %d for passthrough\n", global_passthrough.output_device);
-    }
-    
     global_passthrough.active = 0;
-    printf("[INFO] Audio passthrough initialized for device %d\n", global_passthrough.output_device);
+    printf("[INFO] Audio passthrough initialized (callback-based, no extra streams)\n");
     return 1;
 }
 
 // Start audio passthrough
 int start_audio_passthrough(void) {
-    if (global_passthrough.active) {
-        printf("[WARNING] Audio passthrough already active\n");
-        return 1;
-    }
-    
-    // Ensure USB devices are assigned
-    auto_assign_usb_devices();
-    
-    // Update output device from JSON passthrough_channel after device assignment
-    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    if (tone_cfg && tone_cfg->tone_passthrough) {
-        int target_channel = -1;
-        if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
-            target_channel = 3;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
-            target_channel = 2;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
-            target_channel = 1;
-        } else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
-            target_channel = 0;
-        }
-
-        if (target_channel >= 0) {
-            PaDeviceIndex dev = get_device_for_channel(global_channel_ids[target_channel]);
-            if (dev != paNoDevice) {
-                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(dev);
-                if (device_info && device_info->maxOutputChannels > 0) {
-                    global_passthrough.output_device = dev;
-                    printf("[DEBUG] Using configured passthrough_channel device %d for passthrough output (channel %d)\n", (int)dev, target_channel + 1);
-                }
-            }
-        }
-    }
-    
-    printf("[DEBUG] Passthrough output device: %d\n", global_passthrough.output_device);
-    
-    if (global_passthrough.output_device == paNoDevice) {
-        fprintf(stderr, "[ERROR] No output device available for passthrough\n");
-        return 0;
-    }
-    
-    // Setup output stream for passthrough
-    PaStreamParameters output_params;
-    output_params.device = global_passthrough.output_device;
-    output_params.channelCount = 1;
-    output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-    output_params.hostApiSpecificStreamInfo = NULL;
-    
-    PaError err = Pa_OpenStream(&global_passthrough.output_stream, NULL, &output_params, 
-                               48000, 1024, paClipOff, NULL, NULL);
-    
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio passthrough output stream error: %s\n", Pa_GetErrorText(err));
-        return 0;
-    }
-    
-    err = Pa_StartStream(global_passthrough.output_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio passthrough start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(global_passthrough.output_stream);
-        return 0;
-    }
-    
-    global_passthrough.active = 1;
-    
-    // Create passthrough thread
-    if (pthread_create(&global_passthrough.thread, NULL, audio_passthrough_thread, NULL)) {
-        fprintf(stderr, "Failed to create audio passthrough thread\n");
-        Pa_StopStream(global_passthrough.output_stream);
-        Pa_CloseStream(global_passthrough.output_stream);
-        global_passthrough.active = 0;
-        return 0;
-    }
-    
-    printf("[INFO] Audio passthrough started successfully\n");
+    // Callback-based passthrough: nothing to start, output callback will handle routing
+    printf("[INFO] Audio passthrough enabled (callback-based)\n");
     return 1;
 }
 
