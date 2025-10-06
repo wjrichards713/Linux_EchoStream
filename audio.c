@@ -310,7 +310,7 @@ void* audio_passthrough_thread(void* arg) {
         int samples_to_copy = 0;
         
         // Only process if Card 3 is in passthrough mode
-        if (!is_card3_passthrough_mode()) {
+        if (!is_passthrough_mode()) {
             usleep(10000); // 10ms delay when not in passthrough mode
             continue;
         }
@@ -339,7 +339,7 @@ void* audio_passthrough_thread(void* arg) {
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
         // Write audio data to output stream (only if in passthrough mode)
-        if (samples_to_copy > 0 && is_card3_passthrough_mode()) {
+        if (samples_to_copy > 0 && is_passthrough_mode()) {
             static int write_count = 0;
             write_count++;
             
