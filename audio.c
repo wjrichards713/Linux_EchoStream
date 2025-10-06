@@ -69,12 +69,12 @@ int disable_tone_detection(void) {
     return 1;
 }
 
-// Set Card 3 output mode
-int set_card3_output_mode(int passthrough_mode) {
+// Set passthrough output mode (for configured target channel)
+int set_passthrough_output_mode(int passthrough_mode) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.card3_passthrough_mode = passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[INFO] Card 3 output mode set to %s\n", passthrough_mode ? "PASSTHROUGH" : "ECHOSTREAM");
+    printf("[INFO] Passthrough output mode set to %s for configured target\n", passthrough_mode ? "PASSTHROUGH" : "ECHOSTREAM");
     return 1;
 }
 
@@ -94,8 +94,8 @@ int is_card1_input_enabled(void) {
     return enabled;
 }
 
-// Check if Card 3 is in passthrough mode
-int is_card3_passthrough_mode(void) {
+// Check if passthrough mode is enabled
+int is_passthrough_mode(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     int passthrough = global_tone_detect.card3_passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
@@ -219,7 +219,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-    int passthrough_mode = is_configured_target ? is_card3_passthrough_mode() : 0;
+    int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)

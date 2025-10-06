@@ -809,8 +809,8 @@ void trigger_tone_passthrough(void) {
     
     if (tone_config && tone_config->tone_passthrough) {
         printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
-        // Enable passthrough mode (Channel 4 output callback will play from shared buffer)
-        set_card3_output_mode(1);
+        // Enable passthrough mode; audio.c routes to the configured target from JSON
+        set_passthrough_output_mode(1);
     } else {
         printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
     }
