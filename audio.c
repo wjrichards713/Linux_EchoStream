@@ -52,7 +52,7 @@ int enable_tone_detection(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 1;
     global_tone_detect.card1_input_enabled = 1;  // Enable Card 1 input for tone detection
-    global_tone_detect.card3_passthrough_mode = 1;  // Switch Card 3 to passthrough mode
+    global_tone_detect.passthrough_mode = 1;  // Enable passthrough mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
     printf("[INFO] Tone detection ENABLED - source input active for tone detection, passthrough mode enabled\n");
     printf("[INFO] Primary output continues to play EchoStream audio\n");
