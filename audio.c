@@ -34,6 +34,14 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
+// Check if a channel has a working output stream
+int channel_has_output_stream(int channel_index) {
+    if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+        return 0;
+    }
+    return (global_channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
+}
+
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char* channel_id) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
