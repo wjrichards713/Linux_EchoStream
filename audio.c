@@ -289,42 +289,6 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
                audio_stream->channel_id, is_configured_target, passthrough_mode);
     }
     
-    // Additional debug for channel 4 specifically
-    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        static int channel4_debug_count = 0;
-        if (channel4_debug_count++ % 1000 == 0) {
-            printf("[DEBUG] Channel 4 callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
-                   is_configured_target, passthrough_mode, frames);
-        }
-        
-        // Test: Generate a simple tone to verify audio output is working
-        static int test_tone_count = 0;
-        if (test_tone_count++ % 10000 == 0) {
-            printf("[DEBUG] Channel 4: Generating test tone to verify audio output\n");
-        }
-        
-        // Generate a simple 440Hz test tone (A4 note) for testing
-        static float phase = 0.0f;
-        float frequency = 440.0f; // A4 note
-        float sample_rate = 48000.0f;
-        float phase_increment = 2.0f * 3.14159265359f * frequency / sample_rate;
-        
-        for (unsigned long i = 0; i < frames; i++) {
-            out[i] = 0.1f * sinf(phase); // Low volume test tone
-            phase += phase_increment;
-            if (phase > 2.0f * 3.14159265359f) phase -= 2.0f * 3.14159265359f;
-        }
-        
-        // If passthrough mode is active, mix with passthrough audio
-        if (passthrough_mode) {
-            // Mix the test tone with passthrough audio (reduce test tone volume)
-            for (unsigned long i = 0; i < frames; i++) {
-                out[i] = out[i] * 0.3f; // Reduce test tone volume when passthrough is active
-            }
-        }
-        
-        return paContinue; // Skip normal processing for channel 4 test
-    }
     
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
@@ -662,7 +626,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("[DEBUG] Device %d info: maxOutputChannels=%d, maxInputChannels=%d, name=%s\n", 
                output_params.device, device_info->maxOutputChannels, device_info->maxInputChannels, device_info->name);
         
-        // Ensure we don't exceed the device's channel capabilities
         if (output_params.channelCount > device_info->maxOutputChannels) {
             printf("[WARNING] Requested %d channels but device only supports %d, adjusting\n", 
                    output_params.channelCount, device_info->maxOutputChannels);
@@ -679,11 +642,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("[DEBUG] Attempting to open output stream for channel %s on device %d\n", 
            audio_stream->channel_id, audio_stream->device_index);
     
-    // Special debug for channel 4
-    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        printf("[DEBUG] Channel 4 setup: device=%d, channels=%d, format=%lu\n", 
-               output_params.device, output_params.channelCount, output_params.sampleFormat);
-    }
     
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
                         paClipOff, audio_output_callback, audio_stream);

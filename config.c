@@ -351,29 +351,9 @@ struct tone_detect_config* get_tone_detect_config(int channel_index) {
         return &channel_config->tone_config;
     }
     
-    // If no valid config found, return a default configuration for channel 1 (index 0)
-    if (channel_index == 0) {
-        static struct tone_detect_config default_config = {0};
-        static int default_config_initialized = 0;
-        
-        if (!default_config_initialized) {
-            default_config.tone_passthrough = 1;
-            strcpy(default_config.passthrough_channel, "channel_four");
-            default_config.threshold = 0.7f;
-            default_config.gain = 0.4f;
-            default_config.db_threshold = -45;
-            default_config.detect_new_tones = 1;
-            default_config.new_tone_length_ms = 1000;
-            default_config.new_tone_range_hz = 3;
-            default_config.valid = 1;
-            default_config_initialized = 1;
-            
-            printf("[CONFIG] Using default tone detection config for channel 1: passthrough=%d, channel=%s\n",
-                   default_config.tone_passthrough, default_config.passthrough_channel);
-        }
-        
-        return &default_config;
-    }
+    // No hardcoded defaults - configuration must come from config.json
+    printf("[CONFIG] No valid tone detection configuration found for channel %d\n", channel_index);
+    printf("[CONFIG] Please ensure config.json contains proper tone_detect_configuration for this channel\n");
     
     return NULL;
 }
