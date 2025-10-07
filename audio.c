@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "audio.h"
 #include "crypto.h"
 #include "config.h"
@@ -39,7 +40,7 @@ int channel_has_output_stream(int channel_index) {
     if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
         return 0;
     }
-    return (global_channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
+    return (channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
