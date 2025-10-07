@@ -55,7 +55,9 @@ int channel_has_output_stream(int channel_index) {
     printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
            channel_index, stream, is_active, err);
     
-    return is_active;
+    // Return true if stream exists, regardless of active status
+    // The stream can be ready to play audio even if not currently "active"
+    return 1;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
@@ -302,12 +304,21 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Debug logging for passthrough audio
-        static int passthrough_audio_count = 0;
-        if (passthrough_audio_count++ % 1000 == 0) {
-            printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
-                   frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
+    // Debug logging for passthrough audio
+    static int passthrough_audio_count = 0;
+    if (passthrough_audio_count++ % 1000 == 0) {
+        printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
+               frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
+    }
+    
+    // Additional debug for passthrough activation
+    if (frames_filled > 0) {
+        static int passthrough_active_count = 0;
+        if (passthrough_active_count++ % 100 == 0) {
+            printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames\n", 
+                   audio_stream->channel_id, frames_filled);
         }
+    }
         
         // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
