@@ -275,7 +275,8 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     
     static int callback_count = 0;
     if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
-        printf("Audio output callback called (frames=%lu, buffer_count=%d)\n", frames, jitter->frame_count);
+        printf("Audio output callback called for channel %s (frames=%lu, buffer_count=%d)\n", 
+               audio_stream->channel_id, frames, jitter->frame_count);
     }
     
     // Check if this channel is the configured passthrough target
@@ -287,6 +288,35 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     if (debug_count++ % 10000 == 0) {
         printf("[DEBUG] Channel %s: is_configured_target=%d, passthrough_mode=%d\n", 
                audio_stream->channel_id, is_configured_target, passthrough_mode);
+    }
+    
+    // Special debug for Channel 4
+    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+        static int channel4_debug_count = 0;
+        if (channel4_debug_count++ % 1000 == 0) {
+            printf("[DEBUG] Channel 4 callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
+                   is_configured_target, passthrough_mode, frames);
+        }
+        
+        // Test: Generate a simple tone to verify audio output is working
+        static int test_tone_count = 0;
+        if (test_tone_count++ % 10000 == 0) {
+            printf("[DEBUG] Channel 4: Generating test tone to verify audio output\n");
+        }
+        
+        // Generate a simple 440Hz test tone (A4 note) for testing
+        static float phase = 0.0f;
+        float frequency = 440.0f; // A4 note
+        float sample_rate = 48000.0f;
+        float phase_increment = 2.0f * 3.14159265359f * frequency / sample_rate;
+        
+        for (unsigned long i = 0; i < frames; i++) {
+            out[i] = 0.1f * sinf(phase); // Low volume test tone
+            phase += phase_increment;
+            if (phase > 2.0f * 3.14159265359f) phase -= 2.0f * 3.14159265359f;
+        }
+        
+        return paContinue; // Skip normal processing for channel 4 test
     }
     
     
