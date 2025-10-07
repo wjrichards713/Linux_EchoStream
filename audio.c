@@ -24,12 +24,26 @@ struct tone_passthrough_control global_tone_passthrough = {0};
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char* channel_id) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    if (!tone_cfg || !tone_cfg->tone_passthrough) return 0;
+    if (!tone_cfg || !tone_cfg->tone_passthrough) {
+        static int debug_count = 0;
+        if (debug_count++ % 10000 == 0) {
+            printf("[DEBUG] is_configured_passthrough_channel_id: tone_cfg=%p, tone_passthrough=%d\n", 
+                   tone_cfg, tone_cfg ? tone_cfg->tone_passthrough : -1);
+        }
+        return 0;
+    }
     int idx = -1;
     if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) idx = 1;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) idx = 0;
+    
+    static int debug_count = 0;
+    if (debug_count++ % 10000 == 0) {
+        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, passthrough_channel=%s, idx=%d\n", 
+               channel_id, tone_cfg->passthrough_channel, idx);
+    }
+    
     if (idx < 0) return 0;
     return (strcmp(channel_id, global_channel_ids[idx]) == 0) ? 1 : 0;
 }
@@ -147,6 +161,12 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
+        // Debug logging for shared buffer
+        static int shared_buffer_count = 0;
+        if (shared_buffer_count++ % 10000 == 0) {
+            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d\n", frames, global_shared_buffer.valid);
+        }
+        
         // Tone detection reads directly from shared buffer
     }
     
@@ -223,6 +243,13 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
+    // Debug logging for passthrough
+    static int debug_count = 0;
+    if (debug_count++ % 10000 == 0) {
+        printf("[DEBUG] Channel %s: is_configured_target=%d, passthrough_mode=%d\n", 
+               audio_stream->channel_id, is_configured_target, passthrough_mode);
+    }
+    
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
         unsigned long frames_filled = 0;
@@ -237,6 +264,14 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
             // do not invalidate; tone detection thread also reads; this is a tap
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
+        
+        // Debug logging for passthrough audio
+        static int passthrough_audio_count = 0;
+        if (passthrough_audio_count++ % 1000 == 0) {
+            printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
+                   frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
+        }
+        
         // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
             out[i] = 0.0f;
