@@ -307,12 +307,12 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         static float phase = 0.0f;
         float frequency = 440.0f; // A4 note
         float sample_rate = 48000.0f;
-        float phase_increment = 2.0f * M_PI * frequency / sample_rate;
+        float phase_increment = 2.0f * 3.14159265359f * frequency / sample_rate;
         
         for (unsigned long i = 0; i < frames; i++) {
             out[i] = 0.1f * sinf(phase); // Low volume test tone
             phase += phase_increment;
-            if (phase > 2.0f * M_PI) phase -= 2.0f * M_PI;
+            if (phase > 2.0f * 3.14159265359f) phase -= 2.0f * 3.14159265359f;
         }
         
         // If passthrough mode is active, mix with passthrough audio
@@ -681,7 +681,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     // Special debug for channel 4
     if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        printf("[DEBUG] Channel 4 setup: device=%d, channels=%d, format=%d\n", 
+        printf("[DEBUG] Channel 4 setup: device=%d, channels=%d, format=%lu\n", 
                output_params.device, output_params.channelCount, output_params.sampleFormat);
     }
     
