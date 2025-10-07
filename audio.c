@@ -41,10 +41,21 @@ int channel_has_output_stream(int channel_index) {
         printf("[DEBUG] channel_has_output_stream: invalid channel_index %d\n", channel_index);
         return 0;
     }
-    int has_stream = (channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
-    printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=%d, stream_ptr=%p\n", 
-           channel_index, has_stream, channels[channel_index].audio.output_stream);
-    return has_stream;
+    
+    PaStream* stream = channels[channel_index].audio.output_stream;
+    if (stream == NULL) {
+        printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=0, stream_ptr=NULL\n", channel_index);
+        return 0;
+    }
+    
+    // Check if the stream is actually active
+    PaError err = Pa_IsStreamActive(stream);
+    int is_active = (err == 1) ? 1 : 0;
+    
+    printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
+           channel_index, stream, is_active, err);
+    
+    return is_active;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
