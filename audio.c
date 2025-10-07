@@ -38,9 +38,13 @@ int get_passthrough_target_channel_index(void) {
 // Check if a channel has a working output stream
 int channel_has_output_stream(int channel_index) {
     if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+        printf("[DEBUG] channel_has_output_stream: invalid channel_index %d\n", channel_index);
         return 0;
     }
-    return (channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
+    int has_stream = (channels[channel_index].audio.output_stream != NULL) ? 1 : 0;
+    printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=%d, stream_ptr=%p\n", 
+           channel_index, has_stream, channels[channel_index].audio.output_stream);
+    return has_stream;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
