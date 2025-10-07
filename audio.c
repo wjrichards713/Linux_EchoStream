@@ -55,9 +55,9 @@ int channel_has_output_stream(int channel_index) {
     printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
            channel_index, stream, is_active, err);
     
-    // Return true if stream exists, regardless of active status
-    // The stream can be ready to play audio even if not currently "active"
-    return 1;
+    // Return true only if stream exists AND is active
+    // A stream that exists but isn't active can't play audio
+    return is_active;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
@@ -790,6 +790,11 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
 
                 printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
                 
+                // Special debug for Channel 4
+                if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+                    printf("[DEBUG] Channel 4 is running in INPUT-ONLY mode - no output stream!\n");
+                }
+                
                 // Check if this channel is configured as a passthrough target
                 if (is_configured_passthrough_channel_id(audio_stream->channel_id)) {
                     printf("[WARNING] Channel %s is configured as passthrough target but has no output stream!\n", audio_stream->channel_id);
@@ -830,6 +835,15 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("Output stream is active for channel %s\n", audio_stream->channel_id);
     } else {
         printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+    }
+    
+    // Special debug for Channel 4
+    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+        printf("[DEBUG] Channel 4 stream status: input_active=%d, output_active=%d\n", 
+               Pa_IsStreamActive(audio_stream->input_stream), 
+               Pa_IsStreamActive(audio_stream->output_stream));
+        printf("[DEBUG] Channel 4 stream pointers: input=%p, output=%p\n", 
+               audio_stream->input_stream, audio_stream->output_stream);
     }
     
     audio_stream->transmitting = 1;
