@@ -584,33 +584,65 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                                 paClipOff, audio_output_callback, audio_stream);
         }
         if (err != paNoError) {
-            printf("WARNING: Output stream failed for channel %s (device %d), trying input-only mode\n",
+            printf("WARNING: Output stream failed for channel %s (device %d), trying alternative output devices\n",
                    audio_stream->channel_id, audio_stream->device_index);
 
-            // Try input-only mode as fallback
-            Pa_CloseStream(audio_stream->input_stream);
-            audio_stream->input_stream = NULL;
-
-            // Reopen input stream
-            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024,
-                                paClipOff, audio_input_callback, audio_stream);
-
-            if (err != paNoError) {
-                fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
-                return 0;
+            // Try other USB devices as output fallback
+            for (int i = 0; i < 4; i++) {
+                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice) {
+                    output_params.device = usb_devices[i];
+                    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+                    printf("[DEBUG] Trying alternative output device %d for channel %s\n", usb_devices[i], audio_stream->channel_id);
+                    
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                                        paClipOff, audio_output_callback, audio_stream);
+                    if (err == paNoError) {
+                        printf("[INFO] Successfully opened output stream for channel %s on alternative device %d\n", 
+                               audio_stream->channel_id, usb_devices[i]);
+                        break;
+                    } else {
+                        printf("[DEBUG] Alternative device %d also failed: %s\n", usb_devices[i], Pa_GetErrorText(err));
+                    }
+                }
             }
-
-            // Start input stream only
-            err = Pa_StartStream(audio_stream->input_stream);
+            
+            // If all USB devices failed, try input-only mode as last resort
             if (err != paNoError) {
-                fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+                printf("WARNING: All output devices failed for channel %s, trying input-only mode\n",
+                       audio_stream->channel_id);
+
+                // Try input-only mode as fallback
                 Pa_CloseStream(audio_stream->input_stream);
-                return 0;
-            }
+                audio_stream->input_stream = NULL;
 
-            printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
-            audio_stream->transmitting = 1;
-            return 1;
+                // Reopen input stream
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024,
+                                    paClipOff, audio_input_callback, audio_stream);
+
+                if (err != paNoError) {
+                    fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
+                    return 0;
+                }
+
+                // Start input stream only
+                err = Pa_StartStream(audio_stream->input_stream);
+                if (err != paNoError) {
+                    fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+                    Pa_CloseStream(audio_stream->input_stream);
+                    return 0;
+                }
+
+                printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
+                
+                // Check if this channel is configured as a passthrough target
+                if (is_configured_passthrough_channel_id(audio_stream->channel_id)) {
+                    printf("[WARNING] Channel %s is configured as passthrough target but has no output stream!\n", audio_stream->channel_id);
+                    printf("[WARNING] Passthrough audio will not work for this channel.\n");
+                }
+                
+                audio_stream->transmitting = 1;
+                return 1;
+            }
         }
     }
     
@@ -699,15 +731,20 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
     
     // Direct channel mapping like the original
     if (strcmp(channel, "555") == 0) {
+        printf("[DEBUG] Channel %s assigned to USB device 0 (device %d)\n", channel, usb_devices[0]);
         return usb_devices[0];
     } else if (strcmp(channel, "666") == 0) {
+        printf("[DEBUG] Channel %s assigned to USB device 1 (device %d)\n", channel, usb_devices[1]);
         return usb_devices[1];
     } else if (strcmp(channel, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
+        printf("[DEBUG] Channel %s assigned to USB device 2 (device %d)\n", channel, usb_devices[2]);
         return usb_devices[2];
     } else if (strcmp(channel, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+        printf("[DEBUG] Channel %s assigned to USB device 3 (device %d)\n", channel, usb_devices[3]);
         return usb_devices[3];
     }
     
+    printf("[DEBUG] Channel %s using default fallback (device %d)\n", channel, usb_devices[0]);
     return usb_devices[0];  // Default fallback
 }
 
