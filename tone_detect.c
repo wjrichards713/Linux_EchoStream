@@ -808,9 +808,20 @@ void trigger_tone_passthrough(void) {
     struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
     
     if (tone_config && tone_config->tone_passthrough) {
-        printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
-        // Enable passthrough mode; audio.c routes to the configured target from JSON
-        set_passthrough_output_mode(1);
+        // Check if the target channel has a working output stream
+        int target_channel_idx = get_passthrough_target_channel_index();
+        if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
+            struct audio_stream* target_stream = &global_channels[target_channel_idx].audio;
+            if (target_stream->output_stream) {
+                printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
+                // Enable passthrough mode; audio.c routes to the configured target from JSON
+                set_passthrough_output_mode(1);
+            } else {
+                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - passthrough disabled\n");
+            }
+        } else {
+            printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
+        }
     } else {
         printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
     }

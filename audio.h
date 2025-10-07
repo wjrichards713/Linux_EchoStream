@@ -121,6 +121,7 @@ int init_tone_passthrough_control(void);
 int setup_tone_passthrough(int source_channel, int target_channel);
 int start_tone_passthrough(void);
 int stop_tone_passthrough(void);
+int get_passthrough_target_channel_index(void);
 int is_tone_passthrough_active(void);
 int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
                               const PaStreamCallbackTimeInfo* time_info,

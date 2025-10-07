@@ -21,6 +21,19 @@ struct tone_detect_control global_tone_detect = {0};
 // Global tone passthrough control
 struct tone_passthrough_control global_tone_passthrough = {0};
 
+// Get the index of the passthrough target channel
+int get_passthrough_target_channel_index(void) {
+    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    if (!tone_cfg || !tone_cfg->tone_passthrough) {
+        return -1;
+    }
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) return 3;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    return -1;
+}
+
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char* channel_id) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
@@ -602,6 +615,30 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                         break;
                     } else {
                         printf("[DEBUG] Alternative device %d also failed: %s\n", usb_devices[i], Pa_GetErrorText(err));
+                    }
+                }
+            }
+            
+            // If USB devices failed, try any available output device
+            if (err != paNoError) {
+                printf("[DEBUG] All USB devices failed, trying any available output device for channel %s\n", audio_stream->channel_id);
+                int device_count = Pa_GetDeviceCount();
+                for (int i = 0; i < device_count; i++) {
+                    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+                    if (device_info && device_info->maxOutputChannels > 0) {
+                        output_params.device = i;
+                        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+                        printf("[DEBUG] Trying output device %d (%s) for channel %s\n", i, device_info->name, audio_stream->channel_id);
+                        
+                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                                            paClipOff, audio_output_callback, audio_stream);
+                        if (err == paNoError) {
+                            printf("[INFO] Successfully opened output stream for channel %s on device %d (%s)\n", 
+                                   audio_stream->channel_id, i, device_info->name);
+                            break;
+                        } else {
+                            printf("[DEBUG] Device %d (%s) also failed: %s\n", i, device_info->name, Pa_GetErrorText(err));
+                        }
                     }
                 }
             }
