@@ -36,6 +36,37 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
+// Find the best available channel for passthrough (one with working output stream)
+int find_best_passthrough_channel(void) {
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    extern int global_channel_count;
+    
+    // First try the configured passthrough target
+    int configured_target = get_passthrough_target_channel_index();
+    if (configured_target >= 0 && configured_target < global_channel_count) {
+        if (channel_has_output_stream(configured_target)) {
+            printf("[DEBUG] Configured passthrough target channel %d (%s) has working output stream\n", 
+                   configured_target, global_channel_ids[configured_target]);
+            return configured_target;
+        } else {
+            printf("[WARNING] Configured passthrough target channel %d (%s) has no output stream\n", 
+                   configured_target, global_channel_ids[configured_target]);
+        }
+    }
+    
+    // Find any channel with a working output stream
+    for (int i = 0; i < global_channel_count; i++) {
+        if (channel_has_output_stream(i)) {
+            printf("[DEBUG] Found alternative passthrough channel %d (%s) with working output stream\n", 
+                   i, global_channel_ids[i]);
+            return i;
+        }
+    }
+    
+    printf("[ERROR] No channels have working output streams for passthrough!\n");
+    return -1;
+}
+
 // Check if a channel has a working output stream
 int channel_has_output_stream(int channel_index) {
     if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
@@ -82,6 +113,22 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
         }
         return 0;
     }
+    
+    // Check if this channel is the best available passthrough target
+    int best_passthrough_idx = find_best_passthrough_channel();
+    if (best_passthrough_idx >= 0) {
+        extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+        if (strcmp(channel_id, global_channel_ids[best_passthrough_idx]) == 0) {
+            static int debug_count = 0;
+            if (debug_count++ % 10000 == 0) {
+                printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s is best passthrough target (idx=%d)\n", 
+                       channel_id, best_passthrough_idx);
+            }
+            return 1;
+        }
+    }
+    
+    // Fallback to original logic
     int idx = -1;
     if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
@@ -896,6 +943,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
     
+    // Check if this is a passthrough target channel - give it priority treatment
+    int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+    if (is_passthrough_target) {
+        printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL DETECTED: %s ***\n", audio_stream->channel_id);
+        printf("[DEBUG] This channel MUST have a working output stream for tone passthrough!\n");
+    }
+    
     // Initialize output parameters with consistent settings
     output_params.channelCount = AUDIO_CHANNELS;
     output_params.sampleFormat = paFloat32;
@@ -981,9 +1035,18 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             if (err != paNoError) {
                 printf("[DEBUG] Output device %d failed with all parameters: %s\n", 
                        output_params.device, Pa_GetErrorText(err));
-                printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
-                audio_stream->output_stream = NULL;  // No output stream
-                err = paNoError;  // Continue with input-only mode
+                
+                // CRITICAL: Passthrough target channels CANNOT be input-only
+                if (is_passthrough_target) {
+                    printf("[ERROR] *** CRITICAL ERROR: PASSTHROUGH TARGET CHANNEL %s HAS NO OUTPUT STREAM! ***\n", audio_stream->channel_id);
+                    printf("[ERROR] Tone passthrough will NOT work without an output stream on this channel!\n");
+                    printf("[ERROR] This is a configuration error - passthrough target must have working output.\n");
+                    // Don't set to NULL - keep trying to create output stream
+                } else {
+                    printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
+                    audio_stream->output_stream = NULL;  // No output stream
+                    err = paNoError;  // Continue with input-only mode
+                }
             }
         } else {
             printf("[DEBUG] Output stream created successfully for channel %s on device %d\n", 
@@ -1009,13 +1072,14 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         int sample_rates[] = {SAMPLE_RATE, 44100, 22050};
         
         // Special handling for passthrough target channels - try more aggressive fallbacks
-        int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
         if (is_passthrough_target) {
-            printf("[DEBUG] This is a passthrough target channel - trying more fallback options\n");
+            printf("[DEBUG] *** CRITICAL: PASSTHROUGH TARGET CHANNEL FAILED - TRYING ALL DEVICES ***\n");
+            
             // Try even more sample rates and buffer sizes for passthrough channels
             int passthrough_sample_rates[] = {SAMPLE_RATE, 44100, 22050, 16000, 8000};
             int passthrough_buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
             
+            // First try with the original device
             for (int i = 0; i < 5 && err != paNoError; i++) {
                 for (int j = 0; j < 6 && err != paNoError; j++) {
                     printf("[DEBUG] Trying passthrough device %d with sample_rate=%d, buffer_size=%d\n", 
@@ -1027,6 +1091,56 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                         printf("[DEBUG] Passthrough device %d succeeded with sample_rate=%d, buffer_size=%d\n", 
                                output_params.device, passthrough_sample_rates[i], passthrough_buffer_sizes[j]);
                         break;
+                    }
+                }
+            }
+            
+            // If still failed, try ALL available USB devices for passthrough target
+            if (err != paNoError) {
+                printf("[DEBUG] *** TRYING ALL USB DEVICES FOR PASSTHROUGH TARGET ***\n");
+                for (int dev_idx = 0; dev_idx < MAX_CHANNELS && err != paNoError; dev_idx++) {
+                    if (usb_devices[dev_idx] != paNoDevice && usb_devices[dev_idx] != output_params.device) {
+                        output_params.device = usb_devices[dev_idx];
+                        output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+                        
+                        printf("[DEBUG] Trying passthrough on USB device %d (hw:%d,0)\n", 
+                               output_params.device, output_params.device + 2);
+                        
+                        for (int i = 0; i < 5 && err != paNoError; i++) {
+                            for (int j = 0; j < 6 && err != paNoError; j++) {
+                                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                                   passthrough_sample_rates[i], passthrough_buffer_sizes[j], 
+                                                   paClipOff, audio_output_callback, audio_stream);
+                                if (err == paNoError) {
+                                    printf("[DEBUG] *** SUCCESS! Passthrough target working on device %d with sample_rate=%d, buffer_size=%d ***\n", 
+                                           output_params.device, passthrough_sample_rates[i], passthrough_buffer_sizes[j]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If STILL failed, try default output device
+            if (err != paNoError) {
+                printf("[DEBUG] *** TRYING DEFAULT OUTPUT DEVICE FOR PASSTHROUGH TARGET ***\n");
+                PaDeviceIndex default_output = Pa_GetDefaultOutputDevice();
+                if (default_output != paNoDevice) {
+                    output_params.device = default_output;
+                    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+                    
+                    for (int i = 0; i < 5 && err != paNoError; i++) {
+                        for (int j = 0; j < 6 && err != paNoError; j++) {
+                            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                               passthrough_sample_rates[i], passthrough_buffer_sizes[j], 
+                                               paClipOff, audio_output_callback, audio_stream);
+                            if (err == paNoError) {
+                                printf("[DEBUG] *** SUCCESS! Passthrough target working on default device with sample_rate=%d, buffer_size=%d ***\n", 
+                                       passthrough_sample_rates[i], passthrough_buffer_sizes[j]);
+                                break;
+                            }
+                        }
                     }
                 }
             }
