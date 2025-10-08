@@ -160,6 +160,33 @@ int initialize_audio_devices(void) {
                     "test -e /proc/asound/card%d && echo 'Card %d: EXISTS' || echo 'Card %d: NOT FOUND'", 
                     card, card, card);
                 system(cmd);
+                
+                // Configure the card for both input and output
+                printf("[AUDIO INIT] Configuring card %d for input/output...\n", card);
+                
+                // Test input capability
+                snprintf(cmd, sizeof(cmd), 
+                    "arecord -D hw:%d,0 -f S16_LE -r 48000 -c 1 -d 1 /dev/null 2>&1 | head -1", card);
+                FILE *test_fp = popen(cmd, "r");
+                if (test_fp) {
+                    char result[256];
+                    if (fgets(result, sizeof(result), test_fp)) {
+                        printf("[AUDIO INIT] Card %d input test: %s", card, result);
+                    }
+                    pclose(test_fp);
+                }
+                
+                // Test output capability
+                snprintf(cmd, sizeof(cmd), 
+                    "aplay -D hw:%d,0 -f S16_LE -r 48000 -c 1 /dev/zero 2>&1 | head -1", card);
+                test_fp = popen(cmd, "r");
+                if (test_fp) {
+                    char result[256];
+                    if (fgets(result, sizeof(result), test_fp)) {
+                        printf("[AUDIO INIT] Card %d output test: %s", card, result);
+                    }
+                    pclose(test_fp);
+                }
             }
         }
         pclose(fp);
@@ -773,32 +800,83 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("[DEBUG] Pa_OpenStream for input stream returned: %s\n", Pa_GetErrorText(err));
     
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
-        printf("WARNING: USB device %d failed for channel %s, trying default device\n", 
-               audio_stream->device_index, audio_stream->channel_id);
+        printf("WARNING: USB device %d failed for channel %s: %s\n", 
+               audio_stream->device_index, audio_stream->channel_id, Pa_GetErrorText(err));
         fflush(stdout);
         
-        // Try fallback to default input device
-        PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
-        if (default_device != paNoDevice && default_device != audio_stream->device_index) {
-            input_params.device = default_device;
-            input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
+        // Try different parameters for the same USB device first
+        printf("[DEBUG] Retrying USB device %d with different parameters...\n", audio_stream->device_index);
+        
+        // Try different sample rates
+        int sample_rates[] = {44100, 48000, 96000};
+        int buffer_sizes[] = {512, 1024, 2048};
+        
+        for (int i = 0; i < 3 && err != paNoError; i++) {
+            for (int j = 0; j < 3 && err != paNoError; j++) {
+                printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", 
+                       audio_stream->device_index, sample_rates[i], buffer_sizes[j]);
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
+                                   sample_rates[i], buffer_sizes[j], paClipOff, audio_input_callback, audio_stream);
+                if (err == paNoError) {
+                    printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n", 
+                           audio_stream->device_index, sample_rates[i], buffer_sizes[j]);
+                    break;
+                }
+            }
+        }
+        
+        // If USB device still fails, try other USB devices
+        if (err != paNoError) {
+            printf("[DEBUG] USB device %d failed with all parameters, trying other USB devices...\n", 
+                   audio_stream->device_index);
             
-            printf("[DEBUG] Trying fallback to default input device %d...\n", default_device);
-            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
-                                paClipOff, audio_input_callback, audio_stream);
-            
-            if (err == paNoError) {
-                printf("Successfully opened input stream on default device %d for channel %s\n", 
-                       default_device, audio_stream->channel_id);
-                audio_stream->device_index = default_device;
+            for (int i = 0; i < MAX_CHANNELS && err != paNoError; i++) {
+                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice) {
+                    input_params.device = usb_devices[i];
+                    input_params.suggestedLatency = Pa_GetDeviceInfo(usb_devices[i])->defaultLowInputLatency;
+                    
+                    printf("[DEBUG] Trying alternative USB device %d for channel %s\n", 
+                           usb_devices[i], audio_stream->channel_id);
+                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                        paClipOff, audio_input_callback, audio_stream);
+                    
+                    if (err == paNoError) {
+                        printf("Successfully opened input stream on USB device %d for channel %s\n", 
+                               usb_devices[i], audio_stream->channel_id);
+                        audio_stream->device_index = usb_devices[i];
+                        break;
+                    } else {
+                        printf("[DEBUG] Alternative USB device %d also failed: %s\n", 
+                               usb_devices[i], Pa_GetErrorText(err));
+                    }
+                }
+            }
+        }
+        
+        // If all USB devices fail, try default device as last resort
+        if (err != paNoError) {
+            printf("[DEBUG] All USB devices failed, trying default input device...\n");
+            PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
+            if (default_device != paNoDevice && default_device != audio_stream->device_index) {
+                input_params.device = default_device;
+                input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
+                
+                printf("[DEBUG] Trying fallback to default input device %d...\n", default_device);
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                    paClipOff, audio_input_callback, audio_stream);
+                
+                if (err == paNoError) {
+                    printf("Successfully opened input stream on default device %d for channel %s\n", 
+                           default_device, audio_stream->channel_id);
+                    audio_stream->device_index = default_device;
+                } else {
+                    fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
+                    return 0;
+                }
             } else {
-                fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
+                printf("No default input device available for fallback\n");
                 return 0;
             }
-        } else {
-            printf("No default input device available for fallback\n");
-            return 0;
         }
     }
     
@@ -806,54 +884,94 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
     
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                        paClipOff, audio_output_callback, audio_stream);
-    
-    if (err != paNoError) {
-        printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
-               audio_stream->channel_id, Pa_GetErrorText(err));
-        printf("WARNING: USB output device %d failed for channel %s, trying default device\n", 
-               output_params.device, audio_stream->channel_id);
-        fflush(stdout);
+    // Try to use the same device as input for output (if it supports output)
+    const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+    if (input_device_info && input_device_info->maxOutputChannels > 0) {
+        output_params.device = audio_stream->device_index;
+        output_params.suggestedLatency = input_device_info->defaultLowOutputLatency;
+        printf("[DEBUG] Using same device %d for both input and output for channel %s\n", 
+               audio_stream->device_index, audio_stream->channel_id);
+    } else {
+        // Find a dedicated output device for this channel
+        printf("[DEBUG] Input device %d doesn't support output, finding dedicated output device...\n", 
+               audio_stream->device_index);
         
-        // Try fallback to default output device with different channel configurations
-        PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
-        if (default_output_device != paNoDevice && default_output_device != output_params.device) {
-            output_params.device = default_output_device;
-            output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
+        // Try to use a different USB device for output
+        int output_device_found = 0;
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            if (usb_devices[i] != paNoDevice && usb_devices[i] != audio_stream->device_index) {
+                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
+                if (device_info && device_info->maxOutputChannels > 0) {
+                    output_params.device = usb_devices[i];
+                    output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+                    printf("[DEBUG] Using USB device %d for output for channel %s\n", 
+                           usb_devices[i], audio_stream->channel_id);
+                    output_device_found = 1;
+                    break;
+                }
+            }
+        }
+        
+        if (!output_device_found) {
+            // Fall back to default output device
+            PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
+            if (default_output_device != paNoDevice) {
+                output_params.device = default_output_device;
+                output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
+                printf("[DEBUG] Using default output device %d for channel %s\n", 
+                       default_output_device, audio_stream->channel_id);
+            } else {
+                printf("[DEBUG] No output device available for channel %s\n", audio_stream->channel_id);
+                audio_stream->output_stream = NULL;
+                err = paNoError;  // Continue with input-only mode
+            }
+        }
+    }
+    
+    if (audio_stream->output_stream == NULL) {  // Only try to create if not already set to NULL
+        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                            paClipOff, audio_output_callback, audio_stream);
+        
+        if (err != paNoError) {
+            printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
+                   audio_stream->channel_id, Pa_GetErrorText(err));
+            printf("WARNING: Output device %d failed for channel %s, trying different parameters\n", 
+                   output_params.device, audio_stream->channel_id);
+            fflush(stdout);
             
-            printf("[DEBUG] Trying fallback to default output device %d...\n", default_output_device);
+            // Try different parameters for output
+            int sample_rates[] = {44100, 48000, 96000};
+            int buffer_sizes[] = {512, 1024, 2048};
+            int channel_counts[] = {1, 2};
             
-            // Try mono first (1 channel)
-            output_params.channelCount = 1;
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                                paClipOff, audio_output_callback, audio_stream);
-            
-            if (err != paNoError) {
-                printf("[DEBUG] Default device failed with mono: %s, trying stereo...\n", Pa_GetErrorText(err));
-                
-                // Try stereo (2 channels) if mono fails
-                output_params.channelCount = 2;
-                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                                    paClipOff, audio_output_callback, audio_stream);
+            for (int i = 0; i < 3 && err != paNoError; i++) {
+                for (int j = 0; j < 3 && err != paNoError; j++) {
+                    for (int k = 0; k < 2 && err != paNoError; k++) {
+                        output_params.channelCount = channel_counts[k];
+                        printf("[DEBUG] Trying output device %d with sample_rate=%d, buffer_size=%d, channels=%d\n", 
+                               output_params.device, sample_rates[i], buffer_sizes[j], channel_counts[k]);
+                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                           sample_rates[i], buffer_sizes[j], paClipOff, audio_output_callback, audio_stream);
+                        if (err == paNoError) {
+                            printf("[DEBUG] Output device %d succeeded with sample_rate=%d, buffer_size=%d, channels=%d\n", 
+                                   output_params.device, sample_rates[i], buffer_sizes[j], channel_counts[k]);
+                            break;
+                        }
+                    }
+                }
             }
             
-            if (err == paNoError) {
-                printf("Successfully opened output stream on default device %d for channel %s (%d channels)\n", 
-                       default_output_device, audio_stream->channel_id, output_params.channelCount);
-            } else {
-                printf("[DEBUG] Default output device also failed: %s\n", Pa_GetErrorText(err));
+            if (err != paNoError) {
+                printf("[DEBUG] Output device %d failed with all parameters: %s\n", 
+                       output_params.device, Pa_GetErrorText(err));
                 printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
                 audio_stream->output_stream = NULL;  // No output stream
                 err = paNoError;  // Continue with input-only mode
             }
         } else {
-            printf("[DEBUG] No default output device available, continuing with input-only mode\n");
-            audio_stream->output_stream = NULL;  // No output stream
-            err = paNoError;  // Continue with input-only mode
+            printf("[DEBUG] Output stream created successfully for channel %s on device %d\n", 
+                   audio_stream->channel_id, output_params.device);
         }
-    } else {
-        printf("[DEBUG] Output stream created successfully for channel %s\n", audio_stream->channel_id);
     }
     
     if (err != paNoError) {
