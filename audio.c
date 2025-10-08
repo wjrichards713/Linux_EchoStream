@@ -1008,6 +1008,30 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048};
         int sample_rates[] = {SAMPLE_RATE, 44100, 22050};
         
+        // Special handling for passthrough target channels - try more aggressive fallbacks
+        int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+        if (is_passthrough_target) {
+            printf("[DEBUG] This is a passthrough target channel - trying more fallback options\n");
+            // Try even more sample rates and buffer sizes for passthrough channels
+            int passthrough_sample_rates[] = {SAMPLE_RATE, 44100, 22050, 16000, 8000};
+            int passthrough_buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
+            
+            for (int i = 0; i < 5 && err != paNoError; i++) {
+                for (int j = 0; j < 6 && err != paNoError; j++) {
+                    printf("[DEBUG] Trying passthrough device %d with sample_rate=%d, buffer_size=%d\n", 
+                           output_params.device, passthrough_sample_rates[i], passthrough_buffer_sizes[j]);
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                       passthrough_sample_rates[i], passthrough_buffer_sizes[j], 
+                                       paClipOff, audio_output_callback, audio_stream);
+                    if (err == paNoError) {
+                        printf("[DEBUG] Passthrough device %d succeeded with sample_rate=%d, buffer_size=%d\n", 
+                               output_params.device, passthrough_sample_rates[i], passthrough_buffer_sizes[j]);
+                        break;
+                    }
+                }
+            }
+        }
+        
         for (int i = 0; i < 3 && err != paNoError; i++) {
             for (int j = 0; j < 4 && err != paNoError; j++) {
                 printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
