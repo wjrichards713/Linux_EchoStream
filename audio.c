@@ -269,9 +269,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     struct audio_stream* audio_stream = (struct audio_stream*)user_data;
     
     static int callback_count = 0;
-    if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
-        printf("Audio input callback called (frames=%lu, transmitting=%d, gpio_active=%d)\n", 
-               frames, audio_stream->transmitting, audio_stream->gpio_active);
+    if (callback_count++ % 1000 == 0) {  // More frequent logging - about every 3 seconds
+        printf("Audio input callback called #%d (frames=%lu, transmitting=%d, gpio_active=%d)\n", 
+               callback_count, frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
     
     // Check if this channel has tone detection enabled (configurable from config.json)
@@ -294,7 +294,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     static int audio_processing_count = 0;
-    if (audio_processing_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
+    if (audio_processing_count++ % 1000 == 0) {  // More frequent logging - about every 3 seconds
         printf("Audio processing for channel %s (frames=%lu, input_enabled=%d)\n", 
                audio_stream->channel_id, frames, input_enabled);
     }
@@ -964,6 +964,18 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("Input stream is active for channel %s\n", audio_stream->channel_id);
     } else {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
+    }
+    
+    // Additional debugging for stream status
+    printf("[DEBUG] Stream status check for channel %s:\n", audio_stream->channel_id);
+    printf("[DEBUG] - Pa_IsStreamActive(input): %s\n", Pa_IsStreamActive(audio_stream->input_stream) ? "YES" : "NO");
+    printf("[DEBUG] - Pa_IsStreamStopped(input): %s\n", Pa_IsStreamStopped(audio_stream->input_stream) ? "YES" : "NO");
+    
+    // Check stream info
+    const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->input_stream);
+    if (stream_info) {
+        printf("[DEBUG] - Input latency: %.3f ms\n", stream_info->inputLatency * 1000.0);
+        printf("[DEBUG] - Sample rate: %.1f Hz\n", stream_info->sampleRate);
     }
     
     if (audio_stream->output_stream) {

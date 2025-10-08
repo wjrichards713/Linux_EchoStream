@@ -1400,14 +1400,10 @@ void* udp_listener_worker(void* arg) {
         
         static int udp_debug_count = 0;
         if (udp_debug_count++ % 1000 == 0) {
-            printf("UDP Listener: Still listening... (attempt %d)\n", udp_debug_count);
         }
         
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
-            printf("UDP Listener: Received %d bytes from %s:%d\n", 
-                   bytes_received, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-            printf("UDP Listener: Raw data: %.*s\n", bytes_received, buffer);
             
             // Parse JSON message
             struct json_object *json = json_tokener_parse(buffer);
@@ -1463,20 +1459,6 @@ void* udp_listener_worker(void* arg) {
                         size_t encrypted_len = decode_base64_len(data, encrypted_data);
                         
                         if (encrypted_len > 0) {
-                            printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
-                            
-                            // Debug: Print first few bytes of encrypted data and key
-                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
-                            for (int k = 0; k < 16 && k < encrypted_len; k++) {
-                                printf("%02x ", encrypted_data[k]);
-                            }
-                            printf("\n");
-                            
-                            printf("UDP Listener: Using key (first 16 bytes): ");
-                            for (int k = 0; k < 16; k++) {
-                                printf("%02x ", target_stream->key[k]);
-                            }
-                            printf("\n");
                             
                             // Decrypt the data
                             size_t decrypted_len;
@@ -1484,7 +1466,6 @@ void* udp_listener_worker(void* arg) {
                                                                   target_stream->key, &decrypted_len);
                             
                             if (decrypted) {
-                                printf("UDP Listener: Data decrypted successfully (%zu bytes)\n", decrypted_len);
                                 
                                 // Decode Opus audio
                                 short pcm_data[1920];
@@ -1492,7 +1473,6 @@ void* udp_listener_worker(void* arg) {
                                                         pcm_data, 1920, 0);
                                 
                                 if (samples > 0) {
-                                    printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
                                     
                                     // Debug: Check audio levels
                                     short max_sample = 0;
@@ -1501,9 +1481,6 @@ void* udp_listener_worker(void* arg) {
                                             max_sample = abs(pcm_data[s]);
                                         }
                                     }
-                                    printf("UDP Listener: Audio level check - max sample: %d (%.2f%%)\n", 
-                                           max_sample, (float)max_sample / 32767.0f * 100.0f);
-                                    
                                     // Add audio frame to jitter buffer
                                     struct jitter_buffer *jitter = &target_stream->output_jitter;
                                     pthread_mutex_lock(&jitter->mutex);
@@ -1569,15 +1546,12 @@ void* udp_listener_worker(void* arg) {
                                     
                                     pthread_mutex_unlock(&jitter->mutex);
                                 } else {
-                                    printf("UDP Listener: Opus decode failed: %s\n", opus_strerror(samples));
                                 }
                                 
                                 free(decrypted);
                             } else {
-                                printf("UDP Listener: Decryption failed\n");
                             }
                         } else {
-                            printf("UDP Listener: Base64 decode failed\n");
                         }
                     }
                 } else {
