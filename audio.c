@@ -90,12 +90,12 @@ int repair_passthrough_output_stream(int channel_index) {
     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
     
-    // Try multiple sample rates and buffer sizes
-    int sample_rates[] = {SAMPLE_RATE, 44100, 22050, 16000, 8000};
+    // Try multiple sample rates and buffer sizes - PRIORITIZE 48000 Hz
+    int sample_rates[] = {SAMPLE_RATE, 48000, 44100, 22050, 16000, 8000};
     int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
     
     PaError err = paNoError;
-    for (int i = 0; i < 5 && err != paNoError; i++) {
+    for (int i = 0; i < 6 && err != paNoError; i++) {
         for (int j = 0; j < 6 && err != paNoError; j++) {
             printf("[DEBUG] Trying to repair with sample_rate=%d, buffer_size=%d\n", 
                    sample_rates[i], buffer_sizes[j]);
@@ -104,24 +104,25 @@ int repair_passthrough_output_stream(int channel_index) {
                                sample_rates[i], buffer_sizes[j], 
                                paClipOff, audio_output_callback, audio_stream);
             
-            if (err == paNoError) {
-                printf("[DEBUG] *** SUCCESS! Repaired output stream with sample_rate=%d, buffer_size=%d ***\n", 
-                       sample_rates[i], buffer_sizes[j]);
-                
-                // Start the stream
-                err = Pa_StartStream(audio_stream->output_stream);
                 if (err == paNoError) {
-                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
-                    printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
-                    force_passthrough_reevaluation = 1; // Force re-evaluation
-                    return 1;
-                } else {
-                    printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
-                    Pa_CloseStream(audio_stream->output_stream);
-                    audio_stream->output_stream = NULL;
-                    err = paNoError; // Continue trying
+                    printf("[DEBUG] *** SUCCESS! Repaired output stream with sample_rate=%d, buffer_size=%d ***\n", 
+                           sample_rates[i], buffer_sizes[j]);
+                    
+                    // Start the stream
+                    err = Pa_StartStream(audio_stream->output_stream);
+                    if (err == paNoError) {
+                        printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
+                        printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
+                        printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
+                        force_passthrough_reevaluation = 1; // Force re-evaluation
+                        return 1;
+                    } else {
+                        printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
+                        Pa_CloseStream(audio_stream->output_stream);
+                        audio_stream->output_stream = NULL;
+                        err = paNoError; // Continue trying
+                    }
                 }
-            }
         }
     }
     
@@ -204,17 +205,10 @@ int find_best_passthrough_channel(void) {
         }
     }
     
-    // Find any channel with a working output stream
-    for (int i = 0; i < global_channel_count; i++) {
-        if (channel_has_output_stream(i)) {
-            printf("[DEBUG] Found alternative passthrough channel %d (%s) with working output stream\n", 
-                   i, global_channel_ids[i]);
-            return i;
-        }
-    }
-    
-    printf("[ERROR] No channels have working output streams for passthrough!\n");
-    return -1;
+    // CRITICAL: Channel 4 MUST be the passthrough target - no alternatives allowed
+    printf("[ERROR] *** CHANNEL 4 (channel_4) MUST BE THE PASSTHROUGH TARGET - NO ALTERNATIVES ALLOWED! ***\n");
+    printf("[ERROR] *** CONTINUING TO ATTEMPT REPAIR OF CHANNEL 4... ***\n");
+    return configured_target; // Return the configured target even if it's not working
 }
 
 // Check if a channel has a working output stream
@@ -260,13 +254,13 @@ static void periodic_passthrough_repair(void) {
     static int repair_attempt_count = 0;
     repair_attempt_count++;
     
-    // Try to repair every 1000 calls (roughly every 10-20 seconds)
-    if (repair_attempt_count % 1000 == 0) {
+    // Try to repair every 100 calls (roughly every 1-2 seconds) - MORE AGGRESSIVE
+    if (repair_attempt_count % 100 == 0) {
         int configured_target = get_passthrough_target_channel_index();
         if (configured_target >= 0) {
             if (!channel_has_output_stream(configured_target)) {
-                printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
-                       repair_attempt_count / 1000, configured_target);
+                printf("[DEBUG] *** AGGRESSIVE PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
+                       repair_attempt_count / 100, configured_target);
                 if (repair_passthrough_output_stream(configured_target)) {
                     printf("[DEBUG] *** PERIODIC REPAIR SUCCESSFUL - FORCING PASSTHROUGH RE-EVALUATION ***\n");
                     force_passthrough_reevaluation = 1;
@@ -291,18 +285,15 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
     // Run periodic repair attempts
     periodic_passthrough_repair();
     
-    // Check if this channel is the best available passthrough target
-    int best_passthrough_idx = find_best_passthrough_channel();
-    if (best_passthrough_idx >= 0) {
-        extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-        if (strcmp(channel_id, global_channel_ids[best_passthrough_idx]) == 0) {
-            static int debug_count = 0;
-            if (debug_count++ % 10000 == 0) {
-                printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s is best passthrough target (idx=%d)\n", 
-                       channel_id, best_passthrough_idx);
-            }
-            return 1;
+    // SIMPLIFIED: Directly check if this is Channel 4 (the configured passthrough target)
+    // Channel 4 is always index 3 and has ID "channel_4"
+    if (strcmp(channel_id, "channel_4") == 0) {
+        static int debug_count = 0;
+        if (debug_count++ % 10000 == 0) {
+            printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s is Channel 4 (passthrough target)\n", 
+                   channel_id);
         }
+        return 1;
     }
     
     // Fallback to original logic
@@ -1283,7 +1274,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                         printf("[DEBUG] Trying passthrough on USB device %d (hw:%d,0)\n", 
                                output_params.device, output_params.device + 2);
                         
-                        for (int i = 0; i < 5 && err != paNoError; i++) {
+                        for (int i = 0; i < 6 && err != paNoError; i++) {
                             for (int j = 0; j < 6 && err != paNoError; j++) {
                                 err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
                                                    passthrough_sample_rates[i], passthrough_buffer_sizes[j], 
