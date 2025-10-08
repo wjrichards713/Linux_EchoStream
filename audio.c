@@ -145,26 +145,12 @@ int initialize_audio_devices(void) {
         while (fgets(card_num, sizeof(card_num), fp)) {
             int card = atoi(card_num);
             if (card >= 0) {
-                printf("[AUDIO INIT] Configuring card %d for input/output mode...\n", card);
+                printf("[AUDIO INIT] Found USB audio card %d\n", card);
                 
-                // Enable both input and output for the card
+                // Just verify the card exists and is accessible
                 char cmd[256];
                 snprintf(cmd, sizeof(cmd), 
-                    "echo 'pcm.!default {\n"
-                    "    type hw\n"
-                    "    card %d\n"
-                    "    device 0\n"
-                    "}' > /tmp/asound_card%d.conf 2>/dev/null || true", card, card);
-                system(cmd);
-                
-                // Test the card for both input and output
-                snprintf(cmd, sizeof(cmd), 
-                    "timeout 2s arecord -D hw:%d,0 -f S16_LE -r 48000 -c 1 -d 1 /dev/null 2>/dev/null && echo 'Card %d input: OK' || echo 'Card %d input: FAILED'", 
-                    card, card, card);
-                system(cmd);
-                
-                snprintf(cmd, sizeof(cmd), 
-                    "timeout 2s aplay -D hw:%d,0 -f S16_LE -r 48000 -c 2 -d 1 /dev/zero 2>/dev/null && echo 'Card %d output: OK' || echo 'Card %d output: FAILED'", 
+                    "test -e /proc/asound/card%d && echo 'Card %d: EXISTS' || echo 'Card %d: NOT FOUND'", 
                     card, card, card);
                 system(cmd);
             }
@@ -761,8 +747,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
     
+    printf("[DEBUG] About to call Pa_OpenStream for input stream...\n");
     PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
                                 paClipOff, audio_input_callback, audio_stream);
+    printf("[DEBUG] Pa_OpenStream for input stream returned: %s\n", Pa_GetErrorText(err));
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
@@ -811,14 +799,17 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     output_params.hostApiSpecificStreamInfo = NULL;
     
     printf("[DEBUG] Attempting to open output stream for channel %s on device %d\n", 
-           audio_stream->channel_id, audio_stream->device_index);
+           audio_stream->channel_id, output_params.device);
     
     
+    printf("[DEBUG] About to call Pa_OpenStream for output stream...\n");
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
                         paClipOff, audio_output_callback, audio_stream);
+    printf("[DEBUG] Pa_OpenStream for output stream returned: %s\n", Pa_GetErrorText(err));
 
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        printf("[DEBUG] Failed to create output stream for channel %s\n", audio_stream->channel_id);
         
         // Try alternative approaches for devices that fail with standard parameters
         printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
@@ -999,6 +990,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
+    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    
     // Special debug for the last channel
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
@@ -1029,10 +1022,15 @@ void auto_assign_usb_devices() {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
             const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
+            printf("[DEBUG] Device %d: %s (Host API: %s, Type: %d)\n", 
+                   i, device_info->name, host_info->name, host_info->type);
+            
             if (host_info && host_info->type == paALSA) {
                 const char* name = device_info->name;
                 if (strstr(name, "USB") || strstr(name, "usb") || 
-                    strstr(name, "Audio Device") || strstr(name, "Headset")) {
+                    strstr(name, "Audio Device") || strstr(name, "Headset") ||
+                    strstr(name, "hw:2") || strstr(name, "hw:3") || 
+                    strstr(name, "hw:4") || strstr(name, "hw:5")) {
                     usb_devices[usb_count] = i;
                     printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
                     usb_count++;
@@ -1042,9 +1040,29 @@ void auto_assign_usb_devices() {
     }
     
      if (usb_count == 0) {
-         printf("No USB audio devices found, using default input device for all channels\n");
-         for (int i = 0; i < MAX_CHANNELS; i++) {
-             usb_devices[i] = Pa_GetDefaultInputDevice();
+         printf("No direct ALSA USB devices found, checking PulseAudio devices...\n");
+         // Try to use PulseAudio devices that might be USB
+         for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++) {
+             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+             if (device_info && device_info->maxInputChannels > 0) {
+                 const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
+                 if (host_info && host_info->type == paPulse) {
+                     const char* name = device_info->name;
+                     // For PulseAudio, we'll use the first few devices as they're likely USB
+                     if (usb_count < 4) {  // We have 4 USB cards (2,3,4,5)
+                         usb_devices[usb_count] = i;
+                         printf("PulseAudio Device %d assigned to slot %d: %s\n", i, usb_count, name);
+                         usb_count++;
+                     }
+                 }
+             }
+         }
+         
+         if (usb_count == 0) {
+             printf("No USB audio devices found, using default input device for all channels\n");
+             for (int i = 0; i < MAX_CHANNELS; i++) {
+                 usb_devices[i] = Pa_GetDefaultInputDevice();
+             }
          }
      } else if (usb_count < MAX_CHANNELS) {
          printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
