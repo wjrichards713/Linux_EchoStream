@@ -347,8 +347,14 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     if (should_update_shared_buffer) {
         pthread_mutex_lock(&global_shared_buffer.mutex);
+        
+        // Apply smoothing to reduce choppiness in shared buffer
+        static float last_shared_samples[SAMPLES_PER_FRAME] = {0};
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = samples[i];
+            // Smooth interpolation between last and current samples
+            float smoothed_sample = (last_shared_samples[i] + samples[i]) * 0.5f;
+            global_shared_buffer.samples[i] = smoothed_sample;
+            last_shared_samples[i] = samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
@@ -358,7 +364,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Debug logging for shared buffer
         static int shared_buffer_count = 0;
         if (shared_buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d\n", frames, global_shared_buffer.valid);
+            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d (smoothed)\n", frames, global_shared_buffer.valid);
         }
         
         // Tone detection reads directly from shared buffer
@@ -499,12 +505,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-    // Debug logging for passthrough audio
-    static int passthrough_audio_count = 0;
-    if (passthrough_audio_count++ % 1000 == 0) {
-        printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
-               frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
-    }
+        // Debug logging for passthrough audio
+        static int passthrough_audio_count = 0;
+        if (passthrough_audio_count++ % 1000 == 0) {
+            printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
+                   frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
+        }
     
     // Additional debug for passthrough activation
     if (frames_filled > 0) {
@@ -526,16 +532,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     pthread_mutex_lock(&jitter->mutex);
     
     unsigned long frames_filled = 0;
-    
-    // Check for buffer underrun (too few frames available)
-    if (jitter->frame_count < 2) {
-        static int underrun_count = 0;
-        underrun_count++;
-        if (underrun_count % 100 == 0) {
-            printf("[AUDIO] Buffer underrun warning for channel %s (frames=%d, callback_frames=%lu)\n", 
-                   audio_stream->channel_id, jitter->frame_count, frames);
-        }
-    }
     
     while (frames_filled < frames) {
         // Check if we have a current frame to read from
@@ -574,14 +570,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 audio_stream->current_output_frame_pos = 0;
             }
         } else {
-            // No frames available - use interpolation to reduce choppiness
-            static float last_sample = 0.0f;
+            // No frames available, fill with silence
             for (unsigned long i = frames_filled; i < frames; i++) {
-                // Gradual fade to silence instead of hard cut
-                float fade_factor = 1.0f - ((float)(i - frames_filled) / (float)(frames - frames_filled));
-                out[i] = last_sample * fade_factor;
+                out[i] = 0.0f;
             }
-            last_sample = out[frames - 1]; // Store last sample for next callback
             frames_filled = frames;
         }
     }
@@ -756,8 +748,8 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup buffers with larger size for better buffering
-    audio_stream->buffer_size = 9600;  // Increased buffer size
+    // Setup buffers
+    audio_stream->buffer_size = 4800;
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
@@ -885,7 +877,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                     audio_stream->device_index = default_device;
                 } else {
                     fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
-                    return 0;
+        return 0;
                 }
             } else {
                 printf("No default input device available for fallback\n");
@@ -901,7 +893,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Try to use the same device as input for output (if it supports output)
     const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(audio_stream->device_index);
     if (input_device_info && input_device_info->maxOutputChannels > 0) {
-        output_params.device = audio_stream->device_index;
+    output_params.device = audio_stream->device_index;
         output_params.suggestedLatency = input_device_info->defaultLowOutputLatency;
         printf("[DEBUG] Using same device %d for both input and output for channel %s\n", 
                audio_stream->device_index, audio_stream->channel_id);
@@ -943,8 +935,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     if (audio_stream->output_stream == NULL) {  // Only try to create if not already set to NULL
-        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
-                            paClipOff, audio_output_callback, audio_stream);
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                        paClipOff, audio_output_callback, audio_stream);
         
         if (err != paNoError) {
             printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
@@ -1023,13 +1015,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
          int is_last_channel_fallback = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
          
          if (err != paNoError && !is_last_channel_fallback) {
-             PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
-             if (defOut != paNoDevice && defOut != output_params.device) {
-                 output_params.device = defOut;
-                 output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-                 printf("[DEBUG] Retrying output open for channel %s using default output device %d\n", audio_stream->channel_id, (int)defOut);
-                 err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
-                                     paClipOff, audio_output_callback, audio_stream);
+        PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
+        if (defOut != paNoDevice && defOut != output_params.device) {
+            output_params.device = defOut;
+            output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+            printf("[DEBUG] Retrying output open for channel %s using default output device %d\n", audio_stream->channel_id, (int)defOut);
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                                paClipOff, audio_output_callback, audio_stream);
                  
                  if (err == paNoError) {
                      printf("[DEBUG] Successfully opened output stream for channel %s on default device %d\n", 
@@ -1039,7 +1031,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                             (int)defOut, audio_stream->channel_id, Pa_GetErrorText(err));
                  }
              }
-         }
+        }
         if (err != paNoError) {
             printf("WARNING: Output stream failed for channel %s (device %d), trying alternative output devices\n",
                    audio_stream->channel_id, audio_stream->device_index);
@@ -1164,13 +1156,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     if (audio_stream->output_stream) {
         printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
         fflush(stdout);
-        
-        err = Pa_StartStream(audio_stream->output_stream);
-        if (err != paNoError) {
-            fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-            Pa_CloseStream(audio_stream->input_stream);
-            Pa_CloseStream(audio_stream->output_stream);
-            return 0;
+    
+    err = Pa_StartStream(audio_stream->output_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->output_stream);
+        return 0;
         }
         printf("[DEBUG] Output stream started successfully for channel %s\n", audio_stream->channel_id);
         fflush(stdout);
@@ -1199,10 +1191,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     if (audio_stream->output_stream) {
-        if (Pa_IsStreamActive(audio_stream->output_stream)) {
-            printf("Output stream is active for channel %s\n", audio_stream->channel_id);
-        } else {
-            printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+    if (Pa_IsStreamActive(audio_stream->output_stream)) {
+        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
         }
     } else {
         printf("No output stream for channel %s (input-only mode)\n", audio_stream->channel_id);
@@ -1274,25 +1266,25 @@ void auto_assign_usb_devices() {
                      if (usb_count < 4) {  // We have 4 USB cards (2,3,4,5)
                          usb_devices[usb_count] = i;
                          printf("PulseAudio Device %d assigned to slot %d: %s\n", i, usb_count, name);
-                         usb_count++;
-                     }
-                 }
-             }
-         }
-         
-         if (usb_count == 0) {
-             printf("No USB audio devices found, using default input device for all channels\n");
+                    usb_count++;
+                }
+            }
+        }
+    }
+    
+    if (usb_count == 0) {
+        printf("No USB audio devices found, using default input device for all channels\n");
              for (int i = 0; i < MAX_CHANNELS; i++) {
-                 usb_devices[i] = Pa_GetDefaultInputDevice();
-             }
+            usb_devices[i] = Pa_GetDefaultInputDevice();
+        }
          }
      } else if (usb_count < MAX_CHANNELS) {
-         printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
-         // Fill remaining slots with available devices
+        printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
+        // Fill remaining slots with available devices
          for (int i = usb_count; i < MAX_CHANNELS; i++) {
-             usb_devices[i] = usb_devices[i % usb_count];
-         }
-     }
+            usb_devices[i] = usb_devices[i % usb_count];
+        }
+    }
     
     printf("Channel assignments:\n");
     extern int global_channel_count;

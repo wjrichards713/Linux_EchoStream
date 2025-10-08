@@ -1508,8 +1508,7 @@ void* udp_listener_worker(void* arg) {
                                     struct jitter_buffer *jitter = &target_stream->output_jitter;
                                     pthread_mutex_lock(&jitter->mutex);
                                     
-                                    // Improved buffer management - only drop frames if buffer is really full
-                                    if (jitter->frame_count < JITTER_BUFFER_SIZE - 1) {
+                                    if (jitter->frame_count < JITTER_BUFFER_SIZE) {
                                         // Add new frame to buffer
                                         struct audio_frame *frame = &jitter->frames[jitter->write_index];
                                         
@@ -1540,40 +1539,32 @@ void* udp_listener_worker(void* arg) {
                                         printf("UDP: Audio queued for %s (buffer=%d)\n", 
                                                channel_id, jitter->frame_count);
                                     } else {
-                                        // Buffer nearly full - only drop if we have more than 6 frames
-                                        if (jitter->frame_count > 6) {
-                                            // Drop oldest frame and add new one
-                                            jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
-                                            jitter->frame_count--;
+                                        // Buffer full, drop oldest frame and add new one
+                                        jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
+                                        jitter->frame_count--;
+                                        
+                                        struct audio_frame *frame = &jitter->frames[jitter->write_index];
+                                        float max_sample = 0.0f;
+                                        for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
+                                            float sample = (float)pcm_data[j] / 32767.0f;
+                                            // Apply 10x gain boost for very quiet audio
+                                            sample *= 10.0f;
+                                            // Clamp to prevent distortion
+                                            if (sample > 1.0f) sample = 1.0f;
+                                            if (sample < -1.0f) sample = -1.0f;
+                                            frame->samples[j] = sample;
                                             
-                                            struct audio_frame *frame = &jitter->frames[jitter->write_index];
-                                            float max_sample = 0.0f;
-                                            for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
-                                                float sample = (float)pcm_data[j] / 32767.0f;
-                                                // Apply 10x gain boost for very quiet audio
-                                                sample *= 10.0f;
-                                                // Clamp to prevent distortion
-                                                if (sample > 1.0f) sample = 1.0f;
-                                                if (sample < -1.0f) sample = -1.0f;
-                                                frame->samples[j] = sample;
-                                                
-                                                // Track max sample for debugging
-                                                float abs_sample = fabsf(sample);
-                                                if (abs_sample > max_sample) max_sample = abs_sample;
-                                            }
-                                            frame->sample_count = samples;
-                                            frame->valid = 1;
-                                            
-                                            jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
-                                            jitter->frame_count++;
-                                            
-                                            printf("UDP: Buffer nearly full, dropped frame for %s (buffer=%d)\n", 
-                                                   channel_id, jitter->frame_count);
-                                        } else {
-                                            // Buffer not too full, skip this frame to avoid dropping
-                                            printf("UDP: Skipping frame for %s to avoid buffer overflow (buffer=%d)\n", 
-                                                   channel_id, jitter->frame_count);
+                                            // Track max sample for debugging
+                                            float abs_sample = fabsf(sample);
+                                            if (abs_sample > max_sample) max_sample = abs_sample;
                                         }
+                                        frame->sample_count = samples;
+                                        frame->valid = 1;
+                                        
+                                        jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
+                                        jitter->frame_count++;
+                                        
+                                        printf("UDP: Buffer full, dropped frame for %s\n", channel_id);
                                     }
                                     
                                     pthread_mutex_unlock(&jitter->mutex);
