@@ -132,7 +132,10 @@ int tone_passthrough_callback(const void *input, void *output, unsigned long fra
                               const PaStreamCallbackTimeInfo* time_info,
                               PaStreamCallbackFlags flags, void *user_data);
 
-// Audio callback functions are static and defined in audio.c
+// Audio callback functions
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo* time_info,
+                         PaStreamCallbackFlags flags, void *user_data);
 
 // Tone detection integration
 void feed_audio_to_tone_detection(const float* samples, int sample_count);
