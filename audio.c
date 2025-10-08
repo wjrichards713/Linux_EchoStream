@@ -347,14 +347,8 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     if (should_update_shared_buffer) {
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        
-        // Apply smoothing to reduce choppiness in shared buffer
-        static float last_shared_samples[SAMPLES_PER_FRAME] = {0};
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            // Smooth interpolation between last and current samples
-            float smoothed_sample = (last_shared_samples[i] + samples[i]) * 0.5f;
-            global_shared_buffer.samples[i] = smoothed_sample;
-            last_shared_samples[i] = samples[i];
+            global_shared_buffer.samples[i] = samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
@@ -364,7 +358,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Debug logging for shared buffer
         static int shared_buffer_count = 0;
         if (shared_buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d (smoothed)\n", frames, global_shared_buffer.valid);
+            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d\n", frames, global_shared_buffer.valid);
         }
         
         // Tone detection reads directly from shared buffer
@@ -484,51 +478,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     
     if (passthrough_mode) {
-        // Configured passthrough target in passthrough mode - play audio from shared buffer
+        // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
         unsigned long frames_filled = 0;
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
-            // Copy audio from shared buffer to output with smooth interpolation
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
-            
-            // Apply gain boost and smooth interpolation to reduce choppiness
-            static float last_sample = 0.0f;
             for (unsigned long i = 0; i < to_copy; i++) {
-                float sample = global_shared_buffer.samples[i];
-                // Apply 3x gain boost (reduced from 5x to prevent distortion)
-                sample *= 3.0f;
-                // Clamp to prevent distortion
-                if (sample > 1.0f) sample = 1.0f;
-                if (sample < -1.0f) sample = -1.0f;
-                
-                // Smooth interpolation between last sample and current sample
-                if (i == 0 && last_sample != 0.0f) {
-                    sample = (last_sample + sample) * 0.5f; // Average with last sample
-                }
-                
-                out[i] = sample;
-                last_sample = sample;
+                out[i] = global_shared_buffer.samples[i];
             }
             frames_filled = to_copy;
-            
-            // Debug logging for passthrough audio
-            static int passthrough_audio_count = 0;
-            if (passthrough_audio_count++ % 1000 == 0) {
-                printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames (smooth interpolation)\n", 
-                       audio_stream->channel_id, frames_filled);
-            }
+            // do not invalidate; tone detection thread also reads; this is a tap
         } else {
-            // No audio data - use gradual fade to silence to reduce choppiness
-            static float fade_sample = 0.0f;
-            for (unsigned long i = 0; i < frames; i++) {
-                // Gradual fade to silence
-                fade_sample *= 0.95f; // Slow fade
-                out[i] = fade_sample;
-            }
-            frames_filled = frames;
-            
             // Debug: no audio data in shared buffer
             static int no_audio_count = 0;
             if (no_audio_count++ % 100 == 0) {
@@ -538,7 +499,23 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Fill any remainder with silence (shouldn't be needed now)
+    // Debug logging for passthrough audio
+    static int passthrough_audio_count = 0;
+    if (passthrough_audio_count++ % 1000 == 0) {
+        printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
+               frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
+    }
+    
+    // Additional debug for passthrough activation
+    if (frames_filled > 0) {
+        static int passthrough_active_count = 0;
+        if (passthrough_active_count++ % 100 == 0) {
+            printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames\n", 
+                   audio_stream->channel_id, frames_filled);
+        }
+    }
+        
+        // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
             out[i] = 0.0f;
         }
@@ -673,12 +650,12 @@ void* audio_passthrough_thread(void* arg) {
                 } else {
                     fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
                 }
-            } else {
-                underflow_count = 0; // Reset counter on successful write
-                if (write_count % 5000 == 0) {  // Much less frequent logging
-                    printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
+                } else {
+                    underflow_count = 0; // Reset counter on successful write
+                    if (write_count % 5000 == 0) {  // Much less frequent logging
+                        printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
+                    }
                 }
-            }
         }
         
         // Small delay to prevent overwhelming the output device
