@@ -774,7 +774,32 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
-        return 0;
+        printf("WARNING: USB device %d failed for channel %s, trying default device\n", 
+               audio_stream->device_index, audio_stream->channel_id);
+        fflush(stdout);
+        
+        // Try fallback to default input device
+        PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
+        if (default_device != paNoDevice && default_device != audio_stream->device_index) {
+            input_params.device = default_device;
+            input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
+            
+            printf("[DEBUG] Trying fallback to default input device %d...\n", default_device);
+            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                paClipOff, audio_input_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("Successfully opened input stream on default device %d for channel %s\n", 
+                       default_device, audio_stream->channel_id);
+                audio_stream->device_index = default_device;
+            } else {
+                fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
+                return 0;
+            }
+        } else {
+            printf("No default input device available for fallback\n");
+            return 0;
+        }
     }
     
     // Create output stream for audio playback
@@ -787,9 +812,34 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     if (err != paNoError) {
         printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
                audio_stream->channel_id, Pa_GetErrorText(err));
-        printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
-        audio_stream->output_stream = NULL;  // No output stream
-        err = paNoError;  // Continue with input-only mode
+        printf("WARNING: USB output device %d failed for channel %s, trying default device\n", 
+               output_params.device, audio_stream->channel_id);
+        fflush(stdout);
+        
+        // Try fallback to default output device
+        PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
+        if (default_output_device != paNoDevice && default_output_device != output_params.device) {
+            output_params.device = default_output_device;
+            output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
+            
+            printf("[DEBUG] Trying fallback to default output device %d...\n", default_output_device);
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                                paClipOff, audio_output_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("Successfully opened output stream on default device %d for channel %s\n", 
+                       default_output_device, audio_stream->channel_id);
+            } else {
+                printf("[DEBUG] Default output device also failed: %s\n", Pa_GetErrorText(err));
+                printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
+                audio_stream->output_stream = NULL;  // No output stream
+                err = paNoError;  // Continue with input-only mode
+            }
+        } else {
+            printf("[DEBUG] No default output device available, continuing with input-only mode\n");
+            audio_stream->output_stream = NULL;  // No output stream
+            err = paNoError;  // Continue with input-only mode
+        }
     } else {
         printf("[DEBUG] Output stream created successfully for channel %s\n", audio_stream->channel_id);
     }
