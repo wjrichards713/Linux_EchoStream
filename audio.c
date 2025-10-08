@@ -478,17 +478,33 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     
     if (passthrough_mode) {
-        // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
+        // Configured passthrough target in passthrough mode - play audio from shared buffer
         unsigned long frames_filled = 0;
         pthread_mutex_lock(&global_shared_buffer.mutex);
+        
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+            // Copy audio from shared buffer to output
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
+            
+            // Apply gain boost to make the audio more audible
             for (unsigned long i = 0; i < to_copy; i++) {
-                out[i] = global_shared_buffer.samples[i];
+                float sample = global_shared_buffer.samples[i];
+                // Apply 5x gain boost for better audibility
+                sample *= 5.0f;
+                // Clamp to prevent distortion
+                if (sample > 1.0f) sample = 1.0f;
+                if (sample < -1.0f) sample = -1.0f;
+                out[i] = sample;
             }
             frames_filled = to_copy;
-            // do not invalidate; tone detection thread also reads; this is a tap
+            
+            // Debug logging for passthrough audio
+            static int passthrough_audio_count = 0;
+            if (passthrough_audio_count++ % 1000 == 0) {
+                printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames (gain boosted)\n", 
+                       audio_stream->channel_id, frames_filled);
+            }
         } else {
             // Debug: no audio data in shared buffer
             static int no_audio_count = 0;
@@ -498,22 +514,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             }
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-    // Debug logging for passthrough audio
-    static int passthrough_audio_count = 0;
-    if (passthrough_audio_count++ % 1000 == 0) {
-        printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
-               frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
-    }
-    
-    // Additional debug for passthrough activation
-    if (frames_filled > 0) {
-        static int passthrough_active_count = 0;
-        if (passthrough_active_count++ % 100 == 0) {
-            printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames\n", 
-                   audio_stream->channel_id, frames_filled);
-        }
-    }
         
         // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
@@ -650,12 +650,12 @@ void* audio_passthrough_thread(void* arg) {
                 } else {
                     fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
                 }
-                } else {
-                    underflow_count = 0; // Reset counter on successful write
-                    if (write_count % 5000 == 0) {  // Much less frequent logging
-                        printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
-                    }
+            } else {
+                underflow_count = 0; // Reset counter on successful write
+                if (write_count % 5000 == 0) {  // Much less frequent logging
+                    printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
                 }
+            }
         }
         
         // Small delay to prevent overwhelming the output device
