@@ -47,12 +47,12 @@ int repair_passthrough_output_stream(int channel_index) {
     }
     
     struct channel_context* channel = &channels[channel_index];
-    if (!channel->audio_stream) {
-        printf("[ERROR] repair_passthrough_output_stream: no audio_stream for channel %d\n", channel_index);
+    if (!channel->audio.input_stream && !channel->audio.output_stream) {
+        printf("[ERROR] repair_passthrough_output_stream: no audio streams for channel %d\n", channel_index);
         return 0;
     }
     
-    struct audio_stream* audio_stream = channel->audio_stream;
+    struct audio_stream* audio_stream = &channel->audio;
     
     printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
            channel_index, global_channel_ids[channel_index]);
