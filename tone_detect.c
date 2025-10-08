@@ -816,7 +816,43 @@ void trigger_tone_passthrough(void) {
                 // Enable passthrough mode; audio.c routes to the configured target from JSON
                 set_passthrough_output_mode(1);
             } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - passthrough disabled\n");
+                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - attempting to create one\n");
+                
+                // Try to create an output stream for the passthrough target
+                extern struct channel_context channels[];
+                if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
+                    printf("[TONE PASSTHROUGH] Attempting to create output stream for passthrough target channel %d\n", target_channel_idx);
+                    
+                    // Try to create output stream using default device
+                    PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
+                    if (default_output_device != paNoDevice) {
+                        PaStreamParameters output_params;
+                        output_params.device = default_output_device;
+                        output_params.channelCount = 2;  // Try stereo first
+                        output_params.sampleFormat = paFloat32;
+                        output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
+                        output_params.hostApiSpecificStreamInfo = NULL;
+                        
+                        PaError err = Pa_OpenStream(&channels[target_channel_idx].audio.output_stream, NULL, &output_params, 48000, 1024, 
+                                                    paClipOff, audio_output_callback, &channels[target_channel_idx].audio);
+                        
+                        if (err == paNoError) {
+                            printf("[TONE PASSTHROUGH] Successfully created output stream for passthrough target\n");
+                            // Start the output stream
+                            err = Pa_StartStream(channels[target_channel_idx].audio.output_stream);
+                            if (err == paNoError) {
+                                printf("[TONE PASSTHROUGH] Output stream started for passthrough target\n");
+                                set_passthrough_output_mode(1);
+                            } else {
+                                printf("[TONE PASSTHROUGH] Failed to start output stream: %s\n", Pa_GetErrorText(err));
+                            }
+                        } else {
+                            printf("[TONE PASSTHROUGH] Failed to create output stream: %s\n", Pa_GetErrorText(err));
+                        }
+                    } else {
+                        printf("[TONE PASSTHROUGH] No default output device available\n");
+                    }
+                }
             }
         } else {
             printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");

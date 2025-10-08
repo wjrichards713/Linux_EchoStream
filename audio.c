@@ -816,19 +816,31 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                output_params.device, audio_stream->channel_id);
         fflush(stdout);
         
-        // Try fallback to default output device
+        // Try fallback to default output device with different channel configurations
         PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
         if (default_output_device != paNoDevice && default_output_device != output_params.device) {
             output_params.device = default_output_device;
             output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
             
             printf("[DEBUG] Trying fallback to default output device %d...\n", default_output_device);
+            
+            // Try mono first (1 channel)
+            output_params.channelCount = 1;
             err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
                                 paClipOff, audio_output_callback, audio_stream);
             
+            if (err != paNoError) {
+                printf("[DEBUG] Default device failed with mono: %s, trying stereo...\n", Pa_GetErrorText(err));
+                
+                // Try stereo (2 channels) if mono fails
+                output_params.channelCount = 2;
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                                    paClipOff, audio_output_callback, audio_stream);
+            }
+            
             if (err == paNoError) {
-                printf("Successfully opened output stream on default device %d for channel %s\n", 
-                       default_output_device, audio_stream->channel_id);
+                printf("Successfully opened output stream on default device %d for channel %s (%d channels)\n", 
+                       default_output_device, audio_stream->channel_id, output_params.channelCount);
             } else {
                 printf("[DEBUG] Default output device also failed: %s\n", Pa_GetErrorText(err));
                 printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
