@@ -36,6 +36,134 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
+// Repair/restart an inactive output stream for a passthrough target channel
+int repair_passthrough_output_stream(int channel_index) {
+    extern struct channel_context channels[];
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    
+    if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+        printf("[ERROR] repair_passthrough_output_stream: invalid channel_index %d\n", channel_index);
+        return 0;
+    }
+    
+    struct channel_context* channel = &channels[channel_index];
+    if (!channel->audio_stream) {
+        printf("[ERROR] repair_passthrough_output_stream: no audio_stream for channel %d\n", channel_index);
+        return 0;
+    }
+    
+    struct audio_stream* audio_stream = channel->audio_stream;
+    
+    printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
+           channel_index, global_channel_ids[channel_index]);
+    
+    // If stream exists but is inactive, try to restart it
+    if (audio_stream->output_stream) {
+        printf("[DEBUG] Channel %d has output stream but is inactive - attempting restart\n", channel_index);
+        
+        // Stop the stream first
+        PaError err = Pa_StopStream(audio_stream->output_stream);
+        if (err != paNoError) {
+            printf("[DEBUG] Pa_StopStream failed: %s\n", Pa_GetErrorText(err));
+        }
+        
+        // Close the stream
+        err = Pa_CloseStream(audio_stream->output_stream);
+        if (err != paNoError) {
+            printf("[DEBUG] Pa_CloseStream failed: %s\n", Pa_GetErrorText(err));
+        }
+        
+        audio_stream->output_stream = NULL;
+    }
+    
+    // Now try to recreate the output stream with aggressive fallback
+    printf("[DEBUG] Recreating output stream for passthrough target channel %d\n", channel_index);
+    
+    PaStreamParameters output_params;
+    output_params.device = audio_stream->device_index;
+    output_params.channelCount = AUDIO_CHANNELS;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    // Try multiple sample rates and buffer sizes
+    int sample_rates[] = {SAMPLE_RATE, 44100, 22050, 16000, 8000};
+    int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
+    
+    PaError err = paNoError;
+    for (int i = 0; i < 5 && err != paNoError; i++) {
+        for (int j = 0; j < 6 && err != paNoError; j++) {
+            printf("[DEBUG] Trying to repair with sample_rate=%d, buffer_size=%d\n", 
+                   sample_rates[i], buffer_sizes[j]);
+            
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                               sample_rates[i], buffer_sizes[j], 
+                               paClipOff, audio_output_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("[DEBUG] *** SUCCESS! Repaired output stream with sample_rate=%d, buffer_size=%d ***\n", 
+                       sample_rates[i], buffer_sizes[j]);
+                
+                // Start the stream
+                err = Pa_StartStream(audio_stream->output_stream);
+                if (err == paNoError) {
+                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
+                    return 1;
+                } else {
+                    printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
+                    Pa_CloseStream(audio_stream->output_stream);
+                    audio_stream->output_stream = NULL;
+                    err = paNoError; // Continue trying
+                }
+            }
+        }
+    }
+    
+    // If still failed, try other USB devices
+    if (err != paNoError) {
+        printf("[DEBUG] Trying other USB devices for passthrough target repair\n");
+        extern PaDeviceIndex usb_devices[MAX_CHANNELS];
+        
+        for (int dev_idx = 0; dev_idx < MAX_CHANNELS; dev_idx++) {
+            if (usb_devices[dev_idx] != paNoDevice && usb_devices[dev_idx] != output_params.device) {
+                output_params.device = usb_devices[dev_idx];
+                output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+                
+                printf("[DEBUG] Trying repair on USB device %d (hw:%d,0)\n", 
+                       output_params.device, output_params.device + 2);
+                
+                for (int i = 0; i < 5 && err != paNoError; i++) {
+                    for (int j = 0; j < 6 && err != paNoError; j++) {
+                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                           sample_rates[i], buffer_sizes[j], 
+                                           paClipOff, audio_output_callback, audio_stream);
+                        
+                        if (err == paNoError) {
+                            printf("[DEBUG] *** SUCCESS! Repaired on device %d with sample_rate=%d, buffer_size=%d ***\n", 
+                                   output_params.device, sample_rates[i], buffer_sizes[j]);
+                            
+                            err = Pa_StartStream(audio_stream->output_stream);
+                            if (err == paNoError) {
+                                printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE ON DEVICE %d! ***\n", 
+                                       channel_index, output_params.device);
+                                return 1;
+                            } else {
+                                printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
+                                Pa_CloseStream(audio_stream->output_stream);
+                                audio_stream->output_stream = NULL;
+                                err = paNoError;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    printf("[ERROR] *** FAILED TO REPAIR PASSTHROUGH TARGET CHANNEL %d ***\n", channel_index);
+    return 0;
+}
+
 // Find the best available channel for passthrough (one with working output stream)
 int find_best_passthrough_channel(void) {
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
@@ -49,8 +177,16 @@ int find_best_passthrough_channel(void) {
                    configured_target, global_channel_ids[configured_target]);
             return configured_target;
         } else {
-            printf("[WARNING] Configured passthrough target channel %d (%s) has no output stream\n", 
+            printf("[WARNING] Configured passthrough target channel %d (%s) has no working output stream - attempting repair\n", 
                    configured_target, global_channel_ids[configured_target]);
+            
+            // Try to repair the passthrough target channel
+            if (repair_passthrough_output_stream(configured_target)) {
+                printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR SUCCESSFUL! ***\n", configured_target);
+                return configured_target;
+            } else {
+                printf("[ERROR] *** PASSTHROUGH TARGET CHANNEL %d REPAIR FAILED! ***\n", configured_target);
+            }
         }
     }
     
@@ -102,6 +238,24 @@ int channel_has_output_stream(int channel_index) {
     return is_active;
 }
 
+// Periodic repair attempt for passthrough target channels
+static void periodic_passthrough_repair(void) {
+    static int repair_attempt_count = 0;
+    repair_attempt_count++;
+    
+    // Try to repair every 1000 calls (roughly every 10-20 seconds)
+    if (repair_attempt_count % 1000 == 0) {
+        int configured_target = get_passthrough_target_channel_index();
+        if (configured_target >= 0) {
+            if (!channel_has_output_stream(configured_target)) {
+                printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
+                       repair_attempt_count / 1000, configured_target);
+                repair_passthrough_output_stream(configured_target);
+            }
+        }
+    }
+}
+
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char* channel_id) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
@@ -113,6 +267,9 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
         }
         return 0;
     }
+    
+    // Run periodic repair attempts
+    periodic_passthrough_repair();
     
     // Check if this channel is the best available passthrough target
     int best_passthrough_idx = find_best_passthrough_channel();
