@@ -112,6 +112,8 @@ int repair_passthrough_output_stream(int channel_index) {
                 err = Pa_StartStream(audio_stream->output_stream);
                 if (err == paNoError) {
                     printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
+                    printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
+                    force_passthrough_reevaluation = 1; // Force re-evaluation
                     return 1;
                 } else {
                     printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
@@ -150,6 +152,7 @@ int repair_passthrough_output_stream(int channel_index) {
                             if (err == paNoError) {
                                 printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE ON DEVICE %d! ***\n", 
                                        channel_index, output_params.device);
+                                force_passthrough_reevaluation = 1; // Force re-evaluation
                                 return 1;
                             } else {
                                 printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(err));
@@ -173,6 +176,12 @@ int find_best_passthrough_channel(void) {
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     extern int global_channel_count;
     
+    // Check if we need to force re-evaluation due to successful repair
+    if (force_passthrough_reevaluation) {
+        printf("[DEBUG] *** FORCING PASSTHROUGH RE-EVALUATION DUE TO SUCCESSFUL REPAIR ***\n");
+        force_passthrough_reevaluation = 0; // Reset flag
+    }
+    
     // First try the configured passthrough target
     int configured_target = get_passthrough_target_channel_index();
     if (configured_target >= 0 && configured_target < global_channel_count) {
@@ -187,6 +196,7 @@ int find_best_passthrough_channel(void) {
             // Try to repair the passthrough target channel
             if (repair_passthrough_output_stream(configured_target)) {
                 printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR SUCCESSFUL! ***\n", configured_target);
+                printf("[DEBUG] *** FORCING PASSTHROUGH TO USE REPAIRED CHANNEL %d ***\n", configured_target);
                 return configured_target;
             } else {
                 printf("[ERROR] *** PASSTHROUGH TARGET CHANNEL %d REPAIR FAILED! ***\n", configured_target);
@@ -242,6 +252,9 @@ int channel_has_output_stream(int channel_index) {
     return is_active;
 }
 
+// Global flag to force passthrough target re-evaluation
+static int force_passthrough_reevaluation = 0;
+
 // Periodic repair attempt for passthrough target channels
 static void periodic_passthrough_repair(void) {
     static int repair_attempt_count = 0;
@@ -254,7 +267,10 @@ static void periodic_passthrough_repair(void) {
             if (!channel_has_output_stream(configured_target)) {
                 printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
                        repair_attempt_count / 1000, configured_target);
-                repair_passthrough_output_stream(configured_target);
+                if (repair_passthrough_output_stream(configured_target)) {
+                    printf("[DEBUG] *** PERIODIC REPAIR SUCCESSFUL - FORCING PASSTHROUGH RE-EVALUATION ***\n");
+                    force_passthrough_reevaluation = 1;
+                }
             }
         }
     }
