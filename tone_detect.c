@@ -7,6 +7,11 @@
 #include <time.h>
 #include <unistd.h>
 
+// Forward declaration for audio callback (defined in audio.c)
+extern int audio_output_callback(const void *input, void *output, unsigned long frames,
+                                const PaStreamCallbackTimeInfo* time_info,
+                                PaStreamCallbackFlags flags, void *user_data);
+
 // Silence noisy logs while keeping confirmations
 #define NOISY_LOG(...) do { (void)0; } while(0)
 
