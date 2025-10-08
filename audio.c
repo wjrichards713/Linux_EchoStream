@@ -79,6 +79,10 @@ int repair_passthrough_output_stream(int channel_index) {
     // Now try to recreate the output stream with aggressive fallback
     printf("[DEBUG] Recreating output stream for passthrough target channel %d\n", channel_index);
     
+    // Define constants locally
+    const int AUDIO_BUFFER_SIZE = 512;
+    const int AUDIO_CHANNELS = 1;
+    
     PaStreamParameters output_params;
     output_params.device = audio_stream->device_index;
     output_params.channelCount = AUDIO_CHANNELS;
