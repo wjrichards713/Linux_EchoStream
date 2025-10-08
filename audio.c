@@ -762,59 +762,11 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup output stream for other channels
-    // Special handling for the last channel (typically the passthrough target) - use Device 0 for output to avoid PulseAudio issues
-    extern int global_channel_count;
-    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel_setup = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
-    
-    if (is_last_channel_setup) {
-        printf("[DEBUG] Last channel: Using Device 0 for output (avoiding PulseAudio issues)\n");
-        output_params.device = 0; // Use Device 0 which is stable
-        output_params.channelCount = 2; // Device 0 has 2 output channels
-    } else {
-        output_params.device = audio_stream->device_index;
-        output_params.channelCount = 1;
-    }
-    output_params.sampleFormat = paFloat32;
-    
-    // Check device capabilities before setting latency
-    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(output_params.device);
-    if (device_info) {
-        printf("[DEBUG] Device %d info: maxOutputChannels=%d, maxInputChannels=%d, name=%s\n", 
-               output_params.device, device_info->maxOutputChannels, device_info->maxInputChannels, device_info->name);
-        
-        // Handle devices that PortAudio incorrectly reports as having 0 output channels
-        // Some USB audio devices have output capability but PortAudio doesn't detect it properly
-        if (device_info->maxOutputChannels == 0 && device_info->maxInputChannels > 0) {
-            printf("[DEBUG] Device %d reported as input-only (0 output channels), but may actually support output\n", output_params.device);
-            printf("[DEBUG] Attempting to use device anyway - PortAudio will handle the actual capability\n");
-            // Don't adjust channel count - let PortAudio handle it
-        } else if (output_params.channelCount > device_info->maxOutputChannels) {
-            printf("[WARNING] Requested %d channels but device only supports %d, adjusting\n", 
-                   output_params.channelCount, device_info->maxOutputChannels);
-            output_params.channelCount = device_info->maxOutputChannels;
-        }
-        
-        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
-    } else {
-        printf("[ERROR] Could not get device info for device %d\n", output_params.device);
-        return 0;
-    }
-    output_params.hostApiSpecificStreamInfo = NULL;
-    
-    printf("[DEBUG] Attempting to open output stream for channel %s on device %d\n", 
-           audio_stream->channel_id, output_params.device);
-    
-    
-    printf("[DEBUG] About to call Pa_OpenStream for output stream...\n");
-    fflush(stdout);  // Ensure output is flushed before potentially hanging call
-    
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
-                        paClipOff, audio_output_callback, audio_stream);
-    
-    printf("[DEBUG] Pa_OpenStream for output stream returned: %s\n", Pa_GetErrorText(err));
-    fflush(stdout);  // Ensure output is flushed after call
+    // For now, skip output stream creation to focus on getting input streams working for tone detection
+    // This will allow us to get tone detection working first, then we can add output streams later
+    printf("[DEBUG] Skipping output stream creation for now - focusing on input streams for tone detection\n");
+    audio_stream->output_stream = NULL;  // No output stream for now
+    err = paNoError;  // Pretend output stream creation succeeded
     
     if (err != paNoError) {
         printf("[DEBUG] Output stream creation failed, continuing with input-only mode\n");
@@ -975,7 +927,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         }
     }
     
-    // Start both streams
+    // Start input stream (output stream is skipped for now)
     printf("[DEBUG] Starting input stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
     
@@ -983,26 +935,29 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
-        if (audio_stream->output_stream) {
-            Pa_CloseStream(audio_stream->output_stream);
-        }
         return 0;
     }
     printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
     fflush(stdout);
     
-    printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
-    fflush(stdout);
-    
-    err = Pa_StartStream(audio_stream->output_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
+    // Skip output stream for now - focus on getting tone detection working
+    if (audio_stream->output_stream) {
+        printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
+        fflush(stdout);
+        
+        err = Pa_StartStream(audio_stream->output_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->output_stream);
+            return 0;
+        }
+        printf("[DEBUG] Output stream started successfully for channel %s\n", audio_stream->channel_id);
+        fflush(stdout);
+    } else {
+        printf("[DEBUG] No output stream to start for channel %s (input-only mode)\n", audio_stream->channel_id);
+        fflush(stdout);
     }
-    printf("[DEBUG] Output stream started successfully for channel %s\n", audio_stream->channel_id);
-    fflush(stdout);
     
     // Check if streams are actually running
     if (Pa_IsStreamActive(audio_stream->input_stream)) {
@@ -1011,13 +966,21 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
-    if (Pa_IsStreamActive(audio_stream->output_stream)) {
-        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+    if (audio_stream->output_stream) {
+        if (Pa_IsStreamActive(audio_stream->output_stream)) {
+            printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+        } else {
+            printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        }
     } else {
-        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        printf("No output stream for channel %s (input-only mode)\n", audio_stream->channel_id);
     }
     
-    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    if (audio_stream->output_stream) {
+        printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    } else {
+        printf("Audio transmission started for channel %s (input-only mode)\n", audio_stream->channel_id);
+    }
     
     // Special debug for the last channel
     extern int global_channel_count;
