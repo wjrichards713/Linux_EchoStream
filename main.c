@@ -8,7 +8,8 @@
 
 // Global state
 volatile int global_interrupted = 0;
-char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN] = {"555", "666", "308e2478-072c-4d8b-ffff24d-51854e06711a", "94415b61-8007-430d-ffffea0-10fc9fee2d8e"};
+char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN] = {0};
+int global_channel_count = 0;
 
 static void handle_interrupt(int sig) {
     (void)sig; // Suppress unused parameter warning
@@ -59,10 +60,16 @@ int main(int argc, char *argv[]) {
     
     // Load channel configuration from JSON file
     printf("Loading channel configuration from /home/will/.an/config.json...\n");
-    if (load_channel_config(global_channel_ids)) {
-        printf("Channel configuration loaded successfully\n");
+    global_channel_count = load_channel_config(global_channel_ids);
+    if (global_channel_count > 0) {
+        printf("Successfully loaded %d channels from config\n", global_channel_count);
     } else {
-        printf("Using default channel IDs\n");
+        printf("No channels loaded from config, using generic defaults\n");
+        // Set generic default channels if config loading fails
+        for (int i = 0; i < 4; i++) {
+            snprintf(global_channel_ids[i], CHANNEL_ID_LEN, "channel_%d", i + 1);
+        }
+        global_channel_count = 4;
     }
     
     // Load complete configuration including tone detection settings
@@ -118,9 +125,9 @@ int main(int argc, char *argv[]) {
     // UDP configuration will be received via WebSocket
     // UDP listener thread will be started after UDP connection is established
     
-    printf("Setting up all 4 channels...\n");
+    printf("Setting up %d channels...\n", global_channel_count);
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < global_channel_count; i++) {
         printf("Setting up channel %d with ID: %s\n", i + 1, global_channel_ids[i]);
         if (!setup_channel(&channels[i], global_channel_ids[i])) {
             fprintf(stderr, "Failed to setup channel %d (%s)\n", i + 1, global_channel_ids[i]);
@@ -167,9 +174,9 @@ int main(int argc, char *argv[]) {
     // Tone definitions and filters are now loaded from JSON configuration in ~/.an/config.json
     // No hardcoded test tones needed
     
-    printf("All 4 channels running with single WebSocket. Press Ctrl+C to stop.\n");
+    printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     printf("\n=== SYSTEM BEHAVIOR ===\n");
-    printf("Card 1 (Channel 555):\n");
+    printf("First Channel (%s):\n", global_channel_ids[0]);
     printf("  - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
     printf("  - Input: %s (for tone detection and passthrough)\n", 
            is_card1_input_enabled() ? "ENABLED" : "DISABLED");

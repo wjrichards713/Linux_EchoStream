@@ -72,13 +72,8 @@ int load_channel_config(char channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN]) {
     
     json_object_put(json);
     
-    if (channels_loaded == 4) {
-        printf("Successfully loaded all 4 channel IDs from config\n");
-        return 1;
-    } else {
-        printf("Warning: Only loaded %d out of 4 channel IDs from config\n", channels_loaded);
-        return 0;
-    }
+    printf("Successfully loaded %d channel IDs from config\n", channels_loaded);
+    return channels_loaded;
 }
 
 // Load complete configuration including tone detection settings

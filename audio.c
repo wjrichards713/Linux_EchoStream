@@ -55,32 +55,13 @@ int channel_has_output_stream(int channel_index) {
     printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
            channel_index, stream, is_active, err);
     
-    // Special handling for Channel 4 - if stream is inactive, try to restart it
-    if (!is_active && channel_index == 3 && strcmp(channels[channel_index].audio.channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        printf("[DEBUG] Channel 4 output stream is inactive, attempting to restart on Device 0\n");
-        
-        // Close the current stream
-        if (channels[channel_index].audio.output_stream) {
-            Pa_CloseStream(channels[channel_index].audio.output_stream);
-            channels[channel_index].audio.output_stream = NULL;
-        }
-        
-        // Try to open on Device 0
-        PaStreamParameters output_params;
-        output_params.device = 0; // Use Device 0 which we know works
-        output_params.channelCount = 2;
-        output_params.sampleFormat = paFloat32;
-        output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-        output_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError restart_err = Pa_OpenStream(&channels[channel_index].audio.output_stream, NULL, &output_params, 48000, 1024,
-                                           paClipOff, audio_output_callback, &channels[channel_index].audio);
-        
-        if (restart_err == paNoError) {
-            printf("[DEBUG] Successfully restarted Channel 4 output on Device 0\n");
-            is_active = 1;
-        } else {
-            printf("[DEBUG] Failed to restart Channel 4 output on Device 0: %s\n", Pa_GetErrorText(restart_err));
+    // Special handling for the last channel (typically the passthrough target) - log when stream becomes inactive
+    extern int global_channel_count;
+    if (!is_active && channel_index == (global_channel_count - 1)) {
+        static int last_channel_inactive_count = 0;
+        if (last_channel_inactive_count++ % 100 == 0) {
+            printf("[DEBUG] Last channel (index %d) output stream is inactive (count: %d)\n", 
+                   channel_index, last_channel_inactive_count);
         }
     }
     
@@ -202,9 +183,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
     
-    // Check if this is Card 1 (channel 555) and if input should be enabled
-    int is_card1 = (strcmp(audio_stream->channel_id, "555") == 0);
-    int input_enabled = is_card1 ? is_card1_input_enabled() : 1;
+    // Check if this is the first channel (typically the main input channel) and if input should be enabled
+    extern int global_channel_count;
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    int is_first_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0);
+    int input_enabled = is_first_channel ? is_card1_input_enabled() : 1;
     
     if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
         return paContinue;
@@ -319,18 +302,22 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
                audio_stream->channel_id, is_configured_target, passthrough_mode);
     }
     
-    // Special debug for Channel 4
-    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        static int channel4_debug_count = 0;
-        if (channel4_debug_count++ % 1000 == 0) {
-            printf("[DEBUG] Channel 4 callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
+    // Special debug for the last channel (typically the passthrough target)
+    extern int global_channel_count;
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    int is_last_channel = 0;
+    if (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0) {
+        is_last_channel = 1;
+        static int last_channel_debug_count = 0;
+        if (last_channel_debug_count++ % 1000 == 0) {
+            printf("[DEBUG] Last channel callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
                    is_configured_target, passthrough_mode, frames);
         }
         
         // Test: Generate a simple tone to verify audio output is working
         static int test_tone_count = 0;
         if (test_tone_count++ % 10000 == 0) {
-            printf("[DEBUG] Channel 4: Generating test tone to verify audio output\n");
+            printf("[DEBUG] Last channel: Generating test tone to verify audio output\n");
         }
         
         // Generate a simple 440Hz test tone (A4 note) for testing
@@ -345,7 +332,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
             if (phase > 2.0f * 3.14159265359f) phase -= 2.0f * 3.14159265359f;
         }
         
-        return paContinue; // Skip normal processing for channel 4 test
+        return paContinue; // Skip normal processing for last channel test
     }
     
     
@@ -675,8 +662,19 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     // Setup output stream for other channels
-    output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;
+    // Special handling for the last channel (typically the passthrough target) - use Device 0 for output to avoid PulseAudio issues
+    extern int global_channel_count;
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+    
+    if (is_last_channel) {
+        printf("[DEBUG] Last channel: Using Device 0 for output (avoiding PulseAudio issues)\n");
+        output_params.device = 0; // Use Device 0 which is stable
+        output_params.channelCount = 2; // Device 0 has 2 output channels
+    } else {
+        output_params.device = audio_stream->device_index;
+        output_params.channelCount = 1;
+    }
     output_params.sampleFormat = paFloat32;
     
     // Check device capabilities before setting latency
@@ -733,8 +731,12 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             }
         }
         
-         // If still failed, retry with default output device (skip for Channel 4 to avoid PulseAudio issues)
-         if (err != paNoError && strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") != 0) {
+         // If still failed, retry with default output device (skip for last channel to avoid PulseAudio issues)
+         extern int global_channel_count;
+         extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+         int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+         
+         if (err != paNoError && !is_last_channel) {
              PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
              if (defOut != paNoDevice && defOut != output_params.device) {
                  output_params.device = defOut;
@@ -756,18 +758,18 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             printf("WARNING: Output stream failed for channel %s (device %d), trying alternative output devices\n",
                    audio_stream->channel_id, audio_stream->device_index);
 
-            // Special handling for Channel 4 - use a working device for output
-            if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-                printf("[DEBUG] Channel 4 failed, trying to use Device 0 (Channel 1's device) for output\n");
+            // Special handling for the last channel - use Device 0 for output
+            if (is_last_channel) {
+                printf("[DEBUG] Last channel: Using Device 0 for output (bypassing problematic device)\n");
                 output_params.device = 0; // Use Device 0 which we know works
                 output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
                 err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
                                     paClipOff, audio_output_callback, audio_stream);
                 
                 if (err == paNoError) {
-                    printf("[DEBUG] Successfully opened Channel 4 output on Device 0\n");
+                    printf("[DEBUG] Successfully opened last channel output on Device 0\n");
                 } else {
-                    printf("[DEBUG] Device 0 also failed for Channel 4: %s\n", Pa_GetErrorText(err));
+                    printf("[DEBUG] Device 0 also failed for last channel: %s\n", Pa_GetErrorText(err));
                 }
             }
 
@@ -842,9 +844,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
 
                 printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
                 
-                // Special debug for Channel 4
-                if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-                    printf("[DEBUG] Channel 4 is running in INPUT-ONLY mode - no output stream!\n");
+                // Special debug for the last channel
+                if (is_last_channel) {
+                    printf("[DEBUG] Last channel is running in INPUT-ONLY mode - no output stream!\n");
                 }
                 
                 // Check if this channel is configured as a passthrough target
@@ -889,12 +891,16 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
-    // Special debug for Channel 4
-    if (strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        printf("[DEBUG] Channel 4 stream status: input_active=%d, output_active=%d\n", 
+    // Special debug for the last channel
+    extern int global_channel_count;
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+    
+    if (is_last_channel) {
+        printf("[DEBUG] Last channel stream status: input_active=%d, output_active=%d\n", 
                Pa_IsStreamActive(audio_stream->input_stream), 
                Pa_IsStreamActive(audio_stream->output_stream));
-        printf("[DEBUG] Channel 4 stream pointers: input=%p, output=%p\n", 
+        printf("[DEBUG] Last channel stream pointers: input=%p, output=%p\n", 
                audio_stream->input_stream, audio_stream->output_stream);
     }
     
@@ -911,7 +917,7 @@ void auto_assign_usb_devices() {
     
     printf("Scanning for USB audio devices...\n");
     
-    for (int i = 0; i < num_devices && usb_count < 4; i++) {
+     for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++) {
         const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
         if (device_info && device_info->maxInputChannels > 0) {
             const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
@@ -927,21 +933,22 @@ void auto_assign_usb_devices() {
         }
     }
     
-    if (usb_count == 0) {
-        printf("No USB audio devices found, using default input device for all channels\n");
-        for (int i = 0; i < 4; i++) {
-            usb_devices[i] = Pa_GetDefaultInputDevice();
-        }
-    } else if (usb_count < 4) {
-        printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
-        // Fill remaining slots with available devices
-        for (int i = usb_count; i < 4; i++) {
-            usb_devices[i] = usb_devices[i % usb_count];
-        }
-    }
+     if (usb_count == 0) {
+         printf("No USB audio devices found, using default input device for all channels\n");
+         for (int i = 0; i < MAX_CHANNELS; i++) {
+             usb_devices[i] = Pa_GetDefaultInputDevice();
+         }
+     } else if (usb_count < MAX_CHANNELS) {
+         printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
+         // Fill remaining slots with available devices
+         for (int i = usb_count; i < MAX_CHANNELS; i++) {
+             usb_devices[i] = usb_devices[i % usb_count];
+         }
+     }
     
     printf("Channel assignments:\n");
-    for (int i = 0; i < 4; i++) {
+    extern int global_channel_count;
+    for (int i = 0; i < global_channel_count; i++) {
         printf("Channel %s -> Device %d\n", global_channel_ids[i], usb_devices[i]);
     }
     
@@ -951,19 +958,23 @@ void auto_assign_usb_devices() {
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
     
-    // Direct channel mapping like the original
-    if (strcmp(channel, "555") == 0) {
-        printf("[DEBUG] Channel %s assigned to USB device 0 (device %d)\n", channel, usb_devices[0]);
-        return usb_devices[0];
-    } else if (strcmp(channel, "666") == 0) {
-        printf("[DEBUG] Channel %s assigned to USB device 1 (device %d)\n", channel, usb_devices[1]);
-        return usb_devices[1];
-    } else if (strcmp(channel, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
-        printf("[DEBUG] Channel %s assigned to USB device 2 (device %d)\n", channel, usb_devices[2]);
-        return usb_devices[2];
-    } else if (strcmp(channel, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        printf("[DEBUG] Channel %s assigned to USB device 3 (device %d)\n", channel, usb_devices[3]);
-        return usb_devices[3];
+    // Dynamic channel mapping based on config.json channel order
+    // Find the channel index in the loaded configuration
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    extern int global_channel_count;
+    
+    int channel_index = -1;
+    for (int i = 0; i < global_channel_count; i++) {
+        if (strcmp(channel, global_channel_ids[i]) == 0) {
+            channel_index = i;
+            break;
+        }
+    }
+    
+    if (channel_index >= 0 && channel_index < MAX_CHANNELS) {
+        printf("[DEBUG] Channel %s (index %d) assigned to USB device %d (device %d)\n", 
+               channel, channel_index, channel_index, usb_devices[channel_index]);
+        return usb_devices[channel_index];
     }
     
     printf("[DEBUG] Channel %s using default fallback (device %d)\n", channel, usb_devices[0]);

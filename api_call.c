@@ -104,7 +104,9 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
-static char global_channel_ids[4][64] = {"555", "666", "308e2478-072c-4d8b-ffff24d-51854e06711a", "94415b61-8007-430d-ffffea0-10fc9fee2d8e"};
+// Use the global channel IDs from main.c instead of hardcoded values
+extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+extern int global_channel_count;
 
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
@@ -1065,17 +1067,23 @@ void auto_assign_usb_devices() {
 PaDeviceIndex get_device_for_channel(const char* channel) {
     auto_assign_usb_devices();
     
-    // Direct channel mapping like the original
-    if (strcmp(channel, "555") == 0) {
-        return usb_devices[0];
-    } else if (strcmp(channel, "666") == 0) {
-        return usb_devices[1];
-    } else if (strcmp(channel, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
-        return usb_devices[2];
-    } else if (strcmp(channel, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
-        return usb_devices[3];
+    // Dynamic channel mapping based on config.json channel order
+    // Find the channel index in the loaded configuration
+    int channel_index = -1;
+    for (int i = 0; i < global_channel_count; i++) {
+        if (strcmp(channel, global_channel_ids[i]) == 0) {
+            channel_index = i;
+            break;
+        }
     }
     
+    if (channel_index >= 0 && channel_index < MAX_CHANNELS) {
+        printf("[DEBUG] Channel %s (index %d) assigned to USB device %d (device %d)\n", 
+               channel, channel_index, channel_index, usb_devices[channel_index]);
+        return usb_devices[channel_index];
+    }
+    
+    printf("[DEBUG] Channel %s using default fallback (device %d)\n", channel, usb_devices[0]);
     return usb_devices[0];  // Default fallback
 }
 
@@ -1702,31 +1710,6 @@ int main(int argc, char *argv[]) {
     } else {
         printf("Using default channel IDs\n");
     }
-    
-    // int run_both = 1;
-    
-    // if (argc > 1) {
-    //     int channel = atoi(argv[1]);
-    //     if (channel == 555) {
-    //         run_both = 0;
-    //         printf("Running channel 555 only\n");
-    //     } else if (channel == 666) {
-    //         run_both = 0;
-    //         printf("Running channel 666 only\n");
-    //     } else if (strcmp(argv[1], "both") == 0) {
-    //         run_both = 1;
-    //         printf("Running both channels simultaneously\n");
-    //     } else {
-    //         fprintf(stderr, "Usage: %s [555|666|both]\n", argv[0]);
-    //         fprintf(stderr, "  555  - Run channel 555 only\n");
-    //         fprintf(stderr, "  666  - Run channel 666 only\n");
-    //         fprintf(stderr, "  both - Run both channels simultaneously (default)\n");
-    //         return 1;
-    //     }
-    // } else {
-    //     printf("Running both channels simultaneously (default)\n");
-    // }
-    
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
         return 1;
