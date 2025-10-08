@@ -55,6 +55,35 @@ int channel_has_output_stream(int channel_index) {
     printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
            channel_index, stream, is_active, err);
     
+    // Special handling for Channel 4 - if stream is inactive, try to restart it
+    if (!is_active && channel_index == 3 && strcmp(channels[channel_index].audio.channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") == 0) {
+        printf("[DEBUG] Channel 4 output stream is inactive, attempting to restart on Device 0\n");
+        
+        // Close the current stream
+        if (channels[channel_index].audio.output_stream) {
+            Pa_CloseStream(channels[channel_index].audio.output_stream);
+            channels[channel_index].audio.output_stream = NULL;
+        }
+        
+        // Try to open on Device 0
+        PaStreamParameters output_params;
+        output_params.device = 0; // Use Device 0 which we know works
+        output_params.channelCount = 2;
+        output_params.sampleFormat = paFloat32;
+        output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+        output_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError restart_err = Pa_OpenStream(&channels[channel_index].audio.output_stream, NULL, &output_params, 48000, 1024,
+                                           paClipOff, audio_output_callback, &channels[channel_index].audio);
+        
+        if (restart_err == paNoError) {
+            printf("[DEBUG] Successfully restarted Channel 4 output on Device 0\n");
+            is_active = 1;
+        } else {
+            printf("[DEBUG] Failed to restart Channel 4 output on Device 0: %s\n", Pa_GetErrorText(restart_err));
+        }
+    }
+    
     // Return true only if stream exists AND is active
     // A stream that exists but isn't active can't play audio
     return is_active;
@@ -704,8 +733,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             }
         }
         
-         // If still failed, retry with default output device
-         if (err != paNoError) {
+         // If still failed, retry with default output device (skip for Channel 4 to avoid PulseAudio issues)
+         if (err != paNoError && strcmp(audio_stream->channel_id, "94415b61-8007-430d-ffffea0-10fc9fee2d8e") != 0) {
              PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
              if (defOut != paNoDevice && defOut != output_params.device) {
                  output_params.device = defOut;
