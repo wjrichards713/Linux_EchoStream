@@ -253,7 +253,7 @@ int channel_has_output_stream(int channel_index) {
 }
 
 // Global flag to force passthrough target re-evaluation
-static int force_passthrough_reevaluation = 0;
+int force_passthrough_reevaluation = 0;
 
 // Periodic repair attempt for passthrough target channels
 static void periodic_passthrough_repair(void) {

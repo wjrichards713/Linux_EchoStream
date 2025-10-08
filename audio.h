@@ -92,6 +92,9 @@ extern struct tone_detect_control global_tone_detect;
 // Global tone passthrough control
 extern struct tone_passthrough_control global_tone_passthrough;
 
+// Global flag to force passthrough target re-evaluation
+extern int force_passthrough_reevaluation;
+
 // Function declarations
 int initialize_portaudio(void);
 int setup_audio_for_channel(struct audio_stream* audio_stream);
