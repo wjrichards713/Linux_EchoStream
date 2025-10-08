@@ -399,9 +399,7 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     // Special debug for the last channel (typically the passthrough target)
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel_callback = 0;
     if (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0) {
-        is_last_channel_callback = 1;
         static int last_channel_debug_count = 0;
         if (last_channel_debug_count++ % 1000 == 0) {
             printf("[DEBUG] Last channel callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
@@ -1046,7 +1044,7 @@ void auto_assign_usb_devices() {
              const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
              if (device_info && device_info->maxInputChannels > 0) {
                  const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-                 if (host_info && host_info->type == paPulse) {
+                 if (host_info && strstr(host_info->name, "PulseAudio")) {
                      const char* name = device_info->name;
                      // For PulseAudio, we'll use the first few devices as they're likely USB
                      if (usb_count < 4) {  // We have 4 USB cards (2,3,4,5)
