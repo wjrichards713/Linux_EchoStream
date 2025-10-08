@@ -16,6 +16,9 @@ static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
     global_interrupted = 1;
     
+    // Cleanup audio devices immediately on interrupt
+    cleanup_audio_devices();
+    
     // Close the single WebSocket connection
     if (global_ws_client) {
         // Don't call lws_close_reason() - let the context destruction handle it
@@ -84,6 +87,12 @@ int main(int argc, char *argv[]) {
     
     if (!initialize_portaudio()) {
         fprintf(stderr, "PortAudio initialization failed\n");
+        return 1;
+    }
+    
+    // Initialize audio devices and kill interfering processes
+    if (!initialize_audio_devices()) {
+        fprintf(stderr, "Audio device initialization failed\n");
         return 1;
     }
     
@@ -176,10 +185,29 @@ int main(int argc, char *argv[]) {
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     printf("\n=== SYSTEM BEHAVIOR ===\n");
-    printf("First Channel (%s):\n", global_channel_ids[0]);
-    printf("  - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
-    printf("  - Input: %s (for tone detection and passthrough)\n", 
-           is_card1_input_enabled() ? "ENABLED" : "DISABLED");
+    printf("Channel Configuration:\n");
+    for (int i = 0; i < global_channel_count; i++) {
+        printf("  Channel %d (%s):\n", i + 1, global_channel_ids[i]);
+        printf("    - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
+        
+        // Check if this channel has tone detection enabled
+        int has_tone_detect = 0;
+        for (int j = 0; j < MAX_CHANNELS; j++) {
+            struct channel_config* channel_config = get_channel_config(j);
+            if (channel_config && channel_config->valid && 
+                strcmp(channel_config->channel_id, global_channel_ids[i]) == 0) {
+                has_tone_detect = channel_config->tone_detect;
+                break;
+            }
+        }
+        
+        if (has_tone_detect) {
+            printf("    - Input: %s (for tone detection and passthrough)\n", 
+                   is_card1_input_enabled() ? "ENABLED" : "DISABLED");
+        } else {
+            printf("    - Input: ENABLED (no tone detection)\n");
+        }
+    }
     // Reflect configured passthrough channel from JSON
     struct tone_detect_config* __tdcfg = get_tone_detect_config(0);
     if (__tdcfg && __tdcfg->tone_passthrough) {
@@ -199,6 +227,7 @@ int main(int argc, char *argv[]) {
     stop_tone_detection();
     stop_tone_passthrough();
     stop_audio_passthrough();
+    cleanup_audio_devices();  // Restore audio devices to normal state
     curl_global_cleanup();
     Pa_Terminate();
     return 0;

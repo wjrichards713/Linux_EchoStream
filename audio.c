@@ -110,6 +110,104 @@ int init_tone_detect_control(void) {
     return 1;
 }
 
+// Initialize audio devices and kill interfering processes
+int initialize_audio_devices(void) {
+    printf("[AUDIO INIT] Starting comprehensive audio device initialization...\n");
+    
+    // Kill any audio processes that might interfere
+    printf("[AUDIO INIT] Killing interfering audio processes...\n");
+    system("pkill -f pulseaudio 2>/dev/null || true");
+    system("pkill -f jack 2>/dev/null || true");
+    system("pkill -f alsa 2>/dev/null || true");
+    system("pkill -f audio 2>/dev/null || true");
+    system("pkill -f arecord 2>/dev/null || true");
+    system("pkill -f aplay 2>/dev/null || true");
+    
+    // Wait a moment for processes to terminate
+    usleep(500000); // 500ms
+    
+    // Configure ALSA to ensure all USB audio devices are available
+    printf("[AUDIO INIT] Configuring ALSA audio devices...\n");
+    
+    // Force reload ALSA modules
+    system("sudo modprobe -r snd-usb-audio 2>/dev/null || true");
+    usleep(200000); // 200ms
+    system("sudo modprobe snd-usb-audio 2>/dev/null || true");
+    usleep(500000); // 500ms
+    
+    // Set all USB audio cards to both input and output mode
+    printf("[AUDIO INIT] Configuring USB audio cards for input/output mode...\n");
+    
+    // Get list of USB audio cards
+    FILE *fp = popen("cat /proc/asound/cards | grep -E 'USB Audio Device' | awk '{print $1}'", "r");
+    if (fp) {
+        char card_num[10];
+        while (fgets(card_num, sizeof(card_num), fp)) {
+            int card = atoi(card_num);
+            if (card >= 0) {
+                printf("[AUDIO INIT] Configuring card %d for input/output mode...\n", card);
+                
+                // Enable both input and output for the card
+                char cmd[256];
+                snprintf(cmd, sizeof(cmd), 
+                    "echo 'pcm.!default {\n"
+                    "    type hw\n"
+                    "    card %d\n"
+                    "    device 0\n"
+                    "}' > /tmp/asound_card%d.conf 2>/dev/null || true", card, card);
+                system(cmd);
+                
+                // Test the card for both input and output
+                snprintf(cmd, sizeof(cmd), 
+                    "timeout 2s arecord -D hw:%d,0 -f S16_LE -r 48000 -c 1 -d 1 /dev/null 2>/dev/null && echo 'Card %d input: OK' || echo 'Card %d input: FAILED'", 
+                    card, card, card);
+                system(cmd);
+                
+                snprintf(cmd, sizeof(cmd), 
+                    "timeout 2s aplay -D hw:%d,0 -f S16_LE -r 48000 -c 2 -d 1 /dev/zero 2>/dev/null && echo 'Card %d output: OK' || echo 'Card %d output: FAILED'", 
+                    card, card, card);
+                system(cmd);
+            }
+        }
+        pclose(fp);
+    }
+    
+    // Verify PortAudio can see all devices
+    printf("[AUDIO INIT] Verifying PortAudio device enumeration...\n");
+    int device_count = Pa_GetDeviceCount();
+    printf("[AUDIO INIT] PortAudio found %d audio devices\n", device_count);
+    
+    for (int i = 0; i < device_count; i++) {
+        const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+        if (device_info) {
+            printf("[AUDIO INIT] Device %d: %s (Input: %d, Output: %d)\n", 
+                   i, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
+        }
+    }
+    
+    printf("[AUDIO INIT] Audio device initialization completed\n");
+    return 1;
+}
+
+// Cleanup audio devices and restore normal state
+int cleanup_audio_devices(void) {
+    printf("[AUDIO CLEANUP] Restoring audio devices to normal state...\n");
+    
+    // Stop any audio streams
+    printf("[AUDIO CLEANUP] Stopping audio streams...\n");
+    
+    // Restart PulseAudio if it was running before
+    printf("[AUDIO CLEANUP] Restarting PulseAudio...\n");
+    system("pulseaudio --start 2>/dev/null || true");
+    
+    // Clean up temporary ALSA configurations
+    printf("[AUDIO CLEANUP] Cleaning up temporary ALSA configurations...\n");
+    system("rm -f /tmp/asound_card*.conf 2>/dev/null || true");
+    
+    printf("[AUDIO CLEANUP] Audio device cleanup completed\n");
+    return 1;
+}
+
 // Enable tone detection
 int enable_tone_detection(void) {
     pthread_mutex_lock(&global_tone_detect.mutex);
@@ -183,11 +281,20 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
     
-    // Check if this is the first channel (typically the main input channel) and if input should be enabled
-    extern int global_channel_count;
-    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_first_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0);
-    int input_enabled = is_first_channel ? is_card1_input_enabled() : 1;
+    // Check if this channel has tone detection enabled (configurable from config.json)
+    int channel_has_tone_detect = 0;
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        struct channel_config* channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid && 
+            strcmp(channel_config->channel_id, audio_stream->channel_id) == 0) {
+            channel_has_tone_detect = channel_config->tone_detect;
+            break;
+        }
+    }
+    
+    // For channels with tone detection, check if input is enabled
+    // For other channels, always enable input
+    int input_enabled = channel_has_tone_detect ? is_card1_input_enabled() : 1;
     
     if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
         return paContinue;
@@ -201,8 +308,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     const float *samples = (const float*)input;
     
-    // Update shared buffer for passthrough (only for Card 1 when tone detect enabled)
-    if (is_card1 && is_tone_detect_enabled()) {
+    // Update shared buffer for passthrough (only for channels with tone detection enabled)
+    // This allows any channel configured with tone_detect=true in config.json to provide audio for tone detection
+    if (channel_has_tone_detect && is_tone_detect_enabled()) {
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = samples[i];
@@ -305,9 +413,9 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
     // Special debug for the last channel (typically the passthrough target)
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel = 0;
+    int is_last_channel_callback = 0;
     if (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0) {
-        is_last_channel = 1;
+        is_last_channel_callback = 1;
         static int last_channel_debug_count = 0;
         if (last_channel_debug_count++ % 1000 == 0) {
             printf("[DEBUG] Last channel callback: is_configured_target=%d, passthrough_mode=%d, frames=%lu\n", 
@@ -665,9 +773,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Special handling for the last channel (typically the passthrough target) - use Device 0 for output to avoid PulseAudio issues
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+    int is_last_channel_setup = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
     
-    if (is_last_channel) {
+    if (is_last_channel_setup) {
         printf("[DEBUG] Last channel: Using Device 0 for output (avoiding PulseAudio issues)\n");
         output_params.device = 0; // Use Device 0 which is stable
         output_params.channelCount = 2; // Device 0 has 2 output channels
@@ -734,9 +842,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
          // If still failed, retry with default output device (skip for last channel to avoid PulseAudio issues)
          extern int global_channel_count;
          extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-         int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+         int is_last_channel_fallback = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
          
-         if (err != paNoError && !is_last_channel) {
+         if (err != paNoError && !is_last_channel_fallback) {
              PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
              if (defOut != paNoDevice && defOut != output_params.device) {
                  output_params.device = defOut;
@@ -759,7 +867,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                    audio_stream->channel_id, audio_stream->device_index);
 
             // Special handling for the last channel - use Device 0 for output
-            if (is_last_channel) {
+            if (is_last_channel_fallback) {
                 printf("[DEBUG] Last channel: Using Device 0 for output (bypassing problematic device)\n");
                 output_params.device = 0; // Use Device 0 which we know works
                 output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
@@ -845,7 +953,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                 printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
                 
                 // Special debug for the last channel
-                if (is_last_channel) {
+                if (is_last_channel_fallback) {
                     printf("[DEBUG] Last channel is running in INPUT-ONLY mode - no output stream!\n");
                 }
                 
@@ -894,9 +1002,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Special debug for the last channel
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+    int is_last_channel_debug = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
     
-    if (is_last_channel) {
+    if (is_last_channel_debug) {
         printf("[DEBUG] Last channel stream status: input_active=%d, output_active=%d\n", 
                Pa_IsStreamActive(audio_stream->input_stream), 
                Pa_IsStreamActive(audio_stream->output_stream));

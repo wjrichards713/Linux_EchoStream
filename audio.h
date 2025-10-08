@@ -107,6 +107,10 @@ void* audio_passthrough_thread(void* arg);
 int start_audio_passthrough(void);
 void stop_audio_passthrough(void);
 
+// Audio device initialization and cleanup
+int initialize_audio_devices(void);
+int cleanup_audio_devices(void);
+
 // Tone detection control functions
 int init_tone_detect_control(void);
 int enable_tone_detection(void);
