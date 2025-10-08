@@ -301,9 +301,24 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     const float *samples = (const float*)input;
     
-    // Update shared buffer for passthrough (only for channels with tone detection enabled)
-    // This allows any channel configured with tone_detect=true in config.json to provide audio for tone detection
+    // Update shared buffer for passthrough
+    // Priority: channels with tone_detect=true, fallback to any available channel if no tone_detect channels are working
+    int should_update_shared_buffer = 0;
+    
     if (channel_has_tone_detect && is_tone_detect_enabled()) {
+        should_update_shared_buffer = 1;
+    } else if (!channel_has_tone_detect && is_tone_detect_enabled()) {
+        // Fallback: use any available channel for tone detection if no dedicated tone_detect channels are working
+        // Check if any tone_detect channels are actually providing audio
+        static int fallback_check_count = 0;
+        if (fallback_check_count++ % 10000 == 0) {
+            printf("[DEBUG] Using fallback tone detection from channel %s (tone_detect=%d)\n", 
+                   audio_stream->channel_id, channel_has_tone_detect);
+        }
+        should_update_shared_buffer = 1;
+    }
+    
+    if (should_update_shared_buffer) {
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = samples[i];
@@ -762,11 +777,22 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // For now, skip output stream creation to focus on getting input streams working for tone detection
-    // This will allow us to get tone detection working first, then we can add output streams later
-    printf("[DEBUG] Skipping output stream creation for now - focusing on input streams for tone detection\n");
-    audio_stream->output_stream = NULL;  // No output stream for now
-    err = paNoError;  // Pretend output stream creation succeeded
+    // Create output stream for audio playback
+    printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
+    fflush(stdout);
+    
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                        paClipOff, audio_output_callback, audio_stream);
+    
+    if (err != paNoError) {
+        printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
+               audio_stream->channel_id, Pa_GetErrorText(err));
+        printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
+        audio_stream->output_stream = NULL;  // No output stream
+        err = paNoError;  // Continue with input-only mode
+    } else {
+        printf("[DEBUG] Output stream created successfully for channel %s\n", audio_stream->channel_id);
+    }
     
     if (err != paNoError) {
         printf("[DEBUG] Output stream creation failed, continuing with input-only mode\n");

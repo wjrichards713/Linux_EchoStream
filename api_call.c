@@ -637,6 +637,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
         printf("WARNING: USB device %d failed for channel %s, trying default device\n", 
                audio_stream->device_index, audio_stream->channel_id);
+        fflush(stdout);
         
         // Try fallback to default input device
         PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
