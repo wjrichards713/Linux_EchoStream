@@ -66,7 +66,17 @@ int load_channel_config(char channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN]) {
                 channel_ids[i][63] = '\0';
                 channels_loaded++;
                 printf("Loaded channel %d ID: %s\n", i + 1, channel_ids[i]);
+            } else {
+                // Provide default channel ID if channel_id is empty or invalid
+                snprintf(channel_ids[i], 64, "channel_%d", i + 1);
+                channels_loaded++;
+                printf("Loaded channel %d ID: %s (default)\n", i + 1, channel_ids[i]);
             }
+        } else {
+            // Provide default channel ID if channel section is missing
+            snprintf(channel_ids[i], 64, "channel_%d", i + 1);
+            channels_loaded++;
+            printf("Loaded channel %d ID: %s (default - missing from config)\n", i + 1, channel_ids[i]);
         }
     }
     
@@ -315,6 +325,19 @@ int load_complete_config(void) {
             channel_config->valid = 1;
             channels_loaded++;
             printf("Loaded channel %d config: ID=%s, tone_detect=%d\n", 
+                   i+1, channel_config->channel_id, channel_config->tone_detect);
+        } else {
+            // Provide default configuration for missing channels
+            struct channel_config *channel_config = &global_app_config.channels[i];
+            snprintf(channel_config->channel_id, 64, "channel_%d", i + 1);
+            channel_config->tone_detect = 0;  // Default: no tone detection
+            channel_config->input_low_one = 0;
+            channel_config->input_low_two = 0;
+            channel_config->input_high_one = 0;
+            channel_config->input_high_two = 0;
+            channel_config->valid = 1;
+            channels_loaded++;
+            printf("Loaded channel %d config: ID=%s, tone_detect=%d (default - missing from config)\n", 
                    i+1, channel_config->channel_id, channel_config->tone_detect);
         }
     }

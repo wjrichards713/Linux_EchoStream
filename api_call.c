@@ -635,7 +635,29 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
-        return 0;
+        printf("WARNING: USB device %d failed for channel %s, trying default device\n", 
+               audio_stream->device_index, audio_stream->channel_id);
+        
+        // Try fallback to default input device
+        PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
+        if (default_device != paNoDevice && default_device != audio_stream->device_index) {
+            input_params.device = default_device;
+            input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
+            
+            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                paClipOff, audio_input_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("Successfully opened input stream on default device %d for channel %s\n", 
+                       default_device, audio_stream->channel_id);
+                audio_stream->device_index = default_device;
+            } else {
+                fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
+                return 0;
+            }
+        } else {
+            return 0;
+        }
     }
     
     // Setup output stream
