@@ -748,8 +748,8 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup buffers
-    audio_stream->buffer_size = 4800;
+    // Setup buffers - use smaller buffer for lower latency
+    audio_stream->buffer_size = 2400;  // Reduced from 4800 for lower latency
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
@@ -786,6 +786,11 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
     
+    // Force consistent audio parameters for all channels
+    const int SAMPLE_RATE = 48000;
+    const int BUFFER_SIZE = 512;
+    const int CHANNELS = 1;
+    
     // No channel is hard-reserved for passthrough; selection is driven by JSON.
     
     // Setup input stream for other channels
@@ -795,13 +800,14 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    input_params.channelCount = 1;
+    input_params.channelCount = CHANNELS;
     input_params.sampleFormat = paFloat32;
     input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
     
     printf("[DEBUG] About to call Pa_OpenStream for input stream...\n");
-    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+    // Use consistent sample rate and smaller buffer for lower latency
+    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, BUFFER_SIZE, 
                                 paClipOff, audio_input_callback, audio_stream);
     printf("[DEBUG] Pa_OpenStream for input stream returned: %s\n", Pa_GetErrorText(err));
     
@@ -813,9 +819,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         // Try different parameters for the same USB device first
         printf("[DEBUG] Retrying USB device %d with different parameters...\n", audio_stream->device_index);
         
-        // Try different sample rates
-        int sample_rates[] = {44100, 48000, 96000};
-        int buffer_sizes[] = {512, 1024, 2048};
+        // Try different sample rates - prioritize 48000 for consistency
+        int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
+        int buffer_sizes[] = {BUFFER_SIZE, 1024, 2048};
         
         for (int i = 0; i < 3 && err != paNoError; i++) {
             for (int j = 0; j < 3 && err != paNoError; j++) {
@@ -843,7 +849,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                     
                     printf("[DEBUG] Trying alternative USB device %d for channel %s\n", 
                            usb_devices[i], audio_stream->channel_id);
-                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, BUFFER_SIZE, 
                                         paClipOff, audio_input_callback, audio_stream);
                     
                     if (err == paNoError) {
@@ -868,7 +874,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                 input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
                 
                 printf("[DEBUG] Trying fallback to default input device %d...\n", default_device);
-                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, BUFFER_SIZE, 
                                     paClipOff, audio_input_callback, audio_stream);
                 
                 if (err == paNoError) {
@@ -889,6 +895,11 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Create output stream for audio playback
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
+    
+    // Initialize output parameters with consistent settings
+    output_params.channelCount = CHANNELS;
+    output_params.sampleFormat = paFloat32;
+    output_params.hostApiSpecificStreamInfo = NULL;
     
     // Try to use the same device as input for output (if it supports output)
     const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(audio_stream->device_index);
@@ -935,7 +946,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     if (audio_stream->output_stream == NULL) {  // Only try to create if not already set to NULL
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, BUFFER_SIZE,
                         paClipOff, audio_output_callback, audio_stream);
         
         if (err != paNoError) {
@@ -945,10 +956,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                    output_params.device, audio_stream->channel_id);
             fflush(stdout);
             
-            // Try different parameters for output
-            int sample_rates[] = {44100, 48000, 96000};
-            int buffer_sizes[] = {512, 1024, 2048};
-            int channel_counts[] = {1, 2};
+            // Try different parameters for output - prioritize 48000 for consistency
+            int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
+            int buffer_sizes[] = {BUFFER_SIZE, 1024, 2048};
+            int channel_counts[] = {CHANNELS, 2};
             
             for (int i = 0; i < 3 && err != paNoError; i++) {
                 for (int j = 0; j < 3 && err != paNoError; j++) {
@@ -993,9 +1004,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         // Try alternative approaches for devices that fail with standard parameters
         printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
         
-        // Try with different buffer sizes and sample rates
-        int buffer_sizes[] = {512, 256, 1024, 2048};
-        int sample_rates[] = {44100, 48000, 22050};
+        // Try with different buffer sizes and sample rates - prioritize 48000
+        int buffer_sizes[] = {BUFFER_SIZE, 256, 1024, 2048};
+        int sample_rates[] = {SAMPLE_RATE, 44100, 22050};
         
         for (int i = 0; i < 3 && err != paNoError; i++) {
             for (int j = 0; j < 4 && err != paNoError; j++) {
@@ -1020,7 +1031,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             output_params.device = defOut;
             output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
             printf("[DEBUG] Retrying output open for channel %s using default output device %d\n", audio_stream->channel_id, (int)defOut);
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, BUFFER_SIZE,
                                 paClipOff, audio_output_callback, audio_stream);
                  
                  if (err == paNoError) {
@@ -1041,7 +1052,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                 printf("[DEBUG] Last channel: Using Device 0 for output (bypassing problematic device)\n");
                 output_params.device = 0; // Use Device 0 which we know works
                 output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, BUFFER_SIZE,
                                     paClipOff, audio_output_callback, audio_stream);
                 
                 if (err == paNoError) {
@@ -1058,7 +1069,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
                     printf("[DEBUG] Trying alternative output device %d for channel %s\n", usb_devices[i], audio_stream->channel_id);
                     
-                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, BUFFER_SIZE,
                                         paClipOff, audio_output_callback, audio_stream);
                     if (err == paNoError) {
                         printf("[INFO] Successfully opened output stream for channel %s on alternative device %d\n", 
@@ -1081,7 +1092,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                         output_params.suggestedLatency = device_info->defaultLowOutputLatency;
                         printf("[DEBUG] Trying output device %d (%s) for channel %s\n", i, device_info->name, audio_stream->channel_id);
                         
-                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
+                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, BUFFER_SIZE,
                                             paClipOff, audio_output_callback, audio_stream);
                         if (err == paNoError) {
                             printf("[INFO] Successfully opened output stream for channel %s on device %d (%s)\n", 
