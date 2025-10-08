@@ -126,6 +126,13 @@ int initialize_audio_devices(void) {
     // Wait a moment for processes to terminate
     usleep(500000); // 500ms
     
+    // Restart PulseAudio to ensure it's working properly
+    printf("[AUDIO INIT] Restarting PulseAudio...\n");
+    system("pulseaudio --kill 2>/dev/null || true");
+    usleep(200000); // 200ms
+    system("pulseaudio --start 2>/dev/null || true");
+    usleep(500000); // 500ms
+    
     // Configure ALSA to ensure all USB audio devices are available
     printf("[AUDIO INIT] Configuring ALSA audio devices...\n");
     
@@ -801,9 +808,19 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     
     printf("[DEBUG] About to call Pa_OpenStream for output stream...\n");
+    fflush(stdout);  // Ensure output is flushed before potentially hanging call
+    
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
                         paClipOff, audio_output_callback, audio_stream);
+    
     printf("[DEBUG] Pa_OpenStream for output stream returned: %s\n", Pa_GetErrorText(err));
+    fflush(stdout);  // Ensure output is flushed after call
+    
+    if (err != paNoError) {
+        printf("[DEBUG] Output stream creation failed, continuing with input-only mode\n");
+    } else {
+        printf("[DEBUG] Output stream created successfully, proceeding to start streams\n");
+    }
 
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
@@ -959,13 +976,23 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     // Start both streams
+    printf("[DEBUG] Starting input stream for channel %s...\n", audio_stream->channel_id);
+    fflush(stdout);
+    
     err = Pa_StartStream(audio_stream->input_stream);
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
+        if (audio_stream->output_stream) {
+            Pa_CloseStream(audio_stream->output_stream);
+        }
         return 0;
     }
+    printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
+    fflush(stdout);
+    
+    printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
+    fflush(stdout);
     
     err = Pa_StartStream(audio_stream->output_stream);
     if (err != paNoError) {
@@ -974,6 +1001,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         Pa_CloseStream(audio_stream->output_stream);
         return 0;
     }
+    printf("[DEBUG] Output stream started successfully for channel %s\n", audio_stream->channel_id);
+    fflush(stdout);
     
     // Check if streams are actually running
     if (Pa_IsStreamActive(audio_stream->input_stream)) {
