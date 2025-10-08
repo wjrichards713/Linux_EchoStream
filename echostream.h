@@ -24,7 +24,7 @@
 #include <errno.h>
 
 // Constants
-#define JITTER_BUFFER_SIZE 8
+#define JITTER_BUFFER_SIZE 16
 #define SAMPLES_PER_FRAME 1920
 #define MAX_CHANNELS 4
 #define CHANNEL_ID_LEN 64

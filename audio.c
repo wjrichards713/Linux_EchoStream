@@ -527,6 +527,16 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     unsigned long frames_filled = 0;
     
+    // Check for buffer underrun (too few frames available)
+    if (jitter->frame_count < 2) {
+        static int underrun_count = 0;
+        underrun_count++;
+        if (underrun_count % 100 == 0) {
+            printf("[AUDIO] Buffer underrun warning for channel %s (frames=%d, callback_frames=%lu)\n", 
+                   audio_stream->channel_id, jitter->frame_count, frames);
+        }
+    }
+    
     while (frames_filled < frames) {
         // Check if we have a current frame to read from
         if (jitter->frame_count > 0) {
@@ -564,10 +574,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 audio_stream->current_output_frame_pos = 0;
             }
         } else {
-            // No frames available, fill with silence
+            // No frames available - use interpolation to reduce choppiness
+            static float last_sample = 0.0f;
             for (unsigned long i = frames_filled; i < frames; i++) {
-                out[i] = 0.0f;
+                // Gradual fade to silence instead of hard cut
+                float fade_factor = 1.0f - ((float)(i - frames_filled) / (float)(frames - frames_filled));
+                out[i] = last_sample * fade_factor;
             }
+            last_sample = out[frames - 1]; // Store last sample for next callback
             frames_filled = frames;
         }
     }
@@ -742,8 +756,8 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup buffers
-    audio_stream->buffer_size = 4800;
+    // Setup buffers with larger size for better buffering
+    audio_stream->buffer_size = 9600;  // Increased buffer size
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
