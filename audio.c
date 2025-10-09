@@ -36,81 +36,95 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
-// Create delayed output stream for Channel 4 (passthrough target)
-int create_delayed_channel4_output_stream(void) {
+// Create delayed output stream for configured passthrough target channel
+int create_delayed_passthrough_output_stream(void) {
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     
-    // Find Channel 4 (channel_4)
-    int channel4_index = -1;
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (strcmp(global_channel_ids[i], "channel_4") == 0) {
-            channel4_index = i;
-            break;
-        }
+    // Get the configured passthrough target channel from config
+    int passthrough_index = get_passthrough_target_channel_index();
+    if (passthrough_index == -1) {
+        printf("[DEBUG] No passthrough target configured - skipping delayed output stream creation\n");
+        return 1; // Not an error, just no passthrough configured
     }
     
-    if (channel4_index == -1) {
-        printf("[ERROR] Channel 4 not found for delayed output stream creation\n");
+    if (passthrough_index >= MAX_CHANNELS) {
+        printf("[ERROR] Invalid passthrough target index %d\n", passthrough_index);
         return 0;
     }
     
-    struct channel_context* channel = &channels[channel4_index];
+    struct channel_context* channel = &channels[passthrough_index];
     struct audio_stream* audio_stream = &channel->audio;
     
-    printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR CHANNEL 4 ***\n");
+    printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
+           passthrough_index, global_channel_ids[passthrough_index]);
     printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
     sleep(3); // Wait 3 seconds for other channels to fully initialize
     
-    // Now try to create the output stream with aggressive error handling
-    PaStreamParameters output_params;
-    output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;
-    output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-    output_params.hostApiSpecificStreamInfo = NULL;
+    // CRITICAL: Passthrough target MUST work - keep trying until success
+    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
     
-    const int FORCED_SAMPLE_RATE = 48000;
-    int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
-    
-    PaError err = paNoError;
-    for (int j = 0; j < 6 && err != paNoError; j++) {
-        printf("[DEBUG] Trying delayed creation with FORCED sample_rate=%d, buffer_size=%d\n", 
-               FORCED_SAMPLE_RATE, buffer_sizes[j]);
+    int attempt_count = 0;
+    while (1) { // Infinite loop until success
+        attempt_count++;
+        printf("[DEBUG] *** PASSTHROUGH TARGET CREATION ATTEMPT #%d ***\n", attempt_count);
         
-        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                           paClipOff, audio_output_callback, audio_stream);
+        // Now try to create the output stream with aggressive error handling
+        PaStreamParameters output_params;
+        output_params.device = audio_stream->device_index;
+        output_params.channelCount = 1;
+        output_params.sampleFormat = paFloat32;
+        output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+        output_params.hostApiSpecificStreamInfo = NULL;
         
-        if (err == paNoError) {
-            printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+        const int FORCED_SAMPLE_RATE = 48000;
+        int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
+        
+        PaError err = paNoError;
+        for (int j = 0; j < 6 && err != paNoError; j++) {
+            printf("[DEBUG] Trying delayed creation with FORCED sample_rate=%d, buffer_size=%d\n", 
                    FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
-            // Start the stream
-            err = Pa_StartStream(audio_stream->output_stream);
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                               FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                               paClipOff, audio_output_callback, audio_stream);
+            
             if (err == paNoError) {
-                printf("[DEBUG] *** CHANNEL 4 DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n");
-                printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL 4! ***\n");
-                return 1;
-            } else {
-                printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
-                Pa_CloseStream(audio_stream->output_stream);
-                audio_stream->output_stream = NULL;
+                printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+                       FORCED_SAMPLE_RATE, buffer_sizes[j]);
+                
+                // Start the stream
+                err = Pa_StartStream(audio_stream->output_stream);
+                if (err == paNoError) {
+                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
+                    printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n", 
+                           passthrough_index, global_channel_ids[passthrough_index]);
+                    return 1; // SUCCESS - exit the infinite loop
+                } else {
+                    printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
+                    Pa_CloseStream(audio_stream->output_stream);
+                    audio_stream->output_stream = NULL;
+                    err = paNoError;
+                }
+            } else if (err == paDeviceUnavailable) {
+                printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
+                kill_processes_using_audio_device(output_params.device);
+                usleep(1000000); // Wait 1 second
+                err = paNoError;
+            } else if (err == paUnanticipatedHostError) {
+                printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
+                usleep(2000000); // Wait 2 seconds
                 err = paNoError;
             }
-        } else if (err == paDeviceUnavailable) {
-            printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
-            kill_processes_using_audio_device(output_params.device);
-            usleep(1000000); // Wait 1 second
-            err = paNoError;
-        } else if (err == paUnanticipatedHostError) {
-            printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
-            usleep(2000000); // Wait 2 seconds
-            err = paNoError;
         }
+        
+        // If we get here, all attempts failed - wait and try again
+        printf("[ERROR] *** ATTEMPT #%d FAILED - WAITING 5 SECONDS BEFORE RETRY ***\n", attempt_count);
+        printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - CONTINUING TO RETRY ***\n");
+        sleep(5); // Wait 5 seconds before next attempt
     }
     
-    printf("[ERROR] *** FAILED TO CREATE DELAYED OUTPUT STREAM FOR CHANNEL 4 ***\n");
+    // This should never be reached due to infinite loop above
     return 0;
 }
 
@@ -241,10 +255,10 @@ int repair_passthrough_output_stream(int channel_index) {
         }
     }
     
-    // NO ALTERNATIVE DEVICES - Channel 4 must use its assigned device
+    // NO ALTERNATIVE DEVICES - Passthrough target must use its assigned device
     if (err != paNoError) {
         printf("[ERROR] *** FAILED TO CREATE OUTPUT STREAM ON ASSIGNED DEVICE %d ***\n", output_params.device);
-        printf("[ERROR] *** Channel 4 MUST use its assigned device - no alternatives allowed ***\n");
+        printf("[ERROR] *** Passthrough target MUST use its assigned device - no alternatives allowed ***\n");
     }
     
     printf("[ERROR] *** FAILED TO REPAIR PASSTHROUGH TARGET CHANNEL %d ***\n", channel_index);
@@ -331,17 +345,25 @@ static void periodic_passthrough_repair(void) {
     static int repair_attempt_count = 0;
     repair_attempt_count++;
     
-    // Try to repair every 100 calls (roughly every 1-2 seconds) - MORE AGGRESSIVE
-    if (repair_attempt_count % 100 == 0) {
+    // Try to repair every 1000 calls (roughly every 10-20 seconds) - MUST SUCCEED
+    if (repair_attempt_count % 1000 == 0) {
         int configured_target = get_passthrough_target_channel_index();
         if (configured_target >= 0) {
             if (!channel_has_output_stream(configured_target)) {
-                printf("[DEBUG] *** AGGRESSIVE PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
-                       repair_attempt_count / 100, configured_target);
-                if (repair_passthrough_output_stream(configured_target)) {
-                    printf("[DEBUG] *** PERIODIC REPAIR SUCCESSFUL - FORCING PASSTHROUGH RE-EVALUATION ***\n");
-                    force_passthrough_reevaluation = 1;
+                printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
+                       repair_attempt_count / 1000, configured_target);
+                printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - ATTEMPTING REPAIR ***\n");
+                
+                // Keep trying repair until success
+                int repair_attempts = 0;
+                while (!repair_passthrough_output_stream(configured_target)) {
+                    repair_attempts++;
+                    printf("[CRITICAL] *** REPAIR ATTEMPT #%d FAILED - RETRYING IN 2 SECONDS ***\n", repair_attempts);
+                    sleep(2); // Wait 2 seconds before retry
                 }
+                
+                printf("[DEBUG] *** PERIODIC REPAIR SUCCESSFUL AFTER %d ATTEMPTS - FORCING PASSTHROUGH RE-EVALUATION ***\n", repair_attempts + 1);
+                force_passthrough_reevaluation = 1;
             }
         }
     }
@@ -1131,10 +1153,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Check if this is a passthrough target channel - give it priority treatment
     int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     
-    // SPECIAL HANDLING: Skip Channel 4 output stream creation initially to avoid conflicts
+    // SPECIAL HANDLING: Skip passthrough target output stream creation initially to avoid conflicts
     if (is_passthrough_target) {
-        printf("[DEBUG] *** SKIPPING CHANNEL 4 OUTPUT STREAM CREATION - WILL CREATE LATER ***\n");
-        printf("[DEBUG] *** Channel 4 input stream created successfully, output will be created after other channels ***\n");
+        printf("[DEBUG] *** SKIPPING PASSTHROUGH TARGET OUTPUT STREAM CREATION - WILL CREATE LATER ***\n");
+        printf("[DEBUG] *** Passthrough target input stream created successfully, output will be created after other channels ***\n");
         
         // Start only the input stream for now
         err = Pa_StartStream(audio_stream->input_stream);
@@ -1313,10 +1335,11 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                 }
             }
             
-            // NO ALTERNATIVE DEVICES - Channel 4 must use its assigned device
+            // NO ALTERNATIVE DEVICES - Passthrough target must use its assigned device
             if (err != paNoError) {
                 printf("[ERROR] *** FAILED TO CREATE PASSTHROUGH OUTPUT STREAM ON ASSIGNED DEVICE %d ***\n", output_params.device);
-                printf("[ERROR] *** Channel 4 MUST use its assigned device - no alternatives allowed ***\n");
+                printf("[ERROR] *** Passthrough target MUST use its assigned device - no alternatives allowed ***\n");
+                printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - WILL BE RETRIED LATER ***\n");
             }
         }
         

@@ -185,12 +185,13 @@ int main(int argc, char *argv[]) {
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     
-    // Create delayed output stream for Channel 4 (passthrough target)
-    printf("\n=== CREATING DELAYED OUTPUT STREAM FOR CHANNEL 4 ===\n");
-    if (create_delayed_channel4_output_stream()) {
-        printf("[SUCCESS] Channel 4 output stream created successfully!\n");
+    // Create delayed output stream for configured passthrough target channel
+    printf("\n=== CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET ===\n");
+    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
+    if (create_delayed_passthrough_output_stream()) {
+        printf("[SUCCESS] Passthrough target output stream created successfully!\n");
     } else {
-        printf("[WARNING] Channel 4 output stream creation failed - passthrough may not work\n");
+        printf("[CRITICAL] *** THIS SHOULD NEVER HAPPEN - PASSTHROUGH TARGET MUST WORK ***\n");
     }
     
     printf("\n=== SYSTEM BEHAVIOR ===\n");
