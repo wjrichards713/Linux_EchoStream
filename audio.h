@@ -95,6 +95,9 @@ extern struct tone_passthrough_control global_tone_passthrough;
 // Global flag to force passthrough target re-evaluation
 extern int force_passthrough_reevaluation;
 
+// Function to create delayed output stream for Channel 4
+int create_delayed_channel4_output_stream(void);
+
 // Function declarations
 int initialize_portaudio(void);
 int setup_audio_for_channel(struct audio_stream* audio_stream);

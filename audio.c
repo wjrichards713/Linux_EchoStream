@@ -36,6 +36,84 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
+// Create delayed output stream for Channel 4 (passthrough target)
+int create_delayed_channel4_output_stream(void) {
+    extern struct channel_context channels[];
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    
+    // Find Channel 4 (channel_4)
+    int channel4_index = -1;
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (strcmp(global_channel_ids[i], "channel_4") == 0) {
+            channel4_index = i;
+            break;
+        }
+    }
+    
+    if (channel4_index == -1) {
+        printf("[ERROR] Channel 4 not found for delayed output stream creation\n");
+        return 0;
+    }
+    
+    struct channel_context* channel = &channels[channel4_index];
+    struct audio_stream* audio_stream = &channel->audio;
+    
+    printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR CHANNEL 4 ***\n");
+    printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
+    sleep(3); // Wait 3 seconds for other channels to fully initialize
+    
+    // Now try to create the output stream with aggressive error handling
+    PaStreamParameters output_params;
+    output_params.device = audio_stream->device_index;
+    output_params.channelCount = 1;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    const int FORCED_SAMPLE_RATE = 48000;
+    int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
+    
+    PaError err = paNoError;
+    for (int j = 0; j < 6 && err != paNoError; j++) {
+        printf("[DEBUG] Trying delayed creation with FORCED sample_rate=%d, buffer_size=%d\n", 
+               FORCED_SAMPLE_RATE, buffer_sizes[j]);
+        
+        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                           paClipOff, audio_output_callback, audio_stream);
+        
+        if (err == paNoError) {
+            printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+                   FORCED_SAMPLE_RATE, buffer_sizes[j]);
+            
+            // Start the stream
+            err = Pa_StartStream(audio_stream->output_stream);
+            if (err == paNoError) {
+                printf("[DEBUG] *** CHANNEL 4 DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n");
+                printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL 4! ***\n");
+                return 1;
+            } else {
+                printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
+                Pa_CloseStream(audio_stream->output_stream);
+                audio_stream->output_stream = NULL;
+                err = paNoError;
+            }
+        } else if (err == paDeviceUnavailable) {
+            printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
+            kill_processes_using_audio_device(output_params.device);
+            usleep(1000000); // Wait 1 second
+            err = paNoError;
+        } else if (err == paUnanticipatedHostError) {
+            printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
+            usleep(2000000); // Wait 2 seconds
+            err = paNoError;
+        }
+    }
+    
+    printf("[ERROR] *** FAILED TO CREATE DELAYED OUTPUT STREAM FOR CHANNEL 4 ***\n");
+    return 0;
+}
+
 // Kill processes using a specific audio device
 void kill_processes_using_audio_device(PaDeviceIndex device_index) {
     // Convert PortAudio device index to ALSA device name
@@ -153,7 +231,13 @@ int repair_passthrough_output_stream(int channel_index) {
             // Device is busy - kill processes using it
             printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
             kill_processes_using_audio_device(output_params.device);
+            usleep(500000); // Wait 500ms for processes to fully terminate
             err = paNoError; // Try again after killing processes
+        } else if (err == paUnanticipatedHostError) {
+            // Device has hardware issues - wait longer and try again
+            printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
+            usleep(1000000); // Wait 1 second for hardware to stabilize
+            err = paNoError; // Try again
         }
     }
     
@@ -1047,6 +1131,34 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Check if this is a passthrough target channel - give it priority treatment
     int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     
+    // SPECIAL HANDLING: Skip Channel 4 output stream creation initially to avoid conflicts
+    if (is_passthrough_target) {
+        printf("[DEBUG] *** SKIPPING CHANNEL 4 OUTPUT STREAM CREATION - WILL CREATE LATER ***\n");
+        printf("[DEBUG] *** Channel 4 input stream created successfully, output will be created after other channels ***\n");
+        
+        // Start only the input stream for now
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            printf("[ERROR] Failed to start input stream for channel %s: %s\n", 
+                   audio_stream->channel_id, Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
+        printf("[DEBUG] Input stream is active for channel %s\n", audio_stream->channel_id);
+        printf("[DEBUG] Stream status check for channel %s:\n", audio_stream->channel_id);
+        printf("[DEBUG] - Pa_IsStreamActive(input): %s\n", Pa_IsStreamActive(audio_stream->input_stream) ? "YES" : "NO");
+        printf("[DEBUG] - Pa_IsStreamStopped(input): %s\n", Pa_IsStreamStopped(audio_stream->input_stream) ? "YES" : "NO");
+        printf("[DEBUG] - Input latency: %.3f ms\n", Pa_GetStreamInfo(audio_stream->input_stream)->inputLatency * 1000.0);
+        printf("[DEBUG] - Sample rate: %.1f Hz\n", Pa_GetStreamInfo(audio_stream->input_stream)->sampleRate);
+        printf("[DEBUG] Output stream will be created later for channel %s\n", audio_stream->channel_id);
+        printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
+        printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
+        printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", audio_stream->channel_id);
+        
+        return 1; // Success - input stream created, output will be created later
+    }
+    
     // Initialize output parameters with consistent settings
     output_params.channelCount = AUDIO_CHANNELS;
     output_params.sampleFormat = paFloat32;
@@ -1191,7 +1303,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                     // Device is busy - kill processes using it
                     printf("[DEBUG] Passthrough device %d is busy - killing processes using it\n", output_params.device);
                     kill_processes_using_audio_device(output_params.device);
+                    usleep(500000); // Wait 500ms for processes to fully terminate
                     err = paNoError; // Try again after killing processes
+                } else if (err == paUnanticipatedHostError) {
+                    // Device has hardware issues - wait longer and try again
+                    printf("[DEBUG] Passthrough device %d has hardware error - waiting and retrying\n", output_params.device);
+                    usleep(1000000); // Wait 1 second for hardware to stabilize
+                    err = paNoError; // Try again
                 }
             }
             

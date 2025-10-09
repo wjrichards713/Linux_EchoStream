@@ -184,6 +184,15 @@ int main(int argc, char *argv[]) {
     // No hardcoded test tones needed
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
+    
+    // Create delayed output stream for Channel 4 (passthrough target)
+    printf("\n=== CREATING DELAYED OUTPUT STREAM FOR CHANNEL 4 ===\n");
+    if (create_delayed_channel4_output_stream()) {
+        printf("[SUCCESS] Channel 4 output stream created successfully!\n");
+    } else {
+        printf("[WARNING] Channel 4 output stream creation failed - passthrough may not work\n");
+    }
+    
     printf("\n=== SYSTEM BEHAVIOR ===\n");
     printf("Channel Configuration:\n");
     for (int i = 0; i < global_channel_count; i++) {
