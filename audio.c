@@ -171,11 +171,11 @@ int create_delayed_passthrough_output_stream(void) {
                 }
             }
             
-            // Check if device supports 44100 Hz (native sample rate)
+            // Check if device supports 44100 Hz (native sample rate) - test the ACTUAL output device
             PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
             if (test_err != paFormatIsSupported) {
                 if (test_err == paUnanticipatedHostError) {
-                    printf("[WARNING] *** DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", audio_stream->device_index);
+                    printf("[WARNING] *** OUTPUT DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", output_params.device);
                     printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
                     
                     // Check if this device is being used by the input stream of the same channel
@@ -192,9 +192,9 @@ int create_delayed_passthrough_output_stream(void) {
                         // Retry the format test
                         test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
                         if (test_err == paFormatIsSupported) {
-                            printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
+                            printf("[DEBUG] Output device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", output_params.device);
                         } else {
-                            printf("[ERROR] *** DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", audio_stream->device_index);
+                            printf("[ERROR] *** OUTPUT DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", output_params.device);
                             printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                             sleep(5); // Wait before retry
                             continue;
@@ -205,13 +205,13 @@ int create_delayed_passthrough_output_stream(void) {
                         continue;
                     }
                 } else {
-                    printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+                    printf("[ERROR] *** OUTPUT DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", output_params.device);
                     printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                     sleep(5); // Wait before retry
                     continue;
                 }
             } else {
-                printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓\n", audio_stream->device_index);
+                printf("[DEBUG] Output device %d supports 44100 Hz sample rate ✓\n", output_params.device);
             }
         } else {
             printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
@@ -489,7 +489,7 @@ int repair_passthrough_output_stream(int channel_index) {
             }
         }
         
-        // Check if device supports 44100 Hz (native sample rate)
+        // Check if device supports 44100 Hz (native sample rate) - test the ACTUAL output device
         PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
         if (test_err != paFormatIsSupported) {
         if (test_err == paUnanticipatedHostError) {
@@ -512,7 +512,7 @@ int repair_passthrough_output_stream(int channel_index) {
                 if (test_err == paFormatIsSupported) {
                     printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
                 } else {
-                    printf("[ERROR] *** DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", audio_stream->device_index);
+                    printf("[ERROR] *** OUTPUT DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", output_params.device);
                     printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                     return 0;
                 }
@@ -521,7 +521,7 @@ int repair_passthrough_output_stream(int channel_index) {
                 return 0;
             }
             } else {
-                printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+                printf("[ERROR] *** OUTPUT DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", output_params.device);
                 printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                 return 0;
             }
