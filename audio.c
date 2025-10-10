@@ -150,14 +150,34 @@ int create_delayed_passthrough_output_stream(void) {
                 printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
                 printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
                 // Try to select an alternative USB device with output capability for OUTPUT ONLY
+                // Check if any other channels are using the same device for output
                 PaDeviceIndex fallback_output = paNoDevice;
                 for (int i = 0; i < MAX_CHANNELS; i++) {
                     PaDeviceIndex cand = usb_devices[i];
                     if (cand == paNoDevice || cand == audio_stream->device_index) continue;
+                    
+                    // Check if this device is already being used by another channel for output
+                    int device_in_use = 0;
+                    for (int j = 0; j < MAX_CHANNELS; j++) {
+                        if (j != passthrough_index && channels[j].audio.output_stream != NULL) {
+                            // Check if this channel is using the same device
+                            if (channels[j].audio.device_index == cand) {
+                                device_in_use = 1;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (device_in_use) continue; // Skip devices already in use
+                    
                     const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
                     if (cand_info && cand_info->maxOutputChannels > 0) {
-                        fallback_output = cand;
-                        break;
+                        // Only use ALSA devices, skip PulseAudio and default
+                        const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
+                        if (host_api && strcmp(host_api->name, "ALSA") == 0) {
+                            fallback_output = cand;
+                            break;
+                        }
                     }
                 }
                 if (fallback_output != paNoDevice) {
@@ -165,7 +185,8 @@ int create_delayed_passthrough_output_stream(void) {
                     output_params.device = fallback_output;
                     output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
                 } else {
-                    printf("[CRITICAL] No alternative USB device with output channels available. Will retry later.\n");
+                    printf("[CRITICAL] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
+                    printf("[CRITICAL] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
                     sleep(5);
                     continue;
                 }
@@ -469,14 +490,34 @@ int repair_passthrough_output_stream(int channel_index) {
             printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
             printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
             // Try to select an alternative USB device with output capability for OUTPUT ONLY
+            // Check if any other channels are using the same device for output
             PaDeviceIndex fallback_output = paNoDevice;
             for (int i = 0; i < MAX_CHANNELS; i++) {
                 PaDeviceIndex cand = usb_devices[i];
                 if (cand == paNoDevice || cand == audio_stream->device_index) continue;
+                
+                // Check if this device is already being used by another channel for output
+                int device_in_use = 0;
+                for (int j = 0; j < MAX_CHANNELS; j++) {
+                    if (j != channel_index && channels[j].audio.output_stream != NULL) {
+                        // Check if this channel is using the same device
+                        if (channels[j].audio.device_index == cand) {
+                            device_in_use = 1;
+                            break;
+                        }
+                    }
+                }
+                
+                if (device_in_use) continue; // Skip devices already in use
+                
                 const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
                 if (cand_info && cand_info->maxOutputChannels > 0) {
-                    fallback_output = cand;
-                    break;
+                    // Only use ALSA devices, skip PulseAudio and default
+                    const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
+                    if (host_api && strcmp(host_api->name, "ALSA") == 0) {
+                        fallback_output = cand;
+                        break;
+                    }
                 }
             }
             if (fallback_output != paNoDevice) {
@@ -484,7 +525,8 @@ int repair_passthrough_output_stream(int channel_index) {
                 output_params.device = fallback_output;
                 output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
             } else {
-                printf("[CRITICAL] No alternative USB device with output channels available (repair). Aborting repair step.\n");
+                printf("[CRITICAL] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
+                printf("[CRITICAL] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
                 return 0;
             }
         }
