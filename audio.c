@@ -10,7 +10,8 @@
 
 // Forward declarations
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
-                               double inputTime, PaStreamCallbackFlags statusFlags, void *userData);
+                               const PaStreamCallbackTimeInfo* time_info,
+                               PaStreamCallbackFlags flags, void *user_data);
 void kill_processes_using_audio_device(PaDeviceIndex device_index);
 
 // Global audio state
