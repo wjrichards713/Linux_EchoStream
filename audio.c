@@ -101,9 +101,6 @@ int create_delayed_passthrough_output_stream(void) {
         return 0;
     }
     
-    struct channel_context* channel = &channels[passthrough_index];
-    struct audio_stream* audio_stream = &channel->audio;
-    
     printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
            passthrough_index, global_channel_ids[passthrough_index]);
     printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
