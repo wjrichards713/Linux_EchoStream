@@ -149,8 +149,26 @@ int create_delayed_passthrough_output_stream(void) {
             if (device_info->maxOutputChannels == 0) {
                 printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
                 printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
-                sleep(5); // Wait before retry
-                continue;
+                // Try to select an alternative USB device with output capability for OUTPUT ONLY
+                PaDeviceIndex fallback_output = paNoDevice;
+                for (int i = 0; i < MAX_CHANNELS; i++) {
+                    PaDeviceIndex cand = usb_devices[i];
+                    if (cand == paNoDevice || cand == audio_stream->device_index) continue;
+                    const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
+                    if (cand_info && cand_info->maxOutputChannels > 0) {
+                        fallback_output = cand;
+                        break;
+                    }
+                }
+                if (fallback_output != paNoDevice) {
+                    printf("[DEBUG] Using alternative device %d for OUTPUT while keeping INPUT on %d\n", fallback_output, audio_stream->device_index);
+                    output_params.device = fallback_output;
+                    output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
+                } else {
+                    printf("[CRITICAL] No alternative USB device with output channels available. Will retry later.\n");
+                    sleep(5);
+                    continue;
+                }
             }
             
             // Check if device supports 44100 Hz (native sample rate)
@@ -450,7 +468,25 @@ int repair_passthrough_output_stream(int channel_index) {
         if (device_info->maxOutputChannels == 0) {
             printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
             printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
-            return 0;
+            // Try to select an alternative USB device with output capability for OUTPUT ONLY
+            PaDeviceIndex fallback_output = paNoDevice;
+            for (int i = 0; i < MAX_CHANNELS; i++) {
+                PaDeviceIndex cand = usb_devices[i];
+                if (cand == paNoDevice || cand == audio_stream->device_index) continue;
+                const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
+                if (cand_info && cand_info->maxOutputChannels > 0) {
+                    fallback_output = cand;
+                    break;
+                }
+            }
+            if (fallback_output != paNoDevice) {
+                printf("[DEBUG] Using alternative device %d for OUTPUT while keeping INPUT on %d (repair)\n", fallback_output, audio_stream->device_index);
+                output_params.device = fallback_output;
+                output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
+            } else {
+                printf("[CRITICAL] No alternative USB device with output channels available (repair). Aborting repair step.\n");
+                return 0;
+            }
         }
         
         // Check if device supports 44100 Hz (native sample rate)
