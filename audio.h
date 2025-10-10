@@ -98,6 +98,9 @@ extern int force_passthrough_reevaluation;
 // Function to create delayed output stream for configured passthrough target
 int create_delayed_passthrough_output_stream(void);
 
+// Debug function to list all audio devices
+void list_all_audio_devices(void);
+
 // Function declarations
 int initialize_portaudio(void);
 int setup_audio_for_channel(struct audio_stream* audio_stream);

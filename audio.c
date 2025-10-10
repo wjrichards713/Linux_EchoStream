@@ -182,6 +182,27 @@ int create_delayed_passthrough_output_stream(void) {
     return 0;
 }
 
+// List all available PortAudio devices for debugging
+void list_all_audio_devices(void) {
+    printf("[DEBUG] === LISTING ALL AVAILABLE AUDIO DEVICES ===\n");
+    int num_devices = Pa_GetDeviceCount();
+    printf("[DEBUG] Total devices available: %d\n", num_devices);
+    
+    for (int i = 0; i < num_devices; i++) {
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
+        if (device_info) {
+            printf("[DEBUG] Device %d: %s\n", i, device_info->name);
+            printf("[DEBUG]   - Max input channels: %d\n", device_info->maxInputChannels);
+            printf("[DEBUG]   - Max output channels: %d\n", device_info->maxOutputChannels);
+            printf("[DEBUG]   - Default sample rate: %f\n", device_info->defaultSampleRate);
+            printf("[DEBUG]   - Host API: %s\n", Pa_GetHostApiInfo(device_info->hostApi)->name);
+        } else {
+            printf("[DEBUG] Device %d: <INVALID>\n", i);
+        }
+    }
+    printf("[DEBUG] === END DEVICE LIST ===\n");
+}
+
 // Kill processes using a specific audio device
 void kill_processes_using_audio_device(PaDeviceIndex device_index) {
     // Convert PortAudio device index to ALSA device name
