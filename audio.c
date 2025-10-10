@@ -118,19 +118,31 @@ int create_delayed_passthrough_output_stream(void) {
             PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
             if (test_err != paFormatIsSupported) {
                 if (test_err == paUnanticipatedHostError) {
-                    printf("[WARNING] *** DEVICE %d IS BUSY - KILLING PROCESSES AND RETRYING ***\n", audio_stream->device_index);
+                    printf("[WARNING] *** DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", audio_stream->device_index);
                     printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
-                    kill_processes_using_audio_device(audio_stream->device_index);
-                    usleep(1000000); // Wait 1 second for processes to terminate
-                    // Retry the format test
-                    test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-                    if (test_err != paFormatIsSupported) {
-                        printf("[ERROR] *** DEVICE %d STILL BUSY AFTER KILLING PROCESSES! ***\n", audio_stream->device_index);
-                        printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+                    
+                    // Check if this device is being used by the input stream of the same channel
+                    if (audio_stream->input_stream != NULL) {
+                        printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
+                        Pa_StopStream(audio_stream->input_stream);
+                        Pa_CloseStream(audio_stream->input_stream);
+                        audio_stream->input_stream = NULL;
+                        usleep(1000000); // Wait 1 second for device to be fully released
+                        
+                        // Retry the format test
+                        test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
+                        if (test_err == paFormatIsSupported) {
+                            printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
+                        } else {
+                            printf("[ERROR] *** DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", audio_stream->device_index);
+                            printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+                            sleep(5); // Wait before retry
+                            continue;
+                        }
+                    } else {
+                        printf("[ERROR] *** DEVICE %d IS BUSY BUT NO INPUT STREAM TO CLOSE! ***\n", audio_stream->device_index);
                         sleep(5); // Wait before retry
                         continue;
-                    } else {
-                        printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after killing processes)\n", audio_stream->device_index);
                     }
                 } else {
                     printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
