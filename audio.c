@@ -69,6 +69,19 @@ int create_delayed_passthrough_output_stream(void) {
         attempt_count++;
         printf("[DEBUG] *** PASSTHROUGH TARGET CREATION ATTEMPT #%d ***\n", attempt_count);
         
+        // List all devices for debugging
+        list_all_audio_devices();
+        
+        // Check if device index is valid
+        int total_devices = Pa_GetDeviceCount();
+        if (audio_stream->device_index >= total_devices) {
+            printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n", 
+                   audio_stream->device_index, total_devices);
+            printf("[ERROR] *** This is why passthrough target is failing! ***\n");
+            sleep(5); // Wait before retry
+            continue;
+        }
+        
         // Now try to create the output stream with aggressive error handling
         PaStreamParameters output_params;
         output_params.device = audio_stream->device_index;
@@ -76,6 +89,41 @@ int create_delayed_passthrough_output_stream(void) {
         output_params.sampleFormat = paFloat32;
         output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
         output_params.hostApiSpecificStreamInfo = NULL;
+        
+        // Add comprehensive device diagnostics
+        printf("[DEBUG] Device diagnostics for device %d:\n", audio_stream->device_index);
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+        if (device_info) {
+            printf("[DEBUG] Device name: %s\n", device_info->name);
+            printf("[DEBUG] Max output channels: %d\n", device_info->maxOutputChannels);
+            printf("[DEBUG] Default sample rate: %f\n", device_info->defaultSampleRate);
+            printf("[DEBUG] Default low output latency: %f\n", device_info->defaultLowOutputLatency);
+            printf("[DEBUG] Default high output latency: %f\n", device_info->defaultHighOutputLatency);
+            
+            // Check if device supports output
+            if (device_info->maxOutputChannels == 0) {
+                printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
+                printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
+                sleep(5); // Wait before retry
+                continue;
+            }
+            
+            // Check if device supports 48000 Hz
+            PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 48000.0);
+            if (test_err != paFormatIsSupported) {
+                printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 48000 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+                printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+                sleep(5); // Wait before retry
+                continue;
+            } else {
+                printf("[DEBUG] Device %d supports 48000 Hz sample rate ✓\n", audio_stream->device_index);
+            }
+        } else {
+            printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
+            printf("[ERROR] *** This is a critical error - device %d is invalid! ***\n", audio_stream->device_index);
+            sleep(5); // Wait before retry
+            continue;
+        }
         
         const int FORCED_SAMPLE_RATE = 48000;
         int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
@@ -115,6 +163,12 @@ int create_delayed_passthrough_output_stream(void) {
                 printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
                 usleep(2000000); // Wait 2 seconds
                 err = paNoError;
+            } else {
+                // Log any other errors with full details
+                printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
+                printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
+                       output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
+                err = paNoError; // Try next buffer size
             }
         }
         
@@ -199,17 +253,62 @@ int repair_passthrough_output_stream(int channel_index) {
     // Now try to recreate the output stream - FORCE 48000 Hz ONLY
     printf("[DEBUG] Recreating output stream for passthrough target channel %d\n", channel_index);
     
+    // List all devices for debugging
+    list_all_audio_devices();
+    
+    // Check if device index is valid
+    int total_devices = Pa_GetDeviceCount();
+    if (audio_stream->device_index >= total_devices) {
+        printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n", 
+               audio_stream->device_index, total_devices);
+        printf("[ERROR] *** This is why passthrough target is failing! ***\n");
+        return 0;
+    }
+    
     // Define constants locally
     const int AUDIO_BUFFER_SIZE = 512;
     const int AUDIO_CHANNELS = 2;
     const int FORCED_SAMPLE_RATE = 48000; // FORCE 48000 Hz ONLY
     
+    // Set up output parameters for diagnostics
     PaStreamParameters output_params;
     output_params.device = audio_stream->device_index;
     output_params.channelCount = AUDIO_CHANNELS;
     output_params.sampleFormat = paFloat32;
     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
+    
+    // Add comprehensive device diagnostics
+    printf("[DEBUG] Device diagnostics for device %d:\n", audio_stream->device_index);
+    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+    if (device_info) {
+        printf("[DEBUG] Device name: %s\n", device_info->name);
+        printf("[DEBUG] Max output channels: %d\n", device_info->maxOutputChannels);
+        printf("[DEBUG] Default sample rate: %f\n", device_info->defaultSampleRate);
+        printf("[DEBUG] Default low output latency: %f\n", device_info->defaultLowOutputLatency);
+        printf("[DEBUG] Default high output latency: %f\n", device_info->defaultHighOutputLatency);
+        
+        // Check if device supports output
+        if (device_info->maxOutputChannels == 0) {
+            printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
+            printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
+            return 0;
+        }
+        
+        // Check if device supports 48000 Hz
+        PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 48000.0);
+        if (test_err != paFormatIsSupported) {
+            printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 48000 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+            printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+            return 0;
+        } else {
+            printf("[DEBUG] Device %d supports 48000 Hz sample rate ✓\n", audio_stream->device_index);
+        }
+    } else {
+        printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
+        printf("[ERROR] *** This is a critical error - device %d is invalid! ***\n", audio_stream->device_index);
+        return 0;
+    }
     
     // Try different buffer sizes with FORCED 48000 Hz sample rate
     int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
@@ -252,6 +351,12 @@ int repair_passthrough_output_stream(int channel_index) {
             printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
             usleep(1000000); // Wait 1 second for hardware to stabilize
             err = paNoError; // Try again
+        } else {
+            // Log any other errors with full details
+            printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
+            printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
+                   output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
+            err = paNoError; // Try next buffer size
         }
     }
     
