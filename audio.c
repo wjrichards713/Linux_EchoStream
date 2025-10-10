@@ -201,7 +201,7 @@ int repair_passthrough_output_stream(int channel_index) {
     
     // Define constants locally
     const int AUDIO_BUFFER_SIZE = 512;
-    const int AUDIO_CHANNELS = 1;
+    const int AUDIO_CHANNELS = 2;
     const int FORCED_SAMPLE_RATE = 48000; // FORCE 48000 Hz ONLY
     
     PaStreamParameters output_params;
