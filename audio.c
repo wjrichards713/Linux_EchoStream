@@ -108,15 +108,15 @@ int create_delayed_passthrough_output_stream(void) {
                 continue;
             }
             
-            // Check if device supports 48000 Hz
-            PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 48000.0);
+            // Check if device supports 44100 Hz (native sample rate)
+            PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
             if (test_err != paFormatIsSupported) {
-                printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 48000 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+                printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
                 printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                 sleep(5); // Wait before retry
                 continue;
             } else {
-                printf("[DEBUG] Device %d supports 48000 Hz sample rate ✓\n", audio_stream->device_index);
+                printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓\n", audio_stream->device_index);
             }
         } else {
             printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
@@ -125,7 +125,7 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        const int FORCED_SAMPLE_RATE = 48000;
+        const int FORCED_SAMPLE_RATE = 44100;
         int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
         
         PaError err = paNoError;
@@ -289,7 +289,7 @@ int repair_passthrough_output_stream(int channel_index) {
     // Define constants locally
     const int AUDIO_BUFFER_SIZE = 512;
     const int AUDIO_CHANNELS = 2;
-    const int FORCED_SAMPLE_RATE = 48000; // FORCE 48000 Hz ONLY
+    const int FORCED_SAMPLE_RATE = 44100; // Use device's native sample rate
     
     // Set up output parameters for diagnostics
     PaStreamParameters output_params;
@@ -316,14 +316,14 @@ int repair_passthrough_output_stream(int channel_index) {
             return 0;
         }
         
-        // Check if device supports 48000 Hz
-        PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 48000.0);
+        // Check if device supports 44100 Hz (native sample rate)
+        PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
         if (test_err != paFormatIsSupported) {
-            printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 48000 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
+            printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
             printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
             return 0;
         } else {
-            printf("[DEBUG] Device %d supports 48000 Hz sample rate ✓\n", audio_stream->device_index);
+            printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓\n", audio_stream->device_index);
         }
     } else {
         printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
@@ -1428,15 +1428,15 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048};
         int sample_rates[] = {SAMPLE_RATE, 44100, 22050};
         
-        // Special handling for passthrough target channels - FORCE 48000 Hz ONLY
+        // Special handling for passthrough target channels - FORCE 44100 Hz ONLY
         if (is_passthrough_target) {
-            printf("[DEBUG] *** CRITICAL: PASSTHROUGH TARGET CHANNEL FAILED - FORCING 48000 Hz ***\n");
+            printf("[DEBUG] *** CRITICAL: PASSTHROUGH TARGET CHANNEL FAILED - FORCING 44100 Hz ***\n");
             
-            // FORCE 48000 Hz sample rate only - no alternatives
-            const int FORCED_SAMPLE_RATE = 48000;
+            // FORCE 44100 Hz sample rate only - no alternatives
+            const int FORCED_SAMPLE_RATE = 44100;
             int passthrough_buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
             
-            // Try with FORCED 48000 Hz sample rate
+            // Try with FORCED 44100 Hz sample rate
             for (int j = 0; j < 6 && err != paNoError; j++) {
                 printf("[DEBUG] Trying passthrough device %d with FORCED sample_rate=%d, buffer_size=%d\n", 
                        output_params.device, FORCED_SAMPLE_RATE, passthrough_buffer_sizes[j]);
