@@ -168,6 +168,33 @@ int create_delayed_passthrough_output_stream(void) {
                     printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
                     printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n", 
                            passthrough_index, global_channel_ids[passthrough_index]);
+                    
+                    // If we closed the input stream to create the output stream, recreate it now
+                    if (audio_stream->input_stream == NULL) {
+                        printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d ***\n", passthrough_index);
+                        // Recreate input stream with same parameters as before
+                        PaStreamParameters input_params;
+                        input_params.device = audio_stream->device_index;
+                        input_params.channelCount = 1;
+                        input_params.sampleFormat = paFloat32;
+                        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+                        input_params.hostApiSpecificStreamInfo = NULL;
+                        
+                        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
+                                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                                           paClipOff, audio_input_callback, audio_stream);
+                        if (err == paNoError) {
+                            err = Pa_StartStream(audio_stream->input_stream);
+                            if (err == paNoError) {
+                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
+                            } else {
+                                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
+                            }
+                        } else {
+                            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
+                        }
+                    }
+                    
                     return 1; // SUCCESS - exit the infinite loop
                 } else {
                     printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
@@ -340,20 +367,31 @@ int repair_passthrough_output_stream(int channel_index) {
         // Check if device supports 44100 Hz (native sample rate)
         PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
         if (test_err != paFormatIsSupported) {
-            if (test_err == paUnanticipatedHostError) {
-                printf("[WARNING] *** DEVICE %d IS BUSY - KILLING PROCESSES AND RETRYING ***\n", audio_stream->device_index);
-                printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
-                kill_processes_using_audio_device(audio_stream->device_index);
-                usleep(1000000); // Wait 1 second for processes to terminate
+        if (test_err == paUnanticipatedHostError) {
+            printf("[WARNING] *** DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", audio_stream->device_index);
+            printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
+            
+            // Check if this device is being used by the input stream of the same channel
+            if (audio_stream->input_stream != NULL) {
+                printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
+                Pa_StopStream(audio_stream->input_stream);
+                Pa_CloseStream(audio_stream->input_stream);
+                audio_stream->input_stream = NULL;
+                usleep(500000); // Wait 500ms for device to be fully released
+                
                 // Retry the format test
                 test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-                if (test_err != paFormatIsSupported) {
-                    printf("[ERROR] *** DEVICE %d STILL BUSY AFTER KILLING PROCESSES! ***\n", audio_stream->device_index);
+                if (test_err == paFormatIsSupported) {
+                    printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
+                } else {
+                    printf("[ERROR] *** DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", audio_stream->device_index);
                     printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                     return 0;
-                } else {
-                    printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after killing processes)\n", audio_stream->device_index);
                 }
+            } else {
+                printf("[ERROR] *** DEVICE %d IS BUSY BUT NO INPUT STREAM TO CLOSE! ***\n", audio_stream->device_index);
+                return 0;
+            }
             } else {
                 printf("[ERROR] *** DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", audio_stream->device_index);
                 printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
@@ -394,6 +432,33 @@ int repair_passthrough_output_stream(int channel_index) {
                 printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
                 printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
                 printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
+                
+                // If we closed the input stream to create the output stream, recreate it now
+                if (audio_stream->input_stream == NULL) {
+                    printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                    // Recreate input stream with same parameters as before
+                    PaStreamParameters input_params;
+                    input_params.device = audio_stream->device_index;
+                    input_params.channelCount = 1;
+                    input_params.sampleFormat = paFloat32;
+                    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+                    input_params.hostApiSpecificStreamInfo = NULL;
+                    
+                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
+                                       FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                                       paClipOff, audio_input_callback, audio_stream);
+                    if (err == paNoError) {
+                        err = Pa_StartStream(audio_stream->input_stream);
+                        if (err == paNoError) {
+                            printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                        } else {
+                            printf("[ERROR] Failed to start recreated input stream after repair: %s\n", Pa_GetErrorText(err));
+                        }
+                    } else {
+                        printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(err));
+                    }
+                }
+                
                 force_passthrough_reevaluation = 1; // Force re-evaluation
                 return 1;
             } else {
