@@ -54,6 +54,48 @@ int create_delayed_passthrough_output_stream(void) {
         return 1; // Not an error, just no passthrough configured
     }
     
+    // Check input stream status before proceeding
+    struct channel_context* channel = &channels[passthrough_index];
+    struct audio_stream* audio_stream = &channel->audio;
+    
+    printf("[DEBUG] *** INPUT STREAM STATUS CHECK FOR CHANNEL %d ***\n", passthrough_index);
+    printf("[DEBUG] Input stream pointer: %p\n", (void*)audio_stream->input_stream);
+    printf("[DEBUG] Output stream pointer: %p\n", (void*)audio_stream->output_stream);
+    printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
+    
+    if (audio_stream->input_stream == NULL) {
+        printf("[CRITICAL] *** INPUT STREAM IS NULL - RECREATING IT FIRST ***\n");
+        // Recreate the input stream before attempting output stream creation
+        PaStreamParameters input_params;
+        input_params.device = audio_stream->device_index;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
+                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
+        if (err == paNoError) {
+            err = Pa_StartStream(audio_stream->input_stream);
+            if (err == paNoError) {
+                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
+            } else {
+                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
+                return 0;
+            }
+        } else {
+            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+    } else {
+        printf("[DEBUG] Input stream exists - checking if active\n");
+        if (Pa_IsStreamActive(audio_stream->input_stream)) {
+            printf("[DEBUG] Input stream is active ✓\n");
+        } else {
+            printf("[WARNING] Input stream exists but is not active\n");
+        }
+    }
+    
     if (passthrough_index >= MAX_CHANNELS) {
         printf("[ERROR] Invalid passthrough target index %d\n", passthrough_index);
         return 0;
@@ -124,9 +166,12 @@ int create_delayed_passthrough_output_stream(void) {
                     // Check if this device is being used by the input stream of the same channel
                     if (audio_stream->input_stream != NULL) {
                         printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
+                        printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) ***\n", 
+                               passthrough_index, audio_stream->device_index);
                         Pa_StopStream(audio_stream->input_stream);
                         Pa_CloseStream(audio_stream->input_stream);
                         audio_stream->input_stream = NULL;
+                        printf("[DEBUG] *** INPUT STREAM CLOSED AND SET TO NULL FOR CHANNEL %d ***\n", passthrough_index);
                         usleep(1000000); // Wait 1 second for device to be fully released
                         
                         // Retry the format test
@@ -205,6 +250,7 @@ int create_delayed_passthrough_output_stream(void) {
                             err = Pa_StartStream(audio_stream->input_stream);
                             if (err == paNoError) {
                                 printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
+                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER RECREATION: %p ***\n", (void*)audio_stream->input_stream);
                             } else {
                                 printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
                             }
@@ -308,12 +354,40 @@ int repair_passthrough_output_stream(int channel_index) {
     }
     
     struct channel_context* channel = &channels[channel_index];
-    if (!channel->audio.input_stream && !channel->audio.output_stream) {
-        printf("[ERROR] repair_passthrough_output_stream: no audio streams for channel %d\n", channel_index);
-        return 0;
-    }
-    
     struct audio_stream* audio_stream = &channel->audio;
+    
+    printf("[DEBUG] *** REPAIR FUNCTION STREAM STATUS CHECK FOR CHANNEL %d ***\n", channel_index);
+    printf("[DEBUG] Input stream pointer: %p\n", (void*)audio_stream->input_stream);
+    printf("[DEBUG] Output stream pointer: %p\n", (void*)audio_stream->output_stream);
+    printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
+    
+    // If both streams are NULL, try to recreate the input stream first
+    if (!audio_stream->input_stream && !audio_stream->output_stream) {
+        printf("[CRITICAL] *** NO AUDIO STREAMS FOR CHANNEL %d - RECREATING INPUT STREAM FIRST ***\n", channel_index);
+        
+        // Recreate the input stream
+        PaStreamParameters input_params;
+        input_params.device = audio_stream->device_index;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
+                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
+        if (err == paNoError) {
+            err = Pa_StartStream(audio_stream->input_stream);
+            if (err == paNoError) {
+                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d IN REPAIR FUNCTION ***\n", channel_index);
+            } else {
+                printf("[ERROR] Failed to start recreated input stream in repair function: %s\n", Pa_GetErrorText(err));
+                return 0;
+            }
+        } else {
+            printf("[ERROR] Failed to recreate input stream in repair function: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+    }
     
     printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
            channel_index, global_channel_ids[channel_index]);
@@ -392,9 +466,12 @@ int repair_passthrough_output_stream(int channel_index) {
             // Check if this device is being used by the input stream of the same channel
             if (audio_stream->input_stream != NULL) {
                 printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
+                printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) IN REPAIR FUNCTION ***\n", 
+                       channel_index, audio_stream->device_index);
                 Pa_StopStream(audio_stream->input_stream);
                 Pa_CloseStream(audio_stream->input_stream);
                 audio_stream->input_stream = NULL;
+                printf("[DEBUG] *** INPUT STREAM CLOSED AND SET TO NULL FOR CHANNEL %d IN REPAIR FUNCTION ***\n", channel_index);
                 usleep(500000); // Wait 500ms for device to be fully released
                 
                 // Retry the format test
@@ -465,16 +542,17 @@ int repair_passthrough_output_stream(int channel_index) {
                     err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
                                        FORCED_SAMPLE_RATE, buffer_sizes[j], 
                                        paClipOff, audio_input_callback, audio_stream);
-                    if (err == paNoError) {
-                        err = Pa_StartStream(audio_stream->input_stream);
                         if (err == paNoError) {
-                            printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                            err = Pa_StartStream(audio_stream->input_stream);
+                            if (err == paNoError) {
+                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER REPAIR RECREATION: %p ***\n", (void*)audio_stream->input_stream);
+                            } else {
+                                printf("[ERROR] Failed to start recreated input stream after repair: %s\n", Pa_GetErrorText(err));
+                            }
                         } else {
-                            printf("[ERROR] Failed to start recreated input stream after repair: %s\n", Pa_GetErrorText(err));
+                            printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(err));
                         }
-                    } else {
-                        printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(err));
-                    }
                 }
                 
                 force_passthrough_reevaluation = 1; // Force re-evaluation
