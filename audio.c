@@ -72,7 +72,7 @@ int create_delayed_passthrough_output_stream(void) {
         // Now try to create the output stream with aggressive error handling
         PaStreamParameters output_params;
         output_params.device = audio_stream->device_index;
-        output_params.channelCount = 1;
+        output_params.channelCount = 2; // Changed from 1 to 2 based on user's CLI test results
         output_params.sampleFormat = paFloat32;
         output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
         output_params.hostApiSpecificStreamInfo = NULL;
