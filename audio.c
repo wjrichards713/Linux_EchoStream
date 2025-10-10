@@ -1482,28 +1482,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         
         // If all USB devices fail, try default device as last resort
         if (err != paNoError) {
-            printf("[DEBUG] All USB devices failed, trying default input device...\n");
-            PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
-            if (default_device != paNoDevice && default_device != audio_stream->device_index) {
-                input_params.device = default_device;
-                input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
-                
-                printf("[DEBUG] Trying fallback to default input device %d...\n", default_device);
-                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE, 
-                                    paClipOff, audio_input_callback, audio_stream);
-                
-                if (err == paNoError) {
-                    printf("Successfully opened input stream on default device %d for channel %s\n", 
-                           default_device, audio_stream->channel_id);
-                    audio_stream->device_index = default_device;
-                } else {
-                    fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
-        return 0;
-                }
-            } else {
-                printf("No default input device available for fallback\n");
-                return 0;
-            }
+            printf("[ERROR] All ALSA USB devices failed for channel %s; aborting setup to avoid PulseAudio fallback.\n", audio_stream->channel_id);
+            return 0;
         }
     }
     
