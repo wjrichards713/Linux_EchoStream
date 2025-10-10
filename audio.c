@@ -128,10 +128,14 @@ int create_delayed_passthrough_output_stream(void) {
         const int FORCED_SAMPLE_RATE = 44100;
         int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
         
+        printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR DELAYED CREATION ***\n");
+        printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
+               output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
+        
         PaError err = paNoError;
         for (int j = 0; j < 6 && err != paNoError; j++) {
-            printf("[DEBUG] Trying delayed creation with FORCED sample_rate=%d, buffer_size=%d\n", 
-                   FORCED_SAMPLE_RATE, buffer_sizes[j]);
+            printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
+                   j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
             err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
                                FORCED_SAMPLE_RATE, buffer_sizes[j], 
@@ -331,13 +335,17 @@ int repair_passthrough_output_stream(int channel_index) {
         return 0;
     }
     
-    // Try different buffer sizes with FORCED 48000 Hz sample rate
+    // Try different buffer sizes with FORCED 44100 Hz sample rate
     int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
+    
+    printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR REPAIR ***\n");
+    printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
+           output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
     
     PaError err = paNoError;
     for (int j = 0; j < 6 && err != paNoError; j++) {
-        printf("[DEBUG] Trying to repair with FORCED sample_rate=%d, buffer_size=%d\n", 
-               FORCED_SAMPLE_RATE, buffer_sizes[j]);
+        printf("[DEBUG] *** REPAIR ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
+               j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
         
         err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
                            FORCED_SAMPLE_RATE, buffer_sizes[j], 
