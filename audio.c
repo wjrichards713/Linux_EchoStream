@@ -8,6 +8,11 @@
 #include <math.h>
 #include <unistd.h>
 
+// Forward declarations
+static int audio_input_callback(const void *input, void *output, unsigned long frames,
+                               double inputTime, PaStreamCallbackFlags statusFlags, void *userData);
+void kill_processes_using_audio_device(PaDeviceIndex device_index);
+
 // Global audio state
 struct channel_context channels[MAX_CHANNELS] = {0};
 PaDeviceIndex usb_devices[MAX_CHANNELS] = {paNoDevice, paNoDevice, paNoDevice, paNoDevice};
