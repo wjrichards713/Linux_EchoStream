@@ -35,7 +35,11 @@ int get_passthrough_target_channel_index(void) {
     if (!tone_cfg || !tone_cfg->tone_passthrough) {
         return -1;
     }
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) return 3;
+    // FALLBACK: If channel_four is configured but Device 3 is input-only, use channel_two instead
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+        printf("[WARNING] channel_four (Device 3) is input-only - using channel_two (Device 1) as passthrough target\n");
+        return 1; // Use channel_two (666) which has working output
+    }
     else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
