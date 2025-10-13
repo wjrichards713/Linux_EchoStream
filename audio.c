@@ -558,8 +558,13 @@ int repair_passthrough_output_stream(int channel_index) {
         return 0;
     }
     
-    // Try different buffer sizes with FORCED 44100 Hz sample rate
-    int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
+    // Try different parameters with FORCED 44100 Hz sample rate
+    int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 0, 256, 1024, 2048, 4096, 8192}; // 0 = paFramesPerBufferUnspecified
+    PaSampleFormat sample_formats[] = { paFloat32, paInt16, paInt24, paInt32 };
+    const char* sample_format_names[] = { "paFloat32", "paInt16", "paInt24", "paInt32" };
+    double latencies[] = { Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency,
+                           Pa_GetDeviceInfo(output_params.device)->defaultHighOutputLatency };
+    int channel_counts[] = { AUDIO_CHANNELS, 1 };
     
     // Always free the input stream if it's on the same device before opening output
     if (audio_stream->input_stream != NULL && audio_stream->device_index == output_params.device) {
@@ -575,13 +580,24 @@ int repair_passthrough_output_stream(int channel_index) {
            output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
     
     PaError err = paNoError;
-    for (int j = 0; j < 6 && err != paNoError; j++) {
-        printf("[DEBUG] *** REPAIR ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
-               j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
-        
-        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                           paClipOff, audio_output_callback, audio_stream);
+    for (int sf = 0; sf < 4 && err != paNoError; sf++) {
+        for (int cc = 0; cc < 2 && err != paNoError; cc++) {
+            for (int lt = 0; lt < 2 && err != paNoError; lt++) {
+                for (int j = 0; j < 7 && err != paNoError; j++) {
+                    output_params.channelCount = channel_counts[cc];
+                    output_params.sampleFormat = sample_formats[sf];
+                    output_params.suggestedLatency = latencies[lt];
+                    printf("[DEBUG] *** REPAIR TRY: fmt=%s, channels=%d, latency=%s, rate=%d, buffer=%d ***\n",
+                           sample_format_names[sf], output_params.channelCount,
+                           lt == 0 ? "low" : "high", FORCED_SAMPLE_RATE, buffer_sizes[j]);
+                    
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                                       FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                                       paClipOff, audio_output_callback, audio_stream);
+                }
+            }
+        }
+    }
         
         if (err == paNoError) {
             printf("[DEBUG] *** SUCCESS! Repaired output stream with FORCED sample_rate=%d, buffer_size=%d ***\n", 
