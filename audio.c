@@ -583,6 +583,15 @@ int repair_passthrough_output_stream(int channel_index) {
     // Try different buffer sizes with FORCED 44100 Hz sample rate
     int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
     
+    // Always free the input stream if it's on the same device before opening output
+    if (audio_stream->input_stream != NULL && audio_stream->device_index == output_params.device) {
+        printf("[DEBUG] *** ALWAYS CLOSING INPUT STREAM BEFORE OUTPUT OPEN ON DEVICE %d ***\n", output_params.device);
+        Pa_StopStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->input_stream);
+        audio_stream->input_stream = NULL;
+        usleep(500000); // allow ALSA to fully release device
+    }
+    
     printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR REPAIR ***\n");
     printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
            output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
@@ -656,6 +665,10 @@ int repair_passthrough_output_stream(int channel_index) {
         } else {
             // Log any other errors with full details
             printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
+            const PaHostErrorInfo* host_err = Pa_GetLastHostErrorInfo();
+            if (host_err) {
+                printf("[ERROR] Host error API: %d, Code: %ld, Text: %s\n", host_err->hostApiType, (long)host_err->errorCode, host_err->errorText ? host_err->errorText : "(null)");
+            }
             printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
                    output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             err = paNoError; // Try next buffer size
