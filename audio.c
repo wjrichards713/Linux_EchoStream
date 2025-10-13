@@ -1212,9 +1212,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     frames_to_copy = (unsigned long)remaining_in_frame;
                 }
                 
-                // Copy samples from current frame
+                // Copy samples from current frame (duplicate mono to stereo)
                 for (unsigned long i = 0; i < frames_to_copy; i++) {
-                    out[frames_filled + i] = current_frame->samples[audio_stream->current_output_frame_pos + i];
+                    float s = current_frame->samples[audio_stream->current_output_frame_pos + i];
+                    unsigned long out_idx = (frames_filled + i) * 2; // assume 2 output channels
+                    out[out_idx + 0] = s;
+                    out[out_idx + 1] = s;
                 }
                 
                 frames_filled += frames_to_copy;
@@ -1235,9 +1238,11 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 audio_stream->current_output_frame_pos = 0;
             }
         } else {
-            // No frames available, fill with silence
+            // No frames available, fill with silence for stereo
             for (unsigned long i = frames_filled; i < frames; i++) {
-                out[i] = 0.0f;
+                unsigned long out_idx = i * 2; // assume 2 output channels
+                out[out_idx + 0] = 0.0f;
+                out[out_idx + 1] = 0.0f;
             }
             frames_filled = frames;
         }
