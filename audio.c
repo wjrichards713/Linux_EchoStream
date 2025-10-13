@@ -1294,8 +1294,19 @@ void* audio_passthrough_thread(void* arg) {
         
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Write audio data to output stream (only if in passthrough mode)
+        // Write audio data to output stream (only if in passthrough mode and stream is valid/active)
         if (samples_to_copy > 0 && is_passthrough_mode()) {
+            if (global_passthrough.output_stream == NULL) {
+                // No passthrough stream in callback-based mode; skip writing
+                usleep(5000);
+                continue;
+            }
+            PaError active = Pa_IsStreamActive(global_passthrough.output_stream);
+            if (active != 1) {
+                // Stream not active; avoid calling write which may assert in ALSA
+                usleep(5000);
+                continue;
+            }
             static int write_count = 0;
             write_count++;
             
