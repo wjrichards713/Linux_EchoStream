@@ -602,6 +602,8 @@ int repair_passthrough_output_stream(int channel_index) {
 
                         PaError start_err = Pa_StartStream(audio_stream->output_stream);
                         if (start_err == paNoError) {
+                            // Remember output channel count for callback interleaving
+                            audio_stream->output_channel_count = output_params.channelCount;
                             printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
                             printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
                             printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
@@ -1167,12 +1169,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
         unsigned long frames_filled = 0;
+        int out_ch = audio_stream->output_channel_count > 0 ? audio_stream->output_channel_count : 1;
+        
         pthread_mutex_lock(&global_shared_buffer.mutex);
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                out[i] = global_shared_buffer.samples[i];
+                float s = global_shared_buffer.samples[i];
+                unsigned long out_idx = i * (unsigned long)out_ch;
+                for (int c = 0; c < out_ch; c++) {
+                    out[out_idx + c] = s;
+                }
             }
             frames_filled = to_copy;
             // do not invalidate; tone detection thread also reads; this is a tap
@@ -1186,9 +1194,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Fill any remainder with silence
+        // Fill any remainder with silence (per channel)
         for (unsigned long i = frames_filled; i < frames; i++) {
-            out[i] = 0.0f;
+            unsigned long out_idx = i * (unsigned long)out_ch;
+            for (int c = 0; c < out_ch; c++) {
+                out[out_idx + c] = 0.0f;
+            }
         }
         return paContinue;
     }
