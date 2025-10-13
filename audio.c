@@ -401,32 +401,10 @@ int repair_passthrough_output_stream(int channel_index) {
     printf("[DEBUG] Output stream pointer: %p\n", (void*)audio_stream->output_stream);
     printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
     
-    // If both streams are NULL, try to recreate the input stream first
+    // If both streams are NULL, prefer creating OUTPUT first;
+    // input will be recreated after output succeeds.
     if (!audio_stream->input_stream && !audio_stream->output_stream) {
-        printf("[CRITICAL] *** NO AUDIO STREAMS FOR CHANNEL %d - RECREATING INPUT STREAM FIRST ***\n", channel_index);
-        
-        // Recreate the input stream
-        PaStreamParameters input_params;
-        input_params.device = audio_stream->device_index;
-        input_params.channelCount = 1;
-        input_params.sampleFormat = paFloat32;
-        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-        input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
-        if (err == paNoError) {
-            err = Pa_StartStream(audio_stream->input_stream);
-            if (err == paNoError) {
-                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d IN REPAIR FUNCTION ***\n", channel_index);
-            } else {
-                printf("[ERROR] Failed to start recreated input stream in repair function: %s\n", Pa_GetErrorText(err));
-                return 0;
-            }
-        } else {
-            printf("[ERROR] Failed to recreate input stream in repair function: %s\n", Pa_GetErrorText(err));
-            return 0;
-        }
+        printf("[CRITICAL] *** NO AUDIO STREAMS FOR CHANNEL %d - WILL CREATE OUTPUT FIRST ***\n", channel_index);
     }
     
     printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
