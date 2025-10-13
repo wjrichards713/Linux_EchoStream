@@ -663,7 +663,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     // Setup output stream
     output_params.device = audio_stream->device_index;
-    output_params.channelCount = 1;
+    output_params.channelCount = 2; // prefer stereo when available
     output_params.sampleFormat = paFloat32;
     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
@@ -700,6 +700,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
         audio_stream->transmitting = 1;
         return 1;
+    } else {
+        // Record effective output channel count so callback can interleave correctly
+        audio_stream->output_channel_count = output_params.channelCount;
     }
     
     // Start both streams

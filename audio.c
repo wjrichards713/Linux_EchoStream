@@ -1212,12 +1212,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     frames_to_copy = (unsigned long)remaining_in_frame;
                 }
                 
-                // Copy samples from current frame (duplicate mono to stereo)
+                // Copy samples from current frame (duplicate mono to configured output channels)
+                int out_ch = audio_stream->output_channel_count > 0 ? audio_stream->output_channel_count : 1;
                 for (unsigned long i = 0; i < frames_to_copy; i++) {
                     float s = current_frame->samples[audio_stream->current_output_frame_pos + i];
-                    unsigned long out_idx = (frames_filled + i) * 2; // assume 2 output channels
-                    out[out_idx + 0] = s;
-                    out[out_idx + 1] = s;
+                    unsigned long out_idx = (frames_filled + i) * (unsigned long)out_ch;
+                    for (int c = 0; c < out_ch; c++) {
+                        out[out_idx + c] = s;
+                    }
                 }
                 
                 frames_filled += frames_to_copy;
@@ -1238,11 +1240,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 audio_stream->current_output_frame_pos = 0;
             }
         } else {
-            // No frames available, fill with silence for stereo
+            // No frames available, fill with silence for configured output channels
+            int out_ch = audio_stream->output_channel_count > 0 ? audio_stream->output_channel_count : 1;
             for (unsigned long i = frames_filled; i < frames; i++) {
-                unsigned long out_idx = i * 2; // assume 2 output channels
-                out[out_idx + 0] = 0.0f;
-                out[out_idx + 1] = 0.0f;
+                unsigned long out_idx = i * (unsigned long)out_ch;
+                for (int c = 0; c < out_ch; c++) {
+                    out[out_idx + c] = 0.0f;
+                }
             }
             frames_filled = frames;
         }

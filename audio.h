@@ -32,6 +32,7 @@ struct audio_stream {
     int buffer_size;
     int input_buffer_pos;
     int current_output_frame_pos;
+    int output_channel_count;
     PaDeviceIndex device_index;
     char channel_id[CHANNEL_ID_LEN];
 };
