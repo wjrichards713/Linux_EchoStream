@@ -14,6 +14,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                                PaStreamCallbackFlags flags, void *user_data);
 void kill_processes_using_audio_device(PaDeviceIndex device_index);
 
+// Tunable gains to ensure adequate levels for physical loopback and broadcast
+static const float PASSTHROUGH_OUTPUT_GAIN = 3.0f;   // Gain applied when routing shared buffer to passthrough output
+static const float ENCODE_INPUT_GAIN = 2.0f;         // Gain applied before encoding upstream input (broadcast)
+
 // Global audio state
 struct channel_context channels[MAX_CHANNELS] = {0};
 PaDeviceIndex usb_devices[MAX_CHANNELS] = {paNoDevice, paNoDevice, paNoDevice, paNoDevice};
@@ -1118,8 +1122,8 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
             if (audio_stream->input_buffer_pos >= 1920) {
                 short pcm[1920];
                 for (int j = 0; j < 1920; j++) {
-                    float sample = audio_stream->input_buffer[j];
-                    if (sample > 1.0f) sample = 1.0f;
+                    float sample = audio_stream->input_buffer[j] * ENCODE_INPUT_GAIN; // boost upstream level
+                    if (sample > 1.0f) sample = 1.0f;  // clamp after gain
                     if (sample < -1.0f) sample = -1.0f;
                     pcm[j] = (short)(sample * 32767.0f);
                 }
@@ -1194,7 +1198,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                float s = global_shared_buffer.samples[i];
+                float s = global_shared_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN; // apply gain for physical loop audibility
+                if (s > 1.0f) s = 1.0f;  // clamp
+                if (s < -1.0f) s = -1.0f;
                 unsigned long out_idx = i * (unsigned long)out_ch;
                 for (int c = 0; c < out_ch; c++) {
                     out[out_idx + c] = s;
