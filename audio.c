@@ -609,6 +609,14 @@ int repair_passthrough_output_stream(int channel_index) {
                             // Verify the stream is actually active
                             if (Pa_IsStreamActive(audio_stream->output_stream)) {
                                 printf("[DEBUG] *** CONFIRMED: Output stream is ACTIVE for channel %d ***\n", channel_index);
+                                
+                                // Get device info for debugging
+                                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+                                if (device_info) {
+                                    printf("[DEBUG] *** Channel %d using device: %s ***\n", channel_index, device_info->name);
+                                    printf("[DEBUG] *** Device %d: Max output channels=%d, Default sample rate=%.1f Hz ***\n", 
+                                           audio_stream->device_index, device_info->maxOutputChannels, device_info->defaultSampleRate);
+                                }
                             } else {
                                 printf("[DEBUG] *** ERROR: Output stream is NOT ACTIVE for channel %d ***\n", channel_index);
                             }
@@ -1184,6 +1192,21 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 if (sample > 1.0f) sample = 1.0f;
                 if (sample < -1.0f) sample = -1.0f;
                 out[i] = sample;
+            }
+            
+            // Add a test tone to verify output is working (1000 Hz sine wave)
+            static float test_tone_phase = 0.0f;
+            static int test_tone_count = 0;
+            if (test_tone_count++ < 48000) { // Play test tone for 1 second
+                for (unsigned long i = 0; i < frames_filled; i++) {
+                    float test_tone = 0.3f * sinf(test_tone_phase); // 30% volume test tone
+                    out[i] += test_tone;
+                    test_tone_phase += 2.0f * M_PI * 1000.0f / 44100.0f; // 1000 Hz at 44.1kHz
+                    if (test_tone_phase > 2.0f * M_PI) test_tone_phase -= 2.0f * M_PI;
+                }
+                if (test_tone_count == 1) {
+                    printf("[PASSTHROUGH DEBUG] *** PLAYING 1000 Hz TEST TONE FOR 1 SECOND ***\n");
+                }
             }
             frames_filled = to_copy;
             
