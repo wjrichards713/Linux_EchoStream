@@ -35,14 +35,35 @@ int get_passthrough_target_channel_index(void) {
     if (!tone_cfg || !tone_cfg->tone_passthrough) {
         return -1;
     }
-    // FALLBACK: If channel_four is configured but Device 3 is input-only, use channel_two instead
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
-        printf("[WARNING] channel_four (Device 3) is input-only - using channel_two (Device 1) as passthrough target\n");
-        return 1; // Use channel_two (666) which has working output
+    
+    // Find the channel index by matching the passthrough_channel with actual channel IDs
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    extern int global_channel_count;
+    
+    // Based on the configuration:
+    // channel_one -> "555" (index 0)
+    // channel_two -> "666" (index 1) 
+    // channel_three -> "308e2478-072c-4d8b-ffff24d-51854e06711a" (index 2)
+    // channel_four -> (empty, index 3)
+    
+    if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+        printf("[DEBUG] Found passthrough target: channel_one -> index 0 (ID: %s)\n", global_channel_ids[0]);
+        return 0;
     }
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+        printf("[DEBUG] Found passthrough target: channel_two -> index 1 (ID: %s)\n", global_channel_ids[1]);
+        return 1;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+        printf("[DEBUG] Found passthrough target: channel_three -> index 2 (ID: %s)\n", global_channel_ids[2]);
+        return 2;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+        printf("[DEBUG] Found passthrough target: channel_four -> index 3 (ID: %s)\n", global_channel_ids[3]);
+        return 3;
+    }
+    
+    printf("[ERROR] Could not find passthrough target channel: %s\n", tone_cfg->passthrough_channel);
     return -1;
 }
 
@@ -796,27 +817,23 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
     // Run periodic repair attempts
     periodic_passthrough_repair();
     
-    // SIMPLIFIED: Directly check if this is Channel 4 (the configured passthrough target)
-    // Channel 4 is always index 3 and has ID "channel_4"
-    if (strcmp(channel_id, "channel_4") == 0) {
-        return 1;
+    // Get the passthrough target channel index dynamically
+    int target_idx = get_passthrough_target_channel_index();
+    if (target_idx < 0) {
+        return 0;
     }
     
-    // Fallback to original logic
-    int idx = -1;
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) idx = 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) idx = 0;
+    // Check if this channel_id matches the passthrough target
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    int is_target = (strcmp(channel_id, global_channel_ids[target_idx]) == 0) ? 1 : 0;
     
     static int debug_count = 0;
     if (debug_count++ % 10000 == 0) {
-        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, passthrough_channel=%s, idx=%d\n", 
-               channel_id, tone_cfg->passthrough_channel, idx);
+        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, target_idx=%d, target_id=%s, is_target=%d\n", 
+               channel_id, target_idx, global_channel_ids[target_idx], is_target);
     }
     
-    if (idx < 0) return 0;
-    return (strcmp(channel_id, global_channel_ids[idx]) == 0) ? 1 : 0;
+    return is_target;
 }
 
 // Initialize tone detection control
