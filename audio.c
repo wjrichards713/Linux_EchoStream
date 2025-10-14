@@ -1048,20 +1048,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     
     const float *samples = (const float*)input;
     
-    // Update shared buffer for passthrough
-    // Priority: channels with tone_detect=true, fallback to any available channel if no tone_detect channels are working
+    // Update shared buffer strictly from the source input (channel_one) for passthrough
     int should_update_shared_buffer = 0;
-    
-    if (channel_has_tone_detect && is_tone_detect_enabled()) {
-        should_update_shared_buffer = 1;
-    } else if (!channel_has_tone_detect && is_tone_detect_enabled()) {
-        // Fallback: use any available channel for tone detection if no dedicated tone_detect channels are working
-        // Check if any tone_detect channels are actually providing audio
-        static int fallback_check_count = 0;
-        if (fallback_check_count++ % 10000 == 0) {
-            printf("[DEBUG] Using fallback tone detection from channel %s (tone_detect=%d)\n", 
-                   audio_stream->channel_id, channel_has_tone_detect);
-        }
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0) {
         should_update_shared_buffer = 1;
     }
     
