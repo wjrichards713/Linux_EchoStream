@@ -1239,14 +1239,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             out[i] = 0.0f;
         }
         
-        // Duplicate mono to stereo for passthrough target
-        if (audio_stream->output_channel_count == 2) {
-            for (unsigned long i = frames - 1; i >= 0; i--) {
-                out[i * 2 + 1] = out[i]; // Right channel
-                out[i * 2] = out[i];     // Left channel
-            }
-        }
-        
         return paContinue;
     }
     
