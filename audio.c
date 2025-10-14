@@ -1634,6 +1634,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         } else {
             printf("[DEBUG] Output stream created successfully for channel %s on device %d\n", 
                    audio_stream->channel_id, output_params.device);
+            audio_stream->output_channel_count = output_params.channelCount;
         }
     }
     
@@ -1641,6 +1642,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("[DEBUG] Output stream creation failed, continuing with input-only mode\n");
     } else {
         printf("[DEBUG] Output stream created successfully, proceeding to start streams\n");
+        audio_stream->output_channel_count = output_params.channelCount;
     }
 
     if (err != paNoError) {
