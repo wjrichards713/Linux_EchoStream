@@ -1178,6 +1178,15 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     }
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
+    // Debug: Always log passthrough status for target channel
+    if (is_configured_target) {
+        static int passthrough_status_count = 0;
+        if (passthrough_status_count++ % 1000 == 0) {
+            printf("[PASSTHROUGH DEBUG] Target channel %s: passthrough_mode=%d, is_configured_target=%d\n", 
+                   audio_stream->channel_id, passthrough_mode, is_configured_target);
+        }
+    }
+    
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
         unsigned long frames_filled = 0;
@@ -1222,6 +1231,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         // Add test tone to verify output is working (1000 Hz sine wave) - ALWAYS play when passthrough is active
         static float test_tone_phase = 0.0f;
         static int test_tone_count = 0;
+        
+        // Debug: Always log when we reach the test tone code
+        static int test_tone_debug_count = 0;
+        if (test_tone_debug_count++ % 1000 == 0) {
+            printf("[PASSTHROUGH DEBUG] *** REACHED TEST TONE CODE: count=%d, phase=%.3f ***\n", 
+                   test_tone_count, test_tone_phase);
+        }
+        
         if (test_tone_count++ < 48000) { // Play test tone for 1 second
             for (unsigned long i = 0; i < frames; i++) {
                 float test_tone = 0.5f * sinf(test_tone_phase); // 50% volume test tone
