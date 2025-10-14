@@ -605,6 +605,13 @@ int repair_passthrough_output_stream(int channel_index) {
                             printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
                             printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
                             printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
+                            
+                            // Verify the stream is actually active
+                            if (Pa_IsStreamActive(audio_stream->output_stream)) {
+                                printf("[DEBUG] *** CONFIRMED: Output stream is ACTIVE for channel %d ***\n", channel_index);
+                            } else {
+                                printf("[DEBUG] *** ERROR: Output stream is NOT ACTIVE for channel %d ***\n", channel_index);
+                            }
 
                             if (audio_stream->input_stream == NULL) {
                                 printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
@@ -1152,6 +1159,15 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+    
+    // Debug: Always log for passthrough target channel
+    if (is_configured_target) {
+        static int passthrough_callback_count = 0;
+        if (passthrough_callback_count++ % 1000 == 0) {  // Every 1000 callbacks
+            printf("[PASSTHROUGH DEBUG] Output callback for target channel %s (frames=%lu)\n", 
+                   audio_stream->channel_id, frames);
+        }
+    }
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
     if (passthrough_mode) {
@@ -1165,6 +1181,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 out[i] = global_shared_buffer.samples[i];
             }
             frames_filled = to_copy;
+            
+            // Debug: log when we're actually playing audio
+            static int audio_playing_count = 0;
+            if (audio_playing_count++ % 1000 == 0) {
+                printf("[PASSTHROUGH DEBUG] Playing audio from shared buffer: frames=%lu, sample_count=%d\n", 
+                       frames_filled, global_shared_buffer.sample_count);
+            }
             // do not invalidate; tone detection thread also reads; this is a tap
         } else {
             // Debug: no audio data in shared buffer
