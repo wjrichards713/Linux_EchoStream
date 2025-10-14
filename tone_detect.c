@@ -533,14 +533,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             global_tone_detection.recording_active = 0;
             printf("[TONE] Sequence reset due to timeout\n");
             
-            // Deactivate passthrough and notify server
+            // Deactivate passthrough
             set_passthrough_output_mode(0);
-            extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-            extern void send_websocket_passthrough_event(const char* source_channel_id, const char* target_channel_id, int is_active);
-            int target_channel_idx = get_passthrough_target_channel_index();
-            if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-                send_websocket_passthrough_event(global_channel_ids[0], global_channel_ids[target_channel_idx], 0);
-            }
+            printf("[TONE PASSTHROUGH] Local passthrough deactivated - returning to normal EchoStream mode\n");
         }
     }
     
@@ -826,10 +821,8 @@ void trigger_tone_passthrough(void) {
                 // Enable passthrough mode; audio.c routes to the configured target from JSON
                 set_passthrough_output_mode(1);
                 
-                // Notify server about passthrough activation
-                extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-                extern void send_websocket_passthrough_event(const char* source_channel_id, const char* target_channel_id, int is_active);
-                send_websocket_passthrough_event(global_channel_ids[0], global_channel_ids[target_channel_idx], 1);
+                // Local passthrough only - no server notification needed
+                printf("[TONE PASSTHROUGH] Local passthrough activated - Channel 1 input -> Channel 3 output\n");
             } else {
                 printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - attempting to create one\n");
                 

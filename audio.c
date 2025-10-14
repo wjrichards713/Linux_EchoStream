@@ -1268,86 +1268,19 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 }
 
 // Passthrough thread outputs the shared input when in passthrough mode
+// DISABLED: This old mechanism conflicts with the new callback-based passthrough system
 void* audio_passthrough_thread(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
-    printf("[INFO] Audio passthrough thread started\n");
+    printf("[INFO] Audio passthrough thread started (DISABLED - using callback-based system)\n");
     
-    // Buffer for smoothing audio output
-    float output_buffer[SAMPLES_PER_FRAME];
-    int underflow_count = 0;
+    // DISABLED: The old passthrough thread conflicts with the new callback-based system
+    // The new system uses audio_output_callback to route audio directly to the output stream
+    // This thread would consume the shared buffer before the callback can use it
     
     while (global_passthrough.active && !global_interrupted) {
-        int samples_to_copy = 0;
-        
-        // Only process if passthrough mode is enabled
-        if (!is_passthrough_mode()) {
-            usleep(10000); // 10ms delay when not in passthrough mode
-            continue;
-        }
-        
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        
-        // Wait for new audio data
-        while (!global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
-            pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
-        }
-        
-        if (global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
-            // Copy audio data to output buffer
-            samples_to_copy = global_shared_buffer.sample_count;
-            if (samples_to_copy > SAMPLES_PER_FRAME) {
-                samples_to_copy = SAMPLES_PER_FRAME;
-            }
-            
-            for (int i = 0; i < samples_to_copy; i++) {
-                output_buffer[i] = global_shared_buffer.samples[i];
-            }
-            
-            global_shared_buffer.valid = 0; // Mark as consumed
-        }
-        
-        pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Write audio data to output stream (only if in passthrough mode and stream is valid/active)
-        if (samples_to_copy > 0 && is_passthrough_mode()) {
-            if (global_passthrough.output_stream == NULL) {
-                // No passthrough stream in callback-based mode; skip writing
-                usleep(5000);
-                continue;
-            }
-            PaError active = Pa_IsStreamActive(global_passthrough.output_stream);
-            if (active != 1) {
-                // Stream not active; avoid calling write which may assert in ALSA
-                usleep(5000);
-                continue;
-            }
-            static int write_count = 0;
-            write_count++;
-            
-            PaError err = Pa_WriteStream(global_passthrough.output_stream, 
-                                       output_buffer, 
-                                       samples_to_copy);
-            
-            if (err != paNoError) {
-                if (err == paOutputUnderflowed) {
-                    underflow_count++;
-                    if (underflow_count % 50 == 0) {
-                        printf("[DEBUG] Passthrough underflow count: %d (writes: %d)\n", underflow_count, write_count);
-                    }
-                } else {
-                    fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
-                }
-                } else {
-                    underflow_count = 0; // Reset counter on successful write
-                    if (write_count % 5000 == 0) {  // Much less frequent logging
-                        printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
-                    }
-                }
-        }
-        
-        // Small delay to prevent overwhelming the output device
-        usleep(5000); // 5ms delay to reduce underflow
+        // Just sleep - don't process audio to avoid conflicts
+        usleep(100000); // 100ms delay
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
