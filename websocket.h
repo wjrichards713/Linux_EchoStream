@@ -27,6 +27,7 @@ extern int global_config_initialized;
 int connect_global_websocket(void);
 int parse_websocket_config(const char *json_str, struct server_config *cfg);
 void send_websocket_transmit_event(const char* channel_id, int is_started);
+void send_websocket_passthrough_event(const char* source_channel_id, const char* target_channel_id, int is_active);
 void* global_websocket_thread(void* arg);
 
 #endif // WEBSOCKET_H

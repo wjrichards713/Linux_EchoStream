@@ -219,6 +219,41 @@ void send_websocket_transmit_event(const char* channel_id, int is_started) {
     free(buf);
 }
 
+void send_websocket_passthrough_event(const char* source_channel_id, const char* target_channel_id, int is_active) {
+    if (!global_ws_client) {
+        printf("[WARNING] WebSocket not connected, cannot send passthrough event\n");
+        return;
+    }
+    
+    char passthrough_msg[1024];
+    time_t now = time(NULL);
+    const char* event_type = is_active ? "passthrough_activated" : "passthrough_deactivated";
+    
+    snprintf(passthrough_msg, sizeof(passthrough_msg),
+        "{\"%s\":{\"affiliation_id\":\"12345\",\"user_name\":\"EchoStream\",\"agency_name\":\"TestAgency\",\"source_channel_id\":\"%s\",\"target_channel_id\":\"%s\",\"time\":%ld}}",
+        event_type, source_channel_id, target_channel_id, now);
+    
+    printf("[INFO] Sending %s: %s -> %s\n", event_type, source_channel_id, target_channel_id);
+    
+    size_t msg_len = strlen(passthrough_msg);
+    unsigned char *buf = malloc(LWS_PRE + msg_len);
+    if (!buf) {
+        printf("[ERROR] Failed to allocate memory for passthrough WebSocket message\n");
+        return;
+    }
+    
+    memcpy(&buf[LWS_PRE], passthrough_msg, msg_len);
+    int result = lws_write(global_ws_client, &buf[LWS_PRE], msg_len, LWS_WRITE_TEXT);
+    
+    if (result < 0) {
+        printf("[ERROR] Failed to send passthrough WebSocket message (result=%d)\n", result);
+    } else {
+        printf("[INFO] Passthrough WebSocket message sent successfully (%d bytes)\n", result);
+    }
+    
+    free(buf);
+}
+
 int connect_global_websocket() {
     if (global_ws_context && global_ws_client) {
         printf("WebSocket already connected\n");
