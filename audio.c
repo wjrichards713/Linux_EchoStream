@@ -38,7 +38,7 @@ int get_passthrough_target_channel_index(void) {
     
     // Find the channel index by matching the passthrough_channel with actual channel IDs
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    extern int global_channel_count;
+    // no need for global_channel_count here
     
     // Based on the configuration:
     // channel_one -> index 0
@@ -1521,6 +1521,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     // Create output stream for audio playback
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
+    
+    // Determine if this channel is the configured passthrough target
+    int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     
     // Always create output stream immediately, including for passthrough target
     
