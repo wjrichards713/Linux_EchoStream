@@ -1194,20 +1194,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 out[i] = sample;
             }
             
-            // Add a test tone to verify output is working (1000 Hz sine wave)
-            static float test_tone_phase = 0.0f;
-            static int test_tone_count = 0;
-            if (test_tone_count++ < 48000) { // Play test tone for 1 second
-                for (unsigned long i = 0; i < frames_filled; i++) {
-                    float test_tone = 0.3f * sinf(test_tone_phase); // 30% volume test tone
-                    out[i] += test_tone;
-                    test_tone_phase += 2.0f * M_PI * 1000.0f / 44100.0f; // 1000 Hz at 44.1kHz
-                    if (test_tone_phase > 2.0f * M_PI) test_tone_phase -= 2.0f * M_PI;
-                }
-                if (test_tone_count == 1) {
-                    printf("[PASSTHROUGH DEBUG] *** PLAYING 1000 Hz TEST TONE FOR 1 SECOND ***\n");
-                }
-            }
             frames_filled = to_copy;
             
             // Debug: log when we're actually playing audio with levels
@@ -1233,10 +1219,34 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
+        // Add test tone to verify output is working (1000 Hz sine wave) - ALWAYS play when passthrough is active
+        static float test_tone_phase = 0.0f;
+        static int test_tone_count = 0;
+        if (test_tone_count++ < 48000) { // Play test tone for 1 second
+            for (unsigned long i = 0; i < frames; i++) {
+                float test_tone = 0.5f * sinf(test_tone_phase); // 50% volume test tone
+                out[i] += test_tone;
+                test_tone_phase += 2.0f * M_PI * 1000.0f / 44100.0f; // 1000 Hz at 44.1kHz
+                if (test_tone_phase > 2.0f * M_PI) test_tone_phase -= 2.0f * M_PI;
+            }
+            if (test_tone_count == 1) {
+                printf("[PASSTHROUGH DEBUG] *** PLAYING 1000 Hz TEST TONE FOR 1 SECOND ***\n");
+            }
+        }
+        
         // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
             out[i] = 0.0f;
         }
+        
+        // Duplicate mono to stereo for passthrough target
+        if (audio_stream->output_channel_count == 2) {
+            for (unsigned long i = frames - 1; i >= 0; i--) {
+                out[i * 2 + 1] = out[i]; // Right channel
+                out[i * 2] = out[i];     // Left channel
+            }
+        }
+        
         return paContinue;
     }
     
