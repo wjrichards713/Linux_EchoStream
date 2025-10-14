@@ -41,25 +41,26 @@ int get_passthrough_target_channel_index(void) {
     extern int global_channel_count;
     
     // Based on the configuration:
-    // channel_one -> "555" (index 0)
-    // channel_two -> "666" (index 1) 
-    // channel_three -> "308e2478-072c-4d8b-ffff24d-51854e06711a" (index 2)
-    // channel_four -> (empty, index 3)
-    
+    // channel_one -> index 0
+    // channel_two -> index 1 
+    // channel_three -> index 2
+    // channel_four -> index 3
+    static int debug_counter = 0;
+    int should_log = ((++debug_counter % 500) == 0);
     if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
-        printf("[DEBUG] Found passthrough target: channel_one -> index 0 (ID: %s)\n", global_channel_ids[0]);
+        if (should_log) { printf("[DEBUG] Found passthrough target: channel_one -> index 0 (ID: %s)\n", global_channel_ids[0]); }
         return 0;
     }
     else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
-        printf("[DEBUG] Found passthrough target: channel_two -> index 1 (ID: %s)\n", global_channel_ids[1]);
+        if (should_log) { printf("[DEBUG] Found passthrough target: channel_two -> index 1 (ID: %s)\n", global_channel_ids[1]); }
         return 1;
     }
     else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
-        printf("[DEBUG] Found passthrough target: channel_three -> index 2 (ID: %s)\n", global_channel_ids[2]);
+        if (should_log) { printf("[DEBUG] Found passthrough target: channel_three -> index 2 (ID: %s)\n", global_channel_ids[2]); }
         return 2;
     }
     else if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
-        printf("[DEBUG] Found passthrough target: channel_four -> index 3 (ID: %s)\n", global_channel_ids[3]);
+        if (should_log) { printf("[DEBUG] Found passthrough target: channel_four -> index 3 (ID: %s)\n", global_channel_ids[3]); }
         return 3;
     }
     
@@ -1521,36 +1522,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
     
-    // Check if this is a passthrough target channel - give it priority treatment
-    int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-    
-    // SPECIAL HANDLING: Skip passthrough target output stream creation initially to avoid conflicts
-    if (is_passthrough_target) {
-        printf("[DEBUG] *** SKIPPING PASSTHROUGH TARGET OUTPUT STREAM CREATION - WILL CREATE LATER ***\n");
-        printf("[DEBUG] *** Passthrough target input stream created successfully, output will be created after other channels ***\n");
-        
-        // Start only the input stream for now
-        err = Pa_StartStream(audio_stream->input_stream);
-        if (err != paNoError) {
-            printf("[ERROR] Failed to start input stream for channel %s: %s\n", 
-                   audio_stream->channel_id, Pa_GetErrorText(err));
-            return 0;
-        }
-        
-        printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
-        printf("[DEBUG] Input stream is active for channel %s\n", audio_stream->channel_id);
-        printf("[DEBUG] Stream status check for channel %s:\n", audio_stream->channel_id);
-        printf("[DEBUG] - Pa_IsStreamActive(input): %s\n", Pa_IsStreamActive(audio_stream->input_stream) ? "YES" : "NO");
-        printf("[DEBUG] - Pa_IsStreamStopped(input): %s\n", Pa_IsStreamStopped(audio_stream->input_stream) ? "YES" : "NO");
-        printf("[DEBUG] - Input latency: %.3f ms\n", Pa_GetStreamInfo(audio_stream->input_stream)->inputLatency * 1000.0);
-        printf("[DEBUG] - Sample rate: %.1f Hz\n", Pa_GetStreamInfo(audio_stream->input_stream)->sampleRate);
-        printf("[DEBUG] Output stream will be created later for channel %s\n", audio_stream->channel_id);
-        printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
-        printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
-        printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", audio_stream->channel_id);
-        
-        return 1; // Success - input stream created, output will be created later
-    }
+    // Always create output stream immediately, including for passthrough target
     
     // Initialize output parameters with consistent settings
     output_params.channelCount = AUDIO_CHANNELS;
