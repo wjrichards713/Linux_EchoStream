@@ -1178,15 +1178,26 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                out[i] = global_shared_buffer.samples[i];
+                // Apply significant gain boost for audibility
+                float sample = global_shared_buffer.samples[i] * 10.0f; // 10x gain boost
+                // Clamp to prevent distortion
+                if (sample > 1.0f) sample = 1.0f;
+                if (sample < -1.0f) sample = -1.0f;
+                out[i] = sample;
             }
             frames_filled = to_copy;
             
-            // Debug: log when we're actually playing audio
+            // Debug: log when we're actually playing audio with levels
             static int audio_playing_count = 0;
             if (audio_playing_count++ % 1000 == 0) {
-                printf("[PASSTHROUGH DEBUG] Playing audio from shared buffer: frames=%lu, sample_count=%d\n", 
-                       frames_filled, global_shared_buffer.sample_count);
+                // Calculate max sample level for debugging
+                float max_level = 0.0f;
+                for (unsigned long i = 0; i < frames_filled; i++) {
+                    float abs_sample = fabsf(out[i]);
+                    if (abs_sample > max_level) max_level = abs_sample;
+                }
+                printf("[PASSTHROUGH DEBUG] Playing audio: frames=%lu, sample_count=%d, max_level=%.4f (%.1f%%)\n", 
+                       frames_filled, global_shared_buffer.sample_count, max_level, max_level * 100.0f);
             }
             // do not invalidate; tone detection thread also reads; this is a tap
         } else {
