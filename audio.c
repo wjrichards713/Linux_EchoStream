@@ -1247,6 +1247,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 } else {
                     out[i] = sample; // Mono output
                 }
+                
+                // Store last sample for smooth transitions (will be used in static variable)
+                static float stored_last_sample = 0.0f;
+                stored_last_sample = sample;
             }
             
             // Fill any remainder with silence
@@ -1259,19 +1263,31 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 }
             }
             
-            // Keep buffer valid - it will be overwritten by new audio data
-            // Don't invalidate to prevent choppy on/off pattern
+            // Keep buffer valid for smooth playback - don't invalidate to prevent choppy noise
+            // The buffer will be overwritten by new audio data from input callback
         } else {
-            // No audio data - fill with silence
+            // No audio data - fill with silence using smooth fade to prevent choppy noise
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
+            // Use previous sample for smooth transition to prevent choppy noise
+            static float last_sample = 0.0f;
+            const float FADE_RATE = 0.95f; // Slow fade to prevent clicks
+            
+            // Get the stored last sample from the valid audio processing
+            extern float stored_last_sample;
+            if (stored_last_sample != 0.0f) {
+                last_sample = stored_last_sample;
+            }
+            
             for (unsigned long i = 0; i < frames; i++) {
+                last_sample *= FADE_RATE; // Smooth fade to silence
+                
                 if (output_channels >= 2) {
-                    out[i * 2] = 0.0f;     // Left channel
-                    out[i * 2 + 1] = 0.0f; // Right channel
+                    out[i * 2] = last_sample;     // Left channel
+                    out[i * 2 + 1] = last_sample; // Right channel
                 } else {
-                    out[i] = 0.0f; // Mono output
+                    out[i] = last_sample; // Mono output
                 }
             }
             
@@ -1354,13 +1370,10 @@ void* audio_passthrough_thread(void* arg) {
     int underflow_count = 0;
     
     while (global_passthrough.active && !global_interrupted) {
-        int samples_to_copy = 0;
-        
-        // Only process if passthrough mode is enabled
-        if (!is_passthrough_mode()) {
-            usleep(10000); // 10ms delay when not in passthrough mode
-            continue;
-        }
+        // DISABLED: This thread conflicts with callback-based passthrough
+        // Use only the audio_output_callback approach to prevent choppy noise
+        usleep(50000); // 50ms delay - thread is effectively disabled
+        continue;
         
         pthread_mutex_lock(&global_shared_buffer.mutex);
         
