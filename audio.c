@@ -1064,6 +1064,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         
         float cleaned_samples[SAMPLES_PER_FRAME];
         
+        // Initialize cleaned_samples array to prevent noise
+        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+            cleaned_samples[i] = 0.0f;
+        }
+        
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             float sample = samples[i];
             
@@ -1205,12 +1210,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             
             // Process mono input and duplicate to stereo output with aggressive noise reduction
             static float dc_offset = 0.0f;
+            static int passthrough_reset_flag = 0;
             const float NOISE_GATE_THRESHOLD = 0.02f; // Stronger noise gate
             const float DC_FILTER_ALPHA = 0.98f; // Stronger DC offset removal filter
             
             // Simple low-pass filter to reduce high-frequency electronic noise
             static float prev_sample = 0.0f;
             const float LOWPASS_ALPHA = 0.7f; // Low-pass filter coefficient
+            
+            // Reset static variables when passthrough mode starts to prevent noise accumulation
+            if (!passthrough_reset_flag) {
+                dc_offset = 0.0f;
+                prev_sample = 0.0f;
+                passthrough_reset_flag = 1;
+            }
             
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float sample = global_passthrough_buffer.samples[i];
@@ -1279,6 +1292,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
+    } else {
+        // Reset static variables when not in passthrough mode to prevent noise accumulation
+        static int reset_flag = 0;
+        if (!reset_flag) {
+            // Reset all static variables used in passthrough processing
+            reset_flag = 1;
+        }
     }
     
     // Normal EchoStream output processing
