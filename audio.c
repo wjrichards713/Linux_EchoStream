@@ -1195,7 +1195,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                float sample = global_shared_buffer.samples[i] * 2.0f; // 2x gain boost
+                float sample = global_shared_buffer.samples[i] * 1.0f; // 2x gain boost
                 // Clamp to prevent distortion
                 if (sample > 1.0f) sample = 1.0f;
                 if (sample < -1.0f) sample = -1.0f;
