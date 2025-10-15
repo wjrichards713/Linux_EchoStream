@@ -1057,20 +1057,18 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Apply smoothing to reduce choppiness
         static float last_shared_samples[SAMPLES_PER_FRAME] = {0};
-        float smoothed_samples[SAMPLES_PER_FRAME];
+        float processed_samples[SAMPLES_PER_FRAME];
         
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            // Smooth interpolation between last and current samples
-            smoothed_samples[i] = (last_shared_samples[i] + samples[i]) * 0.5f;
+            processed_samples[i] = samples[i] * 0.9f + last_shared_samples[i] * 0.1f;
             last_shared_samples[i] = samples[i];
         }
         
         // Update shared buffer for tone detection
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = smoothed_samples[i];
+            global_shared_buffer.samples[i] = processed_samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
@@ -1080,7 +1078,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Update passthrough buffer for synchronized output
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = smoothed_samples[i];
+            global_passthrough_buffer.samples[i] = processed_samples[i];
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
@@ -1089,7 +1087,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Debug logging for buffers
         static int buffer_count = 0;
         if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (synchronized)\n", 
+            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (light smoothing)\n", 
                    frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
         }
     }
@@ -1172,8 +1170,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-            // Apply gain and duplicate mono to stereo with proper clamping
-            const float PASSTHROUGH_OUTPUT_GAIN = 3.0f; // Boost audibility
+            // Apply moderate gain and duplicate mono to stereo with proper clamping
+            const float PASSTHROUGH_OUTPUT_GAIN = 1.5f; // Reduced from 3.0f to prevent distortion
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
@@ -1207,6 +1205,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     out[i] = 0.0f; // Mono output
                 }
             }
+            
+            // Invalidate buffer after processing to prevent repetition
+            global_passthrough_buffer.valid = 0;
         } else {
             // No audio data - fill with silence
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
