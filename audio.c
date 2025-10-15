@@ -1163,6 +1163,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long samples_to_process = global_shared_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
+            // Get device info to determine output channel count
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+            int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
+            
             // Process mono input and duplicate to stereo output
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float sample = global_shared_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
@@ -1172,7 +1176,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 else if (sample < -1.0f) sample = -1.0f;
                 
                 // Duplicate mono to both stereo channels
-                if (audio_stream->output_channel_count >= 2) {
+                if (output_channels >= 2) {
                     out[i * 2] = sample;     // Left channel
                     out[i * 2 + 1] = sample; // Right channel
                 } else {
@@ -1182,7 +1186,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             
             // Fill any remainder with silence
             for (unsigned long i = samples_to_process; i < frames; i++) {
-                if (audio_stream->output_channel_count >= 2) {
+                if (output_channels >= 2) {
                     out[i * 2] = 0.0f;     // Left channel
                     out[i * 2 + 1] = 0.0f; // Right channel
                 } else {
@@ -1191,8 +1195,11 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             }
         } else {
             // No audio data - fill with silence
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+            int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
+            
             for (unsigned long i = 0; i < frames; i++) {
-                if (audio_stream->output_channel_count >= 2) {
+                if (output_channels >= 2) {
                     out[i * 2] = 0.0f;     // Left channel
                     out[i * 2 + 1] = 0.0f; // Right channel
                 } else {
