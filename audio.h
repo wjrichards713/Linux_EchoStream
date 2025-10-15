@@ -51,6 +51,14 @@ struct shared_audio_buffer {
     pthread_cond_t data_ready;
 };
 
+// Dedicated passthrough buffer for synchronized output
+struct passthrough_audio_buffer {
+    float samples[SAMPLES_PER_FRAME];
+    int sample_count;
+    int valid;
+    pthread_mutex_t mutex;
+};
+
 // Audio passthrough context
 struct audio_passthrough {
     struct shared_audio_buffer *shared_buffer;

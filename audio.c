@@ -21,6 +21,7 @@ int device_assigned = 0;
 
 // Global shared audio buffer and passthrough
 struct shared_audio_buffer global_shared_buffer = {0};
+struct passthrough_audio_buffer global_passthrough_buffer = {0};
 struct audio_passthrough global_passthrough = {0};
 
 // Global tone detection control
@@ -1056,28 +1057,41 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        
-        // Apply smoothing to reduce choppiness in shared buffer
+        // Apply smoothing to reduce choppiness
         static float last_shared_samples[SAMPLES_PER_FRAME] = {0};
+        float smoothed_samples[SAMPLES_PER_FRAME];
+        
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             // Smooth interpolation between last and current samples
-            float smoothed_sample = (last_shared_samples[i] + samples[i]) * 0.5f;
-            global_shared_buffer.samples[i] = smoothed_sample;
+            smoothed_samples[i] = (last_shared_samples[i] + samples[i]) * 0.5f;
             last_shared_samples[i] = samples[i];
+        }
+        
+        // Update shared buffer for tone detection
+        pthread_mutex_lock(&global_shared_buffer.mutex);
+        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
+            global_shared_buffer.samples[i] = smoothed_samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Debug logging for shared buffer
-        static int shared_buffer_count = 0;
-        if (shared_buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d (smoothed)\n", frames, global_shared_buffer.valid);
+        // Update passthrough buffer for synchronized output
+        pthread_mutex_lock(&global_passthrough_buffer.mutex);
+        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
+            global_passthrough_buffer.samples[i] = smoothed_samples[i];
         }
+        global_passthrough_buffer.sample_count = frames;
+        global_passthrough_buffer.valid = 1;
+        pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         
-        // Tone detection reads directly from shared buffer
+        // Debug logging for buffers
+        static int buffer_count = 0;
+        if (buffer_count++ % 10000 == 0) {
+            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (synchronized)\n", 
+                   frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
+        }
     }
     
     // Process audio for EchoStream (only if input is enabled for this channel)
@@ -1155,12 +1169,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
     if (passthrough_mode) {
-        // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+        // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
+        pthread_mutex_lock(&global_passthrough_buffer.mutex);
+        if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
             // Apply gain and duplicate mono to stereo with proper clamping
             const float PASSTHROUGH_OUTPUT_GAIN = 3.0f; // Boost audibility
-            unsigned long samples_to_process = global_shared_buffer.sample_count;
+            unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
             // Get device info to determine output channel count
@@ -1169,7 +1183,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             
             // Process mono input and duplicate to stereo output
             for (unsigned long i = 0; i < samples_to_process; i++) {
-                float sample = global_shared_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
+                float sample = global_passthrough_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
                 
                 // Clamp to prevent distortion
                 if (sample > 1.0f) sample = 1.0f;
@@ -1207,14 +1221,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 }
             }
             
-            // Debug: no audio data in shared buffer
+            // Debug: no audio data in passthrough buffer
             static int no_audio_count = 0;
             if (no_audio_count++ % 100 == 0) {
-                printf("[DEBUG] Passthrough mode active but no audio in shared buffer: valid=%d, sample_count=%d\n", 
-                       global_shared_buffer.valid, global_shared_buffer.sample_count);
+                printf("[DEBUG] Passthrough mode active but no audio in passthrough buffer: valid=%d, sample_count=%d\n", 
+                       global_passthrough_buffer.valid, global_passthrough_buffer.sample_count);
             }
         }
-        pthread_mutex_unlock(&global_shared_buffer.mutex);
+        pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
     }
     
@@ -1354,6 +1368,12 @@ int init_shared_audio_buffer(void) {
     pthread_mutex_init(&global_shared_buffer.mutex, NULL);
     pthread_cond_init(&global_shared_buffer.data_ready, NULL);
     printf("[INFO] Shared audio buffer initialized\n");
+    
+    // Initialize dedicated passthrough buffer
+    memset(&global_passthrough_buffer, 0, sizeof(struct passthrough_audio_buffer));
+    pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
+    printf("[INFO] Passthrough audio buffer initialized\n");
+    
     return 1;
 }
 
