@@ -246,8 +246,8 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        const int FORCED_SAMPLE_RATE = 44100;
-        int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
+        const int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
+        int buffer_sizes[] = {2048, 4096, 8192, 1024, 512, 256}; // Prioritize larger buffers
         
         printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR DELAYED CREATION ***\n");
         printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
@@ -446,9 +446,9 @@ int repair_passthrough_output_stream(int channel_index) {
     }
     
     // Define constants locally
-    const int AUDIO_BUFFER_SIZE = 512;
+    const int AUDIO_BUFFER_SIZE = 2048; // Increased to prevent underruns
     const int AUDIO_CHANNELS = 2;
-    const int FORCED_SAMPLE_RATE = 44100; // Use device's native sample rate
+    const int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
     
     // Set up output parameters for diagnostics
     PaStreamParameters output_params;
@@ -559,8 +559,8 @@ int repair_passthrough_output_stream(int channel_index) {
         return 0;
     }
     
-    // Try different parameters with FORCED 44100 Hz sample rate
-    int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 0, 256, 1024, 2048, 4096, 8192}; // 0 = paFramesPerBufferUnspecified
+    // Try different parameters with FORCED SAMPLE_RATE - prioritize larger buffers
+    int buffer_sizes[] = {4096, 8192, AUDIO_BUFFER_SIZE, 2048, 1024, 512, 256}; // Prioritize larger buffers
     PaSampleFormat sample_formats[] = { paFloat32, paInt16, paInt24, paInt32 };
     const char* sample_format_names[] = { "paFloat32", "paInt16", "paInt24", "paInt32" };
     double latencies[] = { Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency,
@@ -1397,9 +1397,11 @@ void* audio_passthrough_thread(void* arg) {
             if (err != paNoError) {
                 if (err == paOutputUnderflowed) {
                     underflow_count++;
-                    if (underflow_count % 50 == 0) {
-                        printf("[DEBUG] Passthrough underflow count: %d (writes: %d)\n", underflow_count, write_count);
+                    if (underflow_count % 10 == 0) { // More frequent logging for underflows
+                        printf("[WARNING] Passthrough underflow count: %d (writes: %d) - ELECTRONIC NOISE SOURCE!\n", underflow_count, write_count);
                     }
+                    // Add extra delay after underflow to let buffer recover
+                    usleep(10000); // 10ms extra delay after underflow
                 } else {
                     fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
                 }
@@ -1411,8 +1413,8 @@ void* audio_passthrough_thread(void* arg) {
                 }
         }
         
-        // Small delay to prevent overwhelming the output device
-        usleep(5000); // 5ms delay to reduce underflow
+        // Longer delay to prevent overwhelming the output device and reduce electronic noise
+        usleep(20000); // 20ms delay to reduce underflow and electronic artifacts
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
@@ -1529,8 +1531,8 @@ int setup_audio_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
-    // Setup buffers - use smaller buffer for lower latency
-    audio_stream->buffer_size = 2400;  // Reduced from 4800 for lower latency
+    // Setup buffers - use larger buffer to prevent electronic noise from underruns
+    audio_stream->buffer_size = 4800;  // Restored larger buffer to prevent underruns
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
@@ -1567,8 +1569,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
     
-    // Force consistent audio parameters for all channels
-    const int AUDIO_BUFFER_SIZE = 512;
+    // Force consistent audio parameters for all channels - larger buffers to prevent electronic noise
+    const int AUDIO_BUFFER_SIZE = 2048; // Increased from 512 to prevent underruns
     const int AUDIO_CHANNELS = 1;
     
     // No channel is hard-reserved for passthrough; selection is driven by JSON.
@@ -1812,9 +1814,9 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         if (is_passthrough_target) {
             printf("[DEBUG] *** CRITICAL: PASSTHROUGH TARGET CHANNEL FAILED - FORCING 44100 Hz ***\n");
             
-            // FORCE 44100 Hz sample rate only - no alternatives
-            const int FORCED_SAMPLE_RATE = 44100;
-            int passthrough_buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
+            // FORCE SAMPLE_RATE (48000) Hz sample rate only - no alternatives
+            const int FORCED_SAMPLE_RATE = SAMPLE_RATE;
+            int passthrough_buffer_sizes[] = {4096, 8192, AUDIO_BUFFER_SIZE, 2048, 1024, 512}; // Prioritize larger buffers
             
             // Try with FORCED 44100 Hz sample rate
             for (int j = 0; j < 6 && err != paNoError; j++) {
