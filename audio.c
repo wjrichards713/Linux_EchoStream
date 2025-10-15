@@ -1170,20 +1170,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 
     // Persisted state for passthrough processing and reliable reset on mode changes
     static float pt_dc_offset = 0.0f;
-    static float pt_prev_sample = 0.0f;
     static int pt_was_passthrough = 0;
     
     if (passthrough_mode) {
         if (!pt_was_passthrough) {
             pt_dc_offset = 0.0f;
-            pt_prev_sample = 0.0f;
         }
         pt_was_passthrough = 1;
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
 			// Duplicate mono to stereo with minimal processing to avoid added noise
-            const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // unity gain for clean passthrough
+            // Unity gain for clean passthrough (no gain multiplication needed)
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
@@ -1248,9 +1246,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     out[i] = sample; // Mono output
                 }
                 
-                // Store last sample for smooth transitions (will be used in static variable)
-                static float stored_last_sample = 0.0f;
-                stored_last_sample = sample;
+                // Sample is processed directly - no need to store for transitions
             }
             
             // Fill any remainder with silence
@@ -1274,11 +1270,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             static float last_sample = 0.0f;
             const float FADE_RATE = 0.95f; // Slow fade to prevent clicks
             
-            // Get the stored last sample from the valid audio processing
-            extern float stored_last_sample;
-            if (stored_last_sample != 0.0f) {
-                last_sample = stored_last_sample;
-            }
+            // Use the last sample for smooth transitions
+            // last_sample will be updated from the valid audio processing
             
             for (unsigned long i = 0; i < frames; i++) {
                 last_sample *= FADE_RATE; // Smooth fade to silence
@@ -1374,60 +1367,6 @@ void* audio_passthrough_thread(void* arg) {
         // Use only the audio_output_callback approach to prevent choppy noise
         usleep(50000); // 50ms delay - thread is effectively disabled
         continue;
-        
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        
-        // Wait for new audio data
-        while (!global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
-            pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
-        }
-        
-        if (global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
-            // Copy audio data to output buffer
-            samples_to_copy = global_shared_buffer.sample_count;
-            if (samples_to_copy > SAMPLES_PER_FRAME) {
-                samples_to_copy = SAMPLES_PER_FRAME;
-            }
-            
-            for (int i = 0; i < samples_to_copy; i++) {
-                output_buffer[i] = global_shared_buffer.samples[i];
-            }
-            
-            global_shared_buffer.valid = 0; // Mark as consumed
-        }
-        
-        pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Write audio data to output stream (only if in passthrough mode)
-        if (samples_to_copy > 0 && is_passthrough_mode()) {
-            static int write_count = 0;
-            write_count++;
-            
-            PaError err = Pa_WriteStream(global_passthrough.output_stream, 
-                                       output_buffer, 
-                                       samples_to_copy);
-            
-            if (err != paNoError) {
-                if (err == paOutputUnderflowed) {
-                    underflow_count++;
-                    if (underflow_count % 10 == 0) { // More frequent logging for underflows
-                        printf("[WARNING] Passthrough underflow count: %d (writes: %d) - ELECTRONIC NOISE SOURCE!\n", underflow_count, write_count);
-                    }
-                    // Add minimal delay after underflow to let buffer recover
-                    usleep(5000); // 5ms extra delay after underflow - reduced to prevent choppiness
-                } else {
-                    fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
-                }
-                } else {
-                    underflow_count = 0; // Reset counter on successful write
-                    if (write_count % 5000 == 0) {  // Much less frequent logging
-                        printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
-                    }
-                }
-        }
-        
-        // Balanced delay to prevent overwhelming the output device without causing choppiness
-        usleep(10000); // 10ms delay - reduced from 20ms to prevent choppy audio
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
