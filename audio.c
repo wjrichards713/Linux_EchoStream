@@ -1198,8 +1198,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 }
             }
             
-            // Invalidate buffer after processing to prevent repetition
-            global_passthrough_buffer.valid = 0;
+            // Keep buffer valid - it will be overwritten by new audio data
+            // Don't invalidate to prevent choppy on/off pattern
         } else {
             // No audio data - fill with silence
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
