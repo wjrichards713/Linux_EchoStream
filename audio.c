@@ -1057,10 +1057,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Apply basic noise reduction to input audio
+        // Apply aggressive noise reduction to input audio
         static float input_dc_offset = 0.0f;
-        const float INPUT_DC_FILTER_ALPHA = 0.99f; // Lighter DC filter for input
-        const float INPUT_NOISE_GATE = 0.0005f; // Very light noise gate for input
+        const float INPUT_DC_FILTER_ALPHA = 0.95f; // Stronger DC filter for input
+        const float INPUT_NOISE_GATE = 0.01f; // Stronger noise gate for input
         
         float cleaned_samples[SAMPLES_PER_FRAME];
         
@@ -1193,13 +1193,21 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Process mono input and duplicate to stereo output with noise reduction
+            // Process mono input and duplicate to stereo output with aggressive noise reduction
             static float dc_offset = 0.0f;
-            const float NOISE_GATE_THRESHOLD = 0.001f; // Filter out very quiet noise
-            const float DC_FILTER_ALPHA = 0.995f; // DC offset removal filter
+            const float NOISE_GATE_THRESHOLD = 0.02f; // Stronger noise gate
+            const float DC_FILTER_ALPHA = 0.98f; // Stronger DC offset removal filter
+            
+            // Simple low-pass filter to reduce high-frequency electronic noise
+            static float prev_sample = 0.0f;
+            const float LOWPASS_ALPHA = 0.7f; // Low-pass filter coefficient
             
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float sample = global_passthrough_buffer.samples[i];
+                
+                // Apply low-pass filter to reduce high-frequency noise
+                sample = sample * (1.0f - LOWPASS_ALPHA) + prev_sample * LOWPASS_ALPHA;
+                prev_sample = sample;
                 
                 // Remove DC offset to prevent low-frequency artifacts
                 dc_offset = dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
