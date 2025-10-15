@@ -1057,18 +1057,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        static float last_shared_samples[SAMPLES_PER_FRAME] = {0};
-        float processed_samples[SAMPLES_PER_FRAME];
-        
-        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            processed_samples[i] = samples[i] * 0.9f + last_shared_samples[i] * 0.1f;
-            last_shared_samples[i] = samples[i];
-        }
-        
-        // Update shared buffer for tone detection
+        // Use raw audio samples without any smoothing to eliminate choppiness
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = processed_samples[i];
+            global_shared_buffer.samples[i] = samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
@@ -1078,7 +1070,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Update passthrough buffer for synchronized output
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = processed_samples[i];
+            global_passthrough_buffer.samples[i] = samples[i];
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
@@ -1087,7 +1079,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Debug logging for buffers
         static int buffer_count = 0;
         if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (light smoothing)\n", 
+            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (raw audio)\n", 
                    frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
         }
     }
