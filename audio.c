@@ -1057,10 +1057,32 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Use raw audio samples without any smoothing to eliminate choppiness
+        // Apply basic noise reduction to input audio
+        static float input_dc_offset = 0.0f;
+        const float INPUT_DC_FILTER_ALPHA = 0.99f; // Lighter DC filter for input
+        const float INPUT_NOISE_GATE = 0.0005f; // Very light noise gate for input
+        
+        float cleaned_samples[SAMPLES_PER_FRAME];
+        
+        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
+            float sample = samples[i];
+            
+            // Light DC offset removal
+            input_dc_offset = input_dc_offset * INPUT_DC_FILTER_ALPHA + sample * (1.0f - INPUT_DC_FILTER_ALPHA);
+            sample = sample - input_dc_offset;
+            
+            // Very light noise gate to remove electronic noise
+            if (fabsf(sample) < INPUT_NOISE_GATE) {
+                sample = 0.0f;
+            }
+            
+            cleaned_samples[i] = sample;
+        }
+        
+        // Update shared buffer for tone detection
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = samples[i];
+            global_shared_buffer.samples[i] = cleaned_samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
@@ -1070,7 +1092,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Update passthrough buffer for synchronized output
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = samples[i];
+            global_passthrough_buffer.samples[i] = cleaned_samples[i];
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
@@ -1079,7 +1101,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // Debug logging for buffers
         static int buffer_count = 0;
         if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (raw audio)\n", 
+            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (noise reduced)\n", 
                    frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
         }
     }
@@ -1171,13 +1193,29 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Process mono input and duplicate to stereo output
+            // Process mono input and duplicate to stereo output with noise reduction
+            static float dc_offset = 0.0f;
+            const float NOISE_GATE_THRESHOLD = 0.001f; // Filter out very quiet noise
+            const float DC_FILTER_ALPHA = 0.995f; // DC offset removal filter
+            
             for (unsigned long i = 0; i < samples_to_process; i++) {
-                float sample = global_passthrough_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
+                float sample = global_passthrough_buffer.samples[i];
                 
-                // Clamp to prevent distortion
-                if (sample > 1.0f) sample = 1.0f;
-                else if (sample < -1.0f) sample = -1.0f;
+                // Remove DC offset to prevent low-frequency artifacts
+                dc_offset = dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
+                sample = sample - dc_offset;
+                
+                // Apply noise gate to filter out electronic noise
+                if (fabsf(sample) < NOISE_GATE_THRESHOLD) {
+                    sample = 0.0f;
+                }
+                
+                // Apply gain
+                sample = sample * PASSTHROUGH_OUTPUT_GAIN;
+                
+                // Soft clamping to prevent harsh digital artifacts
+                if (sample > 0.95f) sample = 0.95f;
+                else if (sample < -0.95f) sample = -0.95f;
                 
                 // Duplicate mono to both stereo channels
                 if (output_channels >= 2) {
