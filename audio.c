@@ -1195,8 +1195,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                // Apply significant gain boost for audibility
-                float sample = global_shared_buffer.samples[i] * 10.0f; // 10x gain boost
+                float sample = global_shared_buffer.samples[i] * 2.0f; // 2x gain boost
                 // Clamp to prevent distortion
                 if (sample > 1.0f) sample = 1.0f;
                 if (sample < -1.0f) sample = -1.0f;
@@ -1241,7 +1240,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         
         if (test_tone_count++ < 48000) { // Play test tone for 1 second
             for (unsigned long i = 0; i < frames; i++) {
-                float test_tone = 0.5f * sinf(test_tone_phase); // 50% volume test tone
+                float test_tone = 0.1f * sinf(test_tone_phase); // 10% volume test tone
                 out[i] += test_tone;
                 test_tone_phase += 2.0f * M_PI * 1000.0f / 44100.0f; // 1000 Hz at 44.1kHz
                 if (test_tone_phase > 2.0f * M_PI) test_tone_phase -= 2.0f * M_PI;
