@@ -590,82 +590,67 @@ int repair_passthrough_output_stream(int channel_index) {
                     printf("[DEBUG] *** REPAIR TRY: fmt=%s, channels=%d, latency=%s, rate=%d, buffer=%d ***\n",
                            sample_format_names[sf], output_params.channelCount,
                            lt == 0 ? "low" : "high", FORCED_SAMPLE_RATE, buffer_sizes[j]);
-
-                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params,
-                                        FORCED_SAMPLE_RATE, buffer_sizes[j],
-                                        paClipOff, audio_output_callback, audio_stream);
-
-                    if (err == paNoError) {
+        
+        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                           paClipOff, audio_output_callback, audio_stream);
+        
+        if (err == paNoError) {
                         printf("[DEBUG] *** SUCCESS! Repaired output stream with rate=%d, buffer=%d, fmt=%s, ch=%d, latency=%s ***\n",
                                FORCED_SAMPLE_RATE, buffer_sizes[j], sample_format_names[sf], output_params.channelCount,
                                lt == 0 ? "low" : "high");
-
+            
                         PaError start_err = Pa_StartStream(audio_stream->output_stream);
                         if (start_err == paNoError) {
-                            printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
-                            printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
-                            printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
-                            
-                            // Verify the stream is actually active
-                            if (Pa_IsStreamActive(audio_stream->output_stream)) {
-                                printf("[DEBUG] *** CONFIRMED: Output stream is ACTIVE for channel %d ***\n", channel_index);
-                                
-                                // Get device info for debugging
-                                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-                                if (device_info) {
-                                    printf("[DEBUG] *** Channel %d using device: %s ***\n", channel_index, device_info->name);
-                                    printf("[DEBUG] *** Device %d: Max output channels=%d, Default sample rate=%.1f Hz ***\n", 
-                                           audio_stream->device_index, device_info->maxOutputChannels, device_info->defaultSampleRate);
-                                }
-                            } else {
-                                printf("[DEBUG] *** ERROR: Output stream is NOT ACTIVE for channel %d ***\n", channel_index);
-                            }
-
-                            if (audio_stream->input_stream == NULL) {
-                                printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
-                                PaStreamParameters input_params;
-                                input_params.device = audio_stream->device_index;
-                                input_params.channelCount = 1;
-                                input_params.sampleFormat = paFloat32;
-                                input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-                                input_params.hostApiSpecificStreamInfo = NULL;
-
+                printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
+                printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
+                printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
+                
+                if (audio_stream->input_stream == NULL) {
+                    printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                    PaStreamParameters input_params;
+                    input_params.device = audio_stream->device_index;
+                    input_params.channelCount = 1;
+                    input_params.sampleFormat = paFloat32;
+                    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+                    input_params.hostApiSpecificStreamInfo = NULL;
+                    
                                 int input_buffer = buffer_sizes[j] == 0 ? AUDIO_BUFFER_SIZE : buffer_sizes[j];
                                 PaError in_err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL,
                                                                FORCED_SAMPLE_RATE, input_buffer,
-                                                               paClipOff, audio_input_callback, audio_stream);
+                                       paClipOff, audio_input_callback, audio_stream);
                                 if (in_err == paNoError) {
                                     in_err = Pa_StartStream(audio_stream->input_stream);
                                     if (in_err == paNoError) {
-                                        printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
-                                        printf("[DEBUG] *** INPUT STREAM POINTER AFTER REPAIR RECREATION: %p ***\n", (void*)audio_stream->input_stream);
-                                    } else {
+                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER REPAIR RECREATION: %p ***\n", (void*)audio_stream->input_stream);
+                            } else {
                                         printf("[ERROR] Failed to start recreated input stream after repair: %s\n", Pa_GetErrorText(in_err));
-                                    }
-                                } else {
-                                    printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(in_err));
-                                }
                             }
-
-                            force_passthrough_reevaluation = 1;
-                            return 1;
                         } else {
-                            printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(start_err));
-                            Pa_CloseStream(audio_stream->output_stream);
-                            audio_stream->output_stream = NULL;
-                            // continue trying
+                                    printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(in_err));
                         }
-                    } else if (err == paDeviceUnavailable) {
-                        printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
-                        kill_processes_using_audio_device(output_params.device);
+                }
+                
+                            force_passthrough_reevaluation = 1;
+                return 1;
+            } else {
+                            printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(start_err));
+                Pa_CloseStream(audio_stream->output_stream);
+                audio_stream->output_stream = NULL;
+                            // continue trying
+            }
+        } else if (err == paDeviceUnavailable) {
+            printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
+            kill_processes_using_audio_device(output_params.device);
                         usleep(500000);
                         // continue trying other combos
-                    } else if (err == paUnanticipatedHostError) {
-                        printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
+        } else if (err == paUnanticipatedHostError) {
+            printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
                         usleep(1000000);
                         // continue
-                    } else {
-                        printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
+        } else {
+            printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
                         const PaHostErrorInfo* host_err = Pa_GetLastHostErrorInfo();
                         if (host_err) {
                             printf("[ERROR] Host error API: %d, Code: %ld, Text: %s\n", host_err->hostApiType, (long)host_err->errorCode, host_err->errorText ? host_err->errorText : "(null)");
@@ -1167,25 +1152,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-    
-    // Debug: Always log for passthrough target channel
-    if (is_configured_target) {
-        static int passthrough_callback_count = 0;
-        if (passthrough_callback_count++ % 1000 == 0) {  // Every 1000 callbacks
-            printf("[PASSTHROUGH DEBUG] Output callback for target channel %s (frames=%lu)\n", 
-                   audio_stream->channel_id, frames);
-        }
-    }
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
-    
-    // Debug: Always log passthrough status for target channel
-    if (is_configured_target) {
-        static int passthrough_status_count = 0;
-        if (passthrough_status_count++ % 1000 == 0) {
-            printf("[PASSTHROUGH DEBUG] Target channel %s: passthrough_mode=%d, is_configured_target=%d\n", 
-                   audio_stream->channel_id, passthrough_mode, is_configured_target);
-        }
-    }
     
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
@@ -1195,27 +1162,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             unsigned long to_copy = global_shared_buffer.sample_count;
             if (to_copy > frames) to_copy = frames;
             for (unsigned long i = 0; i < to_copy; i++) {
-                float sample = global_shared_buffer.samples[i] * 1.0f; // 2x gain boost
-                // Clamp to prevent distortion
-                if (sample > 1.0f) sample = 1.0f;
-                if (sample < -1.0f) sample = -1.0f;
-                out[i] = sample;
+                out[i] = global_shared_buffer.samples[i];
             }
-            
             frames_filled = to_copy;
-            
-            // Debug: log when we're actually playing audio with levels
-            static int audio_playing_count = 0;
-            if (audio_playing_count++ % 1000 == 0) {
-                // Calculate max sample level for debugging
-                float max_level = 0.0f;
-                for (unsigned long i = 0; i < frames_filled; i++) {
-                    float abs_sample = fabsf(out[i]);
-                    if (abs_sample > max_level) max_level = abs_sample;
-                }
-                printf("[PASSTHROUGH DEBUG] Playing audio: frames=%lu, sample_count=%d, max_level=%.4f (%.1f%%)\n", 
-                       frames_filled, global_shared_buffer.sample_count, max_level, max_level * 100.0f);
-            }
             // do not invalidate; tone detection thread also reads; this is a tap
         } else {
             // Debug: no audio data in shared buffer
@@ -1227,34 +1176,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Add test tone to verify output is working (1000 Hz sine wave) - ALWAYS play when passthrough is active
-        static float test_tone_phase = 0.0f;
-        static int test_tone_count = 0;
-        
-        // Debug: Always log when we reach the test tone code
-        static int test_tone_debug_count = 0;
-        if (test_tone_debug_count++ % 1000 == 0) {
-            printf("[PASSTHROUGH DEBUG] *** REACHED TEST TONE CODE: count=%d, phase=%.3f ***\n", 
-                   test_tone_count, test_tone_phase);
-        }
-        
-        if (test_tone_count++ < 48000) { // Play test tone for 1 second
-            for (unsigned long i = 0; i < frames; i++) {
-                float test_tone = 0.1f * sinf(test_tone_phase); // 10% volume test tone
-                out[i] += test_tone;
-                test_tone_phase += 2.0f * M_PI * 1000.0f / 44100.0f; // 1000 Hz at 44.1kHz
-                if (test_tone_phase > 2.0f * M_PI) test_tone_phase -= 2.0f * M_PI;
-            }
-            if (test_tone_count == 1) {
-                printf("[PASSTHROUGH DEBUG] *** PLAYING 1000 Hz TEST TONE FOR 1 SECOND ***\n");
-            }
-        }
-        
         // Fill any remainder with silence
         for (unsigned long i = frames_filled; i < frames; i++) {
             out[i] = 0.0f;
         }
-        
         return paContinue;
     }
     

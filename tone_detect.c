@@ -400,10 +400,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                tone_def->tone_a_freq, tone_def->tone_id,
                                current_time - global_tone_detection.tone_a_tracking_start);
                         global_tone_detection.tone_a_detections++;
-                        
-                        // Activate passthrough immediately on Tone A confirmation
-                        set_passthrough_output_mode(1);
-                        printf("[TONE] Passthrough activated immediately on Tone A confirmation\n");
                     }
                 }
             } else {
@@ -526,16 +522,16 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         }
     }
     
-    // DISABLED: Keep passthrough ON forever once any tone is detected
-    // Previously: Reset sequence if tones are too old (5 second timeout)
-    // Now: Passthrough stays active permanently after first tone detection
+    // Reset sequence if tones are too old
     if (global_tone_detection.tone_sequence_active) {
-        // Keep passthrough active forever - no timeout reset
-        // This ensures detected tones continue to be played on channel 3 output
-        static int passthrough_forever_logged = 0;
-        if (!passthrough_forever_logged) {
-            printf("[TONE] Passthrough mode will stay ON forever after tone detection\n");
-            passthrough_forever_logged = 1;
+        int time_since_tone_a = current_time - global_tone_detection.tone_a_start_time;
+        if (time_since_tone_a > 5000) { // 5 second timeout
+            reset_tone_tracking();
+            global_tone_detection.current_tone_a_detected = 0;
+            global_tone_detection.current_tone_b_detected = 0;
+            global_tone_detection.tone_sequence_active = 0;
+            global_tone_detection.recording_active = 0;
+            printf("[TONE] Sequence reset due to timeout\n");
         }
     }
     
