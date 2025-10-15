@@ -1194,13 +1194,23 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+
+    // Persisted state for passthrough processing and reliable reset on mode changes
+    static float pt_dc_offset = 0.0f;
+    static float pt_prev_sample = 0.0f;
+    static int pt_was_passthrough = 0;
     
     if (passthrough_mode) {
+        if (!pt_was_passthrough) {
+            pt_dc_offset = 0.0f;
+            pt_prev_sample = 0.0f;
+        }
+        pt_was_passthrough = 1;
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-            // Apply moderate gain and duplicate mono to stereo with proper clamping
-            const float PASSTHROUGH_OUTPUT_GAIN = 1.5f; // Reduced from 3.0f to prevent distortion
+            // Duplicate mono to stereo with minimal processing to avoid added noise
+            const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // unity gain for clean passthrough
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
@@ -1208,45 +1218,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Process mono input and duplicate to stereo output with aggressive noise reduction
-            static float dc_offset = 0.0f;
-            static int passthrough_reset_flag = 0;
-            const float NOISE_GATE_THRESHOLD = 0.02f; // Stronger noise gate
-            const float DC_FILTER_ALPHA = 0.98f; // Stronger DC offset removal filter
-            
-            // Simple low-pass filter to reduce high-frequency electronic noise
-            static float prev_sample = 0.0f;
-            const float LOWPASS_ALPHA = 0.7f; // Low-pass filter coefficient
-            
-            // Reset static variables when passthrough mode starts to prevent noise accumulation
-            if (!passthrough_reset_flag) {
-                dc_offset = 0.0f;
-                prev_sample = 0.0f;
-                passthrough_reset_flag = 1;
-            }
+            // Minimal processing: only light DC offset removal to avoid low-frequency hum
+            const float DC_FILTER_ALPHA = 0.995f;
             
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float sample = global_passthrough_buffer.samples[i];
                 
-                // Apply low-pass filter to reduce high-frequency noise
-                sample = sample * (1.0f - LOWPASS_ALPHA) + prev_sample * LOWPASS_ALPHA;
-                prev_sample = sample;
-                
-                // Remove DC offset to prevent low-frequency artifacts
-                dc_offset = dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
-                sample = sample - dc_offset;
-                
-                // Apply noise gate to filter out electronic noise
-                if (fabsf(sample) < NOISE_GATE_THRESHOLD) {
-                    sample = 0.0f;
-                }
-                
-                // Apply gain
-                sample = sample * PASSTHROUGH_OUTPUT_GAIN;
-                
-                // Soft clamping to prevent harsh digital artifacts
-                if (sample > 0.95f) sample = 0.95f;
-                else if (sample < -0.95f) sample = -0.95f;
+                // Light DC removal only
+                pt_dc_offset = pt_dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
+                sample = sample - pt_dc_offset;
+
+                // Unity gain
+                // Soft clamping for safety only near full-scale
+                if (sample > 0.99f) sample = 0.99f;
+                else if (sample < -0.99f) sample = -0.99f;
                 
                 // Duplicate mono to both stereo channels
                 if (output_channels >= 2) {
@@ -1293,12 +1278,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
     } else {
-        // Reset static variables when not in passthrough mode to prevent noise accumulation
-        static int reset_flag = 0;
-        if (!reset_flag) {
-            // Reset all static variables used in passthrough processing
-            reset_flag = 1;
-        }
+        // Leaving passthrough mode – ensure next entry resets smoothing state
+        pt_was_passthrough = 0;
     }
     
     // Normal EchoStream output processing
