@@ -1081,6 +1081,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         
         // Update shared buffer for tone detection
         pthread_mutex_lock(&global_shared_buffer.mutex);
+        // Clear buffer first to prevent noise from uninitialized memory
+        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+            global_shared_buffer.samples[i] = 0.0f;
+        }
+        // Copy only the actual audio data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = cleaned_samples[i];
         }
@@ -1091,6 +1096,11 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         
         // Update passthrough buffer for synchronized output
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
+        // Clear buffer first to prevent noise from uninitialized memory
+        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+            global_passthrough_buffer.samples[i] = 0.0f;
+        }
+        // Copy only the actual audio data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_passthrough_buffer.samples[i] = cleaned_samples[i];
         }
@@ -1406,12 +1416,26 @@ int init_shared_audio_buffer(void) {
     memset(&global_shared_buffer, 0, sizeof(struct shared_audio_buffer));
     pthread_mutex_init(&global_shared_buffer.mutex, NULL);
     pthread_cond_init(&global_shared_buffer.data_ready, NULL);
-    printf("[INFO] Shared audio buffer initialized\n");
+    
+    // Explicitly zero out all sample data to prevent noise
+    for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+        global_shared_buffer.samples[i] = 0.0f;
+    }
+    global_shared_buffer.sample_count = 0;
+    global_shared_buffer.valid = 0;
+    printf("[INFO] Shared audio buffer initialized and zeroed\n");
     
     // Initialize dedicated passthrough buffer
     memset(&global_passthrough_buffer, 0, sizeof(struct passthrough_audio_buffer));
     pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
-    printf("[INFO] Passthrough audio buffer initialized\n");
+    
+    // Explicitly zero out all sample data to prevent noise
+    for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+        global_passthrough_buffer.samples[i] = 0.0f;
+    }
+    global_passthrough_buffer.sample_count = 0;
+    global_passthrough_buffer.valid = 0;
+    printf("[INFO] Passthrough audio buffer initialized and zeroed\n");
     
     return 1;
 }
