@@ -1156,17 +1156,50 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     if (passthrough_mode) {
         // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
-        unsigned long frames_filled = 0;
         pthread_mutex_lock(&global_shared_buffer.mutex);
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
-            unsigned long to_copy = global_shared_buffer.sample_count;
-            if (to_copy > frames) to_copy = frames;
-            for (unsigned long i = 0; i < to_copy; i++) {
-                out[i] = global_shared_buffer.samples[i];
+            // Apply gain and duplicate mono to stereo with proper clamping
+            const float PASSTHROUGH_OUTPUT_GAIN = 3.0f; // Boost audibility
+            unsigned long samples_to_process = global_shared_buffer.sample_count;
+            if (samples_to_process > frames) samples_to_process = frames;
+            
+            // Process mono input and duplicate to stereo output
+            for (unsigned long i = 0; i < samples_to_process; i++) {
+                float sample = global_shared_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
+                
+                // Clamp to prevent distortion
+                if (sample > 1.0f) sample = 1.0f;
+                else if (sample < -1.0f) sample = -1.0f;
+                
+                // Duplicate mono to both stereo channels
+                if (audio_stream->output_channel_count >= 2) {
+                    out[i * 2] = sample;     // Left channel
+                    out[i * 2 + 1] = sample; // Right channel
+                } else {
+                    out[i] = sample; // Mono output
+                }
             }
-            frames_filled = to_copy;
-            // do not invalidate; tone detection thread also reads; this is a tap
+            
+            // Fill any remainder with silence
+            for (unsigned long i = samples_to_process; i < frames; i++) {
+                if (audio_stream->output_channel_count >= 2) {
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
+                } else {
+                    out[i] = 0.0f; // Mono output
+                }
+            }
         } else {
+            // No audio data - fill with silence
+            for (unsigned long i = 0; i < frames; i++) {
+                if (audio_stream->output_channel_count >= 2) {
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
+                } else {
+                    out[i] = 0.0f; // Mono output
+                }
+            }
+            
             // Debug: no audio data in shared buffer
             static int no_audio_count = 0;
             if (no_audio_count++ % 100 == 0) {
@@ -1175,11 +1208,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             }
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Fill any remainder with silence
-        for (unsigned long i = frames_filled; i < frames; i++) {
-            out[i] = 0.0f;
-        }
         return paContinue;
     }
     
