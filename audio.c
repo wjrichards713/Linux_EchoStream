@@ -1057,30 +1057,55 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Raw passthrough capture: copy input samples as-is for clean passthrough
+        // Input-side noise reduction before passthrough
+        static float input_dc_offset = 0.0f;
+        const float INPUT_DC_ALPHA = 0.99f;
+        const float INPUT_NOISE_GATE = 0.003f; // ~ -50 dB input gate
+        
+        // Process input samples with noise reduction
+        float cleaned_samples[SAMPLES_PER_FRAME];
+        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
+            cleaned_samples[i] = 0.0f;
+        }
+        
+        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
+            float sample = samples[i];
+            
+            // Remove DC offset from input
+            input_dc_offset = input_dc_offset * INPUT_DC_ALPHA + sample * (1.0f - INPUT_DC_ALPHA);
+            sample = sample - input_dc_offset;
+            
+            // Apply input noise gate
+            if (fabsf(sample) < INPUT_NOISE_GATE) {
+                sample = 0.0f;
+            }
+            
+            // Eliminate denormals
+            if (fabsf(sample) < 1e-8f) sample = 0.0f;
+            
+            cleaned_samples[i] = sample;
+        }
+        
+        // Update shared buffer with cleaned samples
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        // Clear buffer first to prevent noise from uninitialized memory
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = 0.0f;
         }
-        // Copy only the actual audio data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = samples[i];
+            global_shared_buffer.samples[i] = cleaned_samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Update passthrough buffer for synchronized output
+        // Update passthrough buffer with cleaned samples
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
-        // Clear buffer first to prevent noise from uninitialized memory
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
             global_passthrough_buffer.samples[i] = 0.0f;
         }
-        // Copy only the actual audio data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = samples[i];
+            global_passthrough_buffer.samples[i] = cleaned_samples[i];
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
@@ -1192,27 +1217,34 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 			// Minimal processing: only light DC offset removal to avoid low-frequency hum
             const float DC_FILTER_ALPHA = 0.995f;
 			
-			// Adaptive gate to fully mute near-silence and eliminate hiss with hysteresis
+			// Aggressive noise reduction with multiple filters
 			static int gate_open = 0;
-			const float GATE_OPEN_RMS = 0.01f;  // ~ -40 dB
-			const float GATE_CLOSE_RMS = 0.003f; // ~ -50 dB
+			const float GATE_OPEN_RMS = 0.05f;  // Raised threshold to -26 dB
+			const float GATE_CLOSE_RMS = 0.015f; // Raised threshold to -36 dB
 			static int release_hold_samples = 0;
-			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 20; // 50 ms hold
+			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 10; // 100 ms hold
 			
-			// Compute block RMS to decide gate state
+			// Multiple noise detection methods
 			float sum_sq = 0.0f;
+			float peak = 0.0f;
 			for (unsigned long i = 0; i < samples_to_process; i++) {
-				float s = global_passthrough_buffer.samples[i];
+				float s = fabsf(global_passthrough_buffer.samples[i]);
 				sum_sq += s * s;
+				if (s > peak) peak = s;
 			}
 			float block_rms = samples_to_process > 0 ? sqrtf(sum_sq / (float)samples_to_process) : 0.0f;
+			
+			// Gate decision based on both RMS and peak levels
+			int should_open = (block_rms > GATE_OPEN_RMS) || (peak > GATE_OPEN_RMS * 3);
+			int should_close = (block_rms < GATE_CLOSE_RMS) && (peak < GATE_CLOSE_RMS * 2);
+			
 			if (!gate_open) {
-				if (block_rms > GATE_OPEN_RMS) {
+				if (should_open) {
 					gate_open = 1;
 					release_hold_samples = RELEASE_HOLD_TARGET;
 				}
 			} else {
-				if (block_rms < GATE_CLOSE_RMS) {
+				if (should_close) {
 					if (release_hold_samples > 0) release_hold_samples--;
 					else gate_open = 0;
 				} else {
@@ -1227,12 +1259,29 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 				if (!gate_open) {
 					sample = 0.0f;
 				} else {
-					// Light DC removal only
+					// Aggressive noise filtering pipeline
+					
+					// 1. DC offset removal
 					pt_dc_offset = pt_dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
 					sample = sample - pt_dc_offset;
+					
+					// 2. High-frequency noise reduction (simple low-pass)
+					static float prev_filtered = 0.0f;
+					const float LPF_ALPHA = 0.8f;
+					sample = sample * (1.0f - LPF_ALPHA) + prev_filtered * LPF_ALPHA;
+					prev_filtered = sample;
+					
+					// 3. Quantization noise reduction
+					const float QUANTIZATION_LEVEL = 0.001f; // Reduce precision to eliminate tiny noise
+					sample = floorf(sample / QUANTIZATION_LEVEL + 0.5f) * QUANTIZATION_LEVEL;
+					
+					// 4. Hard noise gate for individual samples
+					const float SAMPLE_NOISE_GATE = 0.002f; // ~ -54 dB per sample
+					if (fabsf(sample) < SAMPLE_NOISE_GATE) {
+						sample = 0.0f;
+					}
 				}
 
-                // Unity gain
 				// Eliminate denormals and soft clamp for safety only near full-scale
 				if (fabsf(sample) < 1e-8f) sample = 0.0f;
 				if (sample > 0.99f) sample = 0.99f;
