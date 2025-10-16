@@ -1193,6 +1193,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
+            static float last_frame[SAMPLES_PER_FRAME];
+            static unsigned long last_frame_len = 0;
+            static int have_last_frame = 0;
+
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float sample = global_passthrough_buffer.samples[i]; // raw
                 
@@ -1207,31 +1211,52 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 } else {
                     out[i] = sample; // Mono output
                 }
+
+                if (i < SAMPLES_PER_FRAME) last_frame[i] = sample;
             }
+            last_frame_len = samples_to_process;
+            have_last_frame = 1;
             
             // Fill any remainder with silence
             for (unsigned long i = samples_to_process; i < frames; i++) {
                 if (output_channels >= 2) {
-                    out[i * 2] = 0.0f;     // Left channel
-                    out[i * 2 + 1] = 0.0f; // Right channel
+                    float s = have_last_frame && last_frame_len > 0 ? last_frame[last_frame_len - 1] : 0.0f;
+                    out[i * 2] = s;     // Left channel
+                    out[i * 2 + 1] = s; // Right channel
                 } else {
-                    out[i] = 0.0f; // Mono output
+                    out[i] = have_last_frame && last_frame_len > 0 ? last_frame[last_frame_len - 1] : 0.0f;
                 }
             }
             
             // Keep buffer valid for smooth playback - don't invalidate to prevent choppy noise
             // The buffer will be overwritten by new audio data from input callback
         } else {
-            // No audio data - fill with silence
+            // No audio data - repeat last good frame to avoid choppy gaps
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            for (unsigned long i = 0; i < frames; i++) {
-                if (output_channels >= 2) {
-                    out[i * 2] = 0.0f;     // Left channel
-                    out[i * 2 + 1] = 0.0f; // Right channel
-                } else {
-                    out[i] = 0.0f; // Mono output
+            extern float __unused; // keep compiler happy if not used
+            static float last_frame[SAMPLES_PER_FRAME];
+            static unsigned long last_frame_len = 0;
+            static int have_last_frame = 0;
+            if (have_last_frame && last_frame_len > 0) {
+                for (unsigned long i = 0; i < frames; i++) {
+                    float s = last_frame[i % last_frame_len];
+                    if (output_channels >= 2) {
+                        out[i * 2] = s;
+                        out[i * 2 + 1] = s;
+                    } else {
+                        out[i] = s;
+                    }
+                }
+            } else {
+                for (unsigned long i = 0; i < frames; i++) {
+                    if (output_channels >= 2) {
+                        out[i * 2] = 0.0f;     // Left channel
+                        out[i * 2 + 1] = 0.0f; // Right channel
+                    } else {
+                        out[i] = 0.0f; // Mono output
+                    }
                 }
             }
             
