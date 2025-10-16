@@ -1,6 +1,41 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #include "audio.h"
+
+// Lightweight biquad notch utilities for mains hum rejection
+typedef struct biquad {
+    float b0, b1, b2;
+    float a1, a2;
+    float z1, z2;
+} biquad_t;
+
+static void biquad_compute_notch(float fs, float f0, float Q, biquad_t* s) {
+    const float pi = 3.14159265358979323846f;
+    float w0 = 2.0f * pi * f0 / fs;
+    float cosw0 = cosf(w0);
+    float sinw0 = sinf(w0);
+    float alpha = sinw0 / (2.0f * Q);
+    float b0 = 1.0f;
+    float b1 = -2.0f * cosw0;
+    float b2 = 1.0f;
+    float a0 = 1.0f + alpha;
+    float a1 = -2.0f * cosw0;
+    float a2 = 1.0f - alpha;
+    s->b0 = b0 / a0;
+    s->b1 = b1 / a0;
+    s->b2 = b2 / a0;
+    s->a1 = a1 / a0;
+    s->a2 = a2 / a0;
+    s->z1 = 0.0f;
+    s->z2 = 0.0f;
+}
+
+static inline float biquad_process(biquad_t* s, float x) {
+    float y = s->b0 * x + s->z1;
+    s->z1 = s->b1 * x - s->a1 * y + s->z2;
+    s->z2 = s->b2 * x - s->a2 * y;
+    return y;
+}
 #include "crypto.h"
 #include "config.h"
 #include "udp.h"
@@ -1194,6 +1229,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             // y[n] = a * (y[n-1] + x[n] - x[n-1])
             const float HP_ALPHA = 0.9840f; // derived from fc≈80 Hz at 48 kHz
 
+            // Simple biquad notch filters for mains hum at 50/60 Hz and first harmonics
+            static int biquads_initialized = 0;
+            static biquad_t notch_50, notch_60, notch_100, notch_120;
+            if (!biquads_initialized) {
+                // Initialize notch filters (RBJ cookbook)
+                biquad_compute_notch((float)SAMPLE_RATE, 50.0f, 35.0f, &notch_50);
+                biquad_compute_notch((float)SAMPLE_RATE, 60.0f, 35.0f, &notch_60);
+                biquad_compute_notch((float)SAMPLE_RATE, 100.0f, 25.0f, &notch_100);
+                biquad_compute_notch((float)SAMPLE_RATE, 120.0f, 25.0f, &notch_120);
+                biquads_initialized = 1;
+            }
+
             for (unsigned long i = 0; i < samples_to_process; i++) {
                 float x = global_passthrough_buffer.samples[i];
                 
@@ -1201,6 +1248,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 float y = HP_ALPHA * (hp_prev_y + x - hp_prev_x);
                 hp_prev_x = x;
                 hp_prev_y = y;
+
+                // Apply gentle notches at 50/60 Hz and first harmonics
+                y = biquad_process(&notch_50, y);
+                y = biquad_process(&notch_60, y);
+                y = biquad_process(&notch_100, y);
+                y = biquad_process(&notch_120, y);
 
                 float sample = y;
                 
