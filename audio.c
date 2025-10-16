@@ -1057,10 +1057,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Input-side noise reduction before passthrough
+        // Light input-side noise reduction to prevent trembling
         static float input_dc_offset = 0.0f;
-        const float INPUT_DC_ALPHA = 0.99f;
-        const float INPUT_NOISE_GATE = 0.003f; // ~ -50 dB input gate
+        const float INPUT_DC_ALPHA = 0.995f; // Lighter DC filtering
+        const float INPUT_NOISE_GATE = 0.001f; // ~ -60 dB input gate (less aggressive)
         
         // Process input samples with noise reduction
         float cleaned_samples[SAMPLES_PER_FRAME];
@@ -1075,9 +1075,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
             input_dc_offset = input_dc_offset * INPUT_DC_ALPHA + sample * (1.0f - INPUT_DC_ALPHA);
             sample = sample - input_dc_offset;
             
-            // Apply input noise gate
+            // Apply smooth input noise gate to prevent trembling
             if (fabsf(sample) < INPUT_NOISE_GATE) {
-                sample = 0.0f;
+                sample *= 0.1f; // Smooth reduction instead of hard cutoff
             }
             
             // Eliminate denormals
@@ -1217,12 +1217,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 			// Minimal processing: only light DC offset removal to avoid low-frequency hum
             const float DC_FILTER_ALPHA = 0.995f;
 			
-			// Aggressive noise reduction with multiple filters
+			// Smooth noise reduction to prevent trembling
 			static int gate_open = 0;
-			const float GATE_OPEN_RMS = 0.05f;  // Raised threshold to -26 dB
-			const float GATE_CLOSE_RMS = 0.015f; // Raised threshold to -36 dB
+			const float GATE_OPEN_RMS = 0.02f;  // Lower threshold to -34 dB
+			const float GATE_CLOSE_RMS = 0.008f; // Lower threshold to -42 dB
 			static int release_hold_samples = 0;
-			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 10; // 100 ms hold
+			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 5; // 200 ms hold for smoother transitions
 			
 			// Multiple noise detection methods
 			float sum_sq = 0.0f;
@@ -1234,52 +1234,74 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 			}
 			float block_rms = samples_to_process > 0 ? sqrtf(sum_sq / (float)samples_to_process) : 0.0f;
 			
-			// Gate decision based on both RMS and peak levels
+			// Smooth gate decision to prevent trembling
+			static int gate_transition_samples = 0;
+			const int GATE_TRANSITION_TIME = SAMPLE_RATE / 20; // 50ms transition
+			
 			int should_open = (block_rms > GATE_OPEN_RMS) || (peak > GATE_OPEN_RMS * 3);
 			int should_close = (block_rms < GATE_CLOSE_RMS) && (peak < GATE_CLOSE_RMS * 2);
 			
 			if (!gate_open) {
 				if (should_open) {
-					gate_open = 1;
-					release_hold_samples = RELEASE_HOLD_TARGET;
+					gate_transition_samples++;
+					if (gate_transition_samples >= GATE_TRANSITION_TIME) {
+						gate_open = 1;
+						release_hold_samples = RELEASE_HOLD_TARGET;
+						gate_transition_samples = 0;
+					}
+				} else {
+					gate_transition_samples = 0;
 				}
 			} else {
 				if (should_close) {
-					if (release_hold_samples > 0) release_hold_samples--;
-					else gate_open = 0;
+					if (release_hold_samples > 0) {
+						release_hold_samples--;
+					} else {
+						gate_transition_samples++;
+						if (gate_transition_samples >= GATE_TRANSITION_TIME) {
+							gate_open = 0;
+							gate_transition_samples = 0;
+						}
+					}
 				} else {
 					release_hold_samples = RELEASE_HOLD_TARGET;
+					gate_transition_samples = 0;
 				}
 			}
             
 			for (unsigned long i = 0; i < samples_to_process; i++) {
 				float sample = global_passthrough_buffer.samples[i];
                 
-				// Apply gate: mute near-silence blocks completely
+				// Smooth processing to prevent trembling
 				if (!gate_open) {
-					sample = 0.0f;
+					// Smooth fade to silence instead of hard mute
+					static float fade_out = 0.0f;
+					const float FADE_RATE = 0.95f;
+					fade_out *= FADE_RATE;
+					sample = sample * fade_out;
 				} else {
-					// Aggressive noise filtering pipeline
+					// Gentle noise filtering pipeline
 					
-					// 1. DC offset removal
+					// 1. Light DC offset removal
 					pt_dc_offset = pt_dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
 					sample = sample - pt_dc_offset;
 					
-					// 2. High-frequency noise reduction (simple low-pass)
+					// 2. Very light high-frequency filtering (reduced from 0.8f to 0.3f)
 					static float prev_filtered = 0.0f;
-					const float LPF_ALPHA = 0.8f;
+					const float LPF_ALPHA = 0.3f; // Much lighter filtering
 					sample = sample * (1.0f - LPF_ALPHA) + prev_filtered * LPF_ALPHA;
 					prev_filtered = sample;
 					
-					// 3. Quantization noise reduction
-					const float QUANTIZATION_LEVEL = 0.001f; // Reduce precision to eliminate tiny noise
-					sample = floorf(sample / QUANTIZATION_LEVEL + 0.5f) * QUANTIZATION_LEVEL;
-					
-					// 4. Hard noise gate for individual samples
-					const float SAMPLE_NOISE_GATE = 0.002f; // ~ -54 dB per sample
+					// 3. Smooth noise gate instead of hard gate
+					const float SAMPLE_NOISE_GATE = 0.001f; // ~ -60 dB per sample
 					if (fabsf(sample) < SAMPLE_NOISE_GATE) {
-						sample = 0.0f;
+						// Smooth reduction instead of hard cutoff
+						sample *= 0.1f;
 					}
+					
+					// Reset fade when gate opens
+					static float fade_out = 1.0f;
+					fade_out = 1.0f;
 				}
 
 				// Eliminate denormals and soft clamp for safety only near full-scale
