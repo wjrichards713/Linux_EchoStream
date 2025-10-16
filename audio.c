@@ -1187,15 +1187,28 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Direct copy with no processing - pure passthrough
+            // Very light high-pass filtering to remove LF hum/handling noise while preserving signal
+            static float hp_prev_x = 0.0f;
+            static float hp_prev_y = 0.0f;
+            // Single-pole high-pass at ~80 Hz for 48 kHz sample rate
+            // y[n] = a * (y[n-1] + x[n] - x[n-1])
+            const float HP_ALPHA = 0.9840f; // derived from fc≈80 Hz at 48 kHz
+
             for (unsigned long i = 0; i < samples_to_process; i++) {
-                float sample = global_passthrough_buffer.samples[i]; // Raw sample - no processing
+                float x = global_passthrough_buffer.samples[i];
                 
-                // Only safety clamping to prevent digital overload
+                // High-pass filter to reduce low-frequency electronic noise
+                float y = HP_ALPHA * (hp_prev_y + x - hp_prev_x);
+                hp_prev_x = x;
+                hp_prev_y = y;
+
+                float sample = y;
+                
+                // Safety clamping to prevent digital overload
                 if (sample > 0.99f) sample = 0.99f;
                 else if (sample < -0.99f) sample = -0.99f;
                 
-                // Duplicate mono to both stereo channels
+                // Duplicate mono to both stereo channels or write mono
                 if (output_channels >= 2) {
                     out[i * 2] = sample;     // Left channel
                     out[i * 2 + 1] = sample; // Right channel
