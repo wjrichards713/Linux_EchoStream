@@ -1057,55 +1057,29 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
-        // Minimal input-side processing to preserve audio
-        static float input_dc_offset = 0.0f;
-        const float INPUT_DC_ALPHA = 0.999f; // Very light DC filtering
-        const float INPUT_NOISE_GATE = 0.0001f; // ~ -80 dB input gate (minimal)
+        // COMPLETELY CLEAN PASSTHROUGH - NO PROCESSING AT ALL
+        // Direct copy of raw input samples to preserve original audio quality
         
-        // Process input samples with noise reduction
-        float cleaned_samples[SAMPLES_PER_FRAME];
-        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-            cleaned_samples[i] = 0.0f;
-        }
-        
-        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            float sample = samples[i];
-            
-            // Remove DC offset from input
-            input_dc_offset = input_dc_offset * INPUT_DC_ALPHA + sample * (1.0f - INPUT_DC_ALPHA);
-            sample = sample - input_dc_offset;
-            
-            // Apply minimal input noise gate to preserve audio
-            if (fabsf(sample) < INPUT_NOISE_GATE) {
-                sample *= 0.8f; // Very light reduction to preserve audio
-            }
-            
-            // Eliminate denormals
-            if (fabsf(sample) < 1e-8f) sample = 0.0f;
-            
-            cleaned_samples[i] = sample;
-        }
-        
-        // Update shared buffer with cleaned samples
+        // Update shared buffer with raw samples
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = 0.0f;
         }
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = cleaned_samples[i];
+            global_shared_buffer.samples[i] = samples[i]; // Raw copy - no processing
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Update passthrough buffer with cleaned samples
+        // Update passthrough buffer with raw samples
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
             global_passthrough_buffer.samples[i] = 0.0f;
         }
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = cleaned_samples[i];
+            global_passthrough_buffer.samples[i] = samples[i]; // Raw copy - no processing
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
@@ -1205,8 +1179,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-			// Duplicate mono to stereo with minimal processing to avoid added noise
-            // Unity gain for clean passthrough (no gain multiplication needed)
+            // COMPLETELY CLEAN PASSTHROUGH OUTPUT - NO PROCESSING AT ALL
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
@@ -1214,86 +1187,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-			// Minimal processing: only light DC offset removal to avoid low-frequency hum
-            const float DC_FILTER_ALPHA = 0.995f;
-			
-			// Minimal noise reduction to preserve audio
-			static int gate_open = 1; // Start with gate open
-			const float GATE_OPEN_RMS = 0.005f;  // Very low threshold to -46 dB
-			const float GATE_CLOSE_RMS = 0.001f; // Very low threshold to -60 dB
-			static int release_hold_samples = 0;
-			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 2; // 500 ms hold
-			
-			// Multiple noise detection methods
-			float sum_sq = 0.0f;
-			float peak = 0.0f;
-			for (unsigned long i = 0; i < samples_to_process; i++) {
-				float s = fabsf(global_passthrough_buffer.samples[i]);
-				sum_sq += s * s;
-				if (s > peak) peak = s;
-			}
-			float block_rms = samples_to_process > 0 ? sqrtf(sum_sq / (float)samples_to_process) : 0.0f;
-			
-			// Smooth gate decision to prevent trembling
-			static int gate_transition_samples = 0;
-			const int GATE_TRANSITION_TIME = SAMPLE_RATE / 20; // 50ms transition
-			
-			int should_open = (block_rms > GATE_OPEN_RMS) || (peak > GATE_OPEN_RMS * 3);
-			int should_close = (block_rms < GATE_CLOSE_RMS) && (peak < GATE_CLOSE_RMS * 2);
-			
-			if (!gate_open) {
-				if (should_open) {
-					gate_transition_samples++;
-					if (gate_transition_samples >= GATE_TRANSITION_TIME) {
-						gate_open = 1;
-						release_hold_samples = RELEASE_HOLD_TARGET;
-						gate_transition_samples = 0;
-					}
-				} else {
-					gate_transition_samples = 0;
-				}
-			} else {
-				if (should_close) {
-					if (release_hold_samples > 0) {
-						release_hold_samples--;
-					} else {
-						gate_transition_samples++;
-						if (gate_transition_samples >= GATE_TRANSITION_TIME) {
-							gate_open = 0;
-							gate_transition_samples = 0;
-						}
-					}
-				} else {
-					release_hold_samples = RELEASE_HOLD_TARGET;
-					gate_transition_samples = 0;
-				}
-			}
-            
-			for (unsigned long i = 0; i < samples_to_process; i++) {
-				float sample = global_passthrough_buffer.samples[i];
+            // Direct copy with no processing - pure passthrough
+            for (unsigned long i = 0; i < samples_to_process; i++) {
+                float sample = global_passthrough_buffer.samples[i]; // Raw sample - no processing
                 
-				// Minimal processing to preserve audio
-				if (!gate_open) {
-					// Only apply very light fade for extreme silence
-					sample *= 0.5f; // Reduce by half instead of muting completely
-				} else {
-					// Very minimal filtering to preserve audio quality
-					
-					// 1. Light DC offset removal only
-					pt_dc_offset = pt_dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
-					sample = sample - pt_dc_offset;
-					
-					// 2. Very light noise gate for extreme noise only
-					const float SAMPLE_NOISE_GATE = 0.0001f; // ~ -80 dB per sample (very low)
-					if (fabsf(sample) < SAMPLE_NOISE_GATE) {
-						sample *= 0.5f; // Light reduction instead of muting
-					}
-				}
-
-				// Eliminate denormals and soft clamp for safety only near full-scale
-				if (fabsf(sample) < 1e-8f) sample = 0.0f;
-				if (sample > 0.99f) sample = 0.99f;
-				else if (sample < -0.99f) sample = -0.99f;
+                // Only safety clamping to prevent digital overload
+                if (sample > 0.99f) sample = 0.99f;
+                else if (sample < -0.99f) sample = -0.99f;
                 
                 // Duplicate mono to both stereo channels
                 if (output_channels >= 2) {
@@ -1302,8 +1202,6 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 } else {
                     out[i] = sample; // Mono output
                 }
-                
-                // Sample is processed directly - no need to store for transitions
             }
             
             // Fill any remainder with silence
@@ -1319,25 +1217,16 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             // Keep buffer valid for smooth playback - don't invalidate to prevent choppy noise
             // The buffer will be overwritten by new audio data from input callback
         } else {
-            // No audio data - fill with silence using smooth fade to prevent choppy noise
+            // No audio data - fill with silence
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Use previous sample for smooth transition to prevent choppy noise
-            static float last_sample = 0.0f;
-            const float FADE_RATE = 0.95f; // Slow fade to prevent clicks
-            
-            // Use the last sample for smooth transitions
-            // last_sample will be updated from the valid audio processing
-            
             for (unsigned long i = 0; i < frames; i++) {
-                last_sample *= FADE_RATE; // Smooth fade to silence
-                
                 if (output_channels >= 2) {
-                    out[i * 2] = last_sample;     // Left channel
-                    out[i * 2 + 1] = last_sample; // Right channel
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
                 } else {
-                    out[i] = last_sample; // Mono output
+                    out[i] = 0.0f; // Mono output
                 }
             }
             
