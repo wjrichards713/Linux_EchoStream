@@ -1088,7 +1088,8 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     int should_update_shared_buffer = 0;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0) {
-        should_update_shared_buffer = 1;
+        // Only feed passthrough buffers when passthrough mode is active
+        should_update_shared_buffer = is_passthrough_mode();
     }
     
     if (should_update_shared_buffer) {
@@ -1126,6 +1127,12 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
             printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (noise reduced)\n", 
                    frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
         }
+    } else {
+        // When passthrough is not active, mark buffers invalid to avoid stale audio
+        pthread_mutex_lock(&global_passthrough_buffer.mutex);
+        global_passthrough_buffer.valid = 0;
+        global_passthrough_buffer.sample_count = 0;
+        pthread_mutex_unlock(&global_passthrough_buffer.mutex);
     }
     
     // Process audio for EchoStream (only if input is enabled for this channel)
