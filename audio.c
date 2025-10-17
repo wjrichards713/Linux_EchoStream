@@ -301,7 +301,7 @@ int create_delayed_passthrough_output_stream(void) {
         }
         
         PaError err = paNoError;
-        for (int j = 0; j < 6 && err != paNoError; j++) {
+        for (int j = 0; j < 6; j++) {
             printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
                    j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
@@ -325,7 +325,7 @@ int create_delayed_passthrough_output_stream(void) {
                     audio_stream->input_stream = audio_stream->output_stream;
                     printf("[DEBUG] *** INPUT STREAM POINTER SET TO DUPLEX STREAM FOR CHANNEL %d ***\n", passthrough_index);
                     
-                    return 1; // SUCCESS - exit the infinite loop
+                    return 1; // SUCCESS - exit the function
                 } else {
                     printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
                     Pa_CloseStream(audio_stream->output_stream);
