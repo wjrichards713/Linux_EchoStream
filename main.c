@@ -185,6 +185,11 @@ int main(int argc, char *argv[]) {
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     
+    // Wait for channel initialization to complete before creating passthrough target output stream
+    printf("\n=== WAITING FOR CHANNEL INITIALIZATION TO COMPLETE ===\n");
+    printf("[INFO] Waiting 10 seconds for all channels to be fully initialized...\n");
+    sleep(10); // Wait for channel initialization to complete
+    
     // Create delayed output stream for configured passthrough target channel
     printf("\n=== CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET ===\n");
     printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");

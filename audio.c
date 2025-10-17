@@ -87,29 +87,10 @@ int create_delayed_passthrough_output_stream(void) {
     printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
     
     if (audio_stream->input_stream == NULL) {
-        printf("[CRITICAL] *** INPUT STREAM IS NULL - RECREATING IT FIRST ***\n");
-        // Recreate the input stream before attempting output stream creation
-        PaStreamParameters input_params;
-        input_params.device = audio_stream->device_index;
-        input_params.channelCount = 1;
-        input_params.sampleFormat = paFloat32;
-        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-        input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
-        if (err == paNoError) {
-            err = Pa_StartStream(audio_stream->input_stream);
-            if (err == paNoError) {
-                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-            } else {
-                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
-                return 0;
-            }
-        } else {
-            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
-            return 0;
-        }
+        printf("[CRITICAL] *** INPUT STREAM IS NULL - THIS SHOULD NOT HAPPEN ***\n");
+        printf("[ERROR] Passthrough target channel %d has no input stream - cannot create output stream\n", passthrough_index);
+        printf("[ERROR] The input stream should have been created during main channel initialization\n");
+        return 0;
     } else {
         printf("[DEBUG] Input stream exists - checking if active\n");
         if (Pa_IsStreamActive(audio_stream->input_stream)) {
