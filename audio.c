@@ -1057,6 +1057,13 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
     
     if (should_update_shared_buffer) {
+        // Debug: Track buffer updates
+        static int buffer_update_count = 0;
+        if (buffer_update_count++ % 1000 == 0) {
+            printf("[DEBUG] Input buffer update #%d: frames=%lu, passthrough_mode=%d\n", 
+                   buffer_update_count, frames, is_passthrough_mode());
+        }
+        
         // COMPLETELY CLEAN PASSTHROUGH - NO PROCESSING AT ALL
         // Direct copy of raw input samples to preserve original audio quality
         
@@ -1171,6 +1178,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+    
+    // Debug: Track passthrough mode changes
+    static int last_passthrough_mode = -1;
+    if (passthrough_mode != last_passthrough_mode) {
+        printf("[DEBUG] Passthrough mode changed: %s (channel: %s, is_target: %d)\n", 
+               passthrough_mode ? "ACTIVE" : "INACTIVE", audio_stream->channel_id, is_configured_target);
+        last_passthrough_mode = passthrough_mode;
+    }
 
     // Persisted state for passthrough processing and reliable reset on mode changes
     static float pt_dc_offset = 0.0f;
@@ -1181,6 +1196,15 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             pt_dc_offset = 0.0f;
         }
         pt_was_passthrough = 1;
+        
+        // TEMPORARY TEST: Completely disable software passthrough to isolate hardware passthrough
+        // Fill with silence to see if clean tones come from hardware passthrough
+        printf("[DEBUG] PASSTHROUGH MODE - FILLING WITH SILENCE TO TEST HARDWARE PASSTHROUGH\n");
+        for (unsigned long i = 0; i < frames; i++) {
+            out[i] = 0.0f;
+        }
+        return paContinue;
+        
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
@@ -1298,17 +1322,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 void* audio_passthrough_thread(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
-    printf("[INFO] Audio passthrough thread started\n");
+    printf("[INFO] Audio passthrough thread started - COMPLETELY DISABLED\n");
     
-    // Buffer for smoothing audio output
-    float output_buffer[SAMPLES_PER_FRAME];
-    int underflow_count = 0;
-    
+    // COMPLETELY DISABLED: This thread conflicts with callback-based passthrough
+    // Just sleep forever to prevent any interference
     while (global_passthrough.active && !global_interrupted) {
-        // DISABLED: This thread conflicts with callback-based passthrough
-        // Use only the audio_output_callback approach to prevent choppy noise
-        usleep(50000); // 50ms delay - thread is effectively disabled
-            continue;
+        usleep(1000000); // 1 second delay - thread is completely disabled
+        // No processing whatsoever to prevent audio conflicts
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
