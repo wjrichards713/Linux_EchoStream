@@ -132,10 +132,31 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        // Now try to create the output stream with aggressive error handling
+        // CRITICAL: Create a duplex stream (input+output) instead of separate streams
+        // This avoids device conflicts and is the proper way to handle passthrough
+        printf("[DEBUG] Creating duplex stream for passthrough target (input+output on same device)\n");
+        
+        // First, close the existing input stream to free the device
+        if (audio_stream->input_stream != NULL) {
+            printf("[DEBUG] Closing existing input stream to create duplex stream\n");
+            Pa_StopStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->input_stream);
+            audio_stream->input_stream = NULL;
+            usleep(500000); // Wait 500ms for device to be fully released
+        }
+        
+        // Set up input parameters for duplex stream
+        PaStreamParameters input_params;
+        input_params.device = audio_stream->device_index;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        // Set up output parameters for duplex stream
         PaStreamParameters output_params;
-        output_params.device = audio_stream->device_index;
-        output_params.channelCount = 2; // Changed from 1 to 2 based on user's CLI test results
+        output_params.device = audio_stream->device_index; // Same device for duplex
+        output_params.channelCount = 2;
         output_params.sampleFormat = paFloat32;
         output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
         output_params.hostApiSpecificStreamInfo = NULL;
@@ -258,47 +279,25 @@ int create_delayed_passthrough_output_stream(void) {
             printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
                    j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+            // Create duplex stream (input+output) instead of just output stream
+            err = Pa_OpenStream(&audio_stream->output_stream, &input_params, &output_params, 
                                FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                               paClipOff, audio_output_callback, audio_stream);
+                               paClipOff, audio_input_callback, audio_stream);
             
             if (err == paNoError) {
-                printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+                printf("[DEBUG] *** SUCCESS! Delayed duplex stream created with sample_rate=%d, buffer_size=%d ***\n", 
                        FORCED_SAMPLE_RATE, buffer_sizes[j]);
                 
-                // Start the stream
+                // Start the duplex stream
                 err = Pa_StartStream(audio_stream->output_stream);
                 if (err == paNoError) {
-                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
+                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED DUPLEX STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
                     printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n", 
                            passthrough_index, global_channel_ids[passthrough_index]);
                     
-                    // If we closed the input stream to create the output stream, recreate it now
-                    if (audio_stream->input_stream == NULL) {
-                        printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d ***\n", passthrough_index);
-                        // Recreate input stream with same parameters as before
-                        PaStreamParameters input_params;
-                        input_params.device = audio_stream->device_index;
-                        input_params.channelCount = 1;
-                        input_params.sampleFormat = paFloat32;
-                        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-                        input_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                                           paClipOff, audio_input_callback, audio_stream);
-                        if (err == paNoError) {
-                            err = Pa_StartStream(audio_stream->input_stream);
-                            if (err == paNoError) {
-                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER RECREATION: %p ***\n", (void*)audio_stream->input_stream);
-                            } else {
-                                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
-                            }
-                        } else {
-                            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
-                        }
-                    }
+                    // Set the input stream pointer to the same duplex stream
+                    audio_stream->input_stream = audio_stream->output_stream;
+                    printf("[DEBUG] *** INPUT STREAM POINTER SET TO DUPLEX STREAM FOR CHANNEL %d ***\n", passthrough_index);
                     
                     return 1; // SUCCESS - exit the infinite loop
                 } else {
