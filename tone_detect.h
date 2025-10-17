@@ -1,140 +1,125 @@
 #ifndef TONE_DETECT_H
 #define TONE_DETECT_H
 
-#include "echostream.h"
+#include <pthread.h>
 #include <fftw3.h>
 
-// Tone detection configuration
 #define MAX_TONE_DEFINITIONS 10
-#define MAX_FILTERS 5
+#define MAX_FILTERS 10
 #define FFT_SIZE 1024
 #define SAMPLE_RATE 48000
-#define FREQ_BINS (FFT_SIZE / 2)
+#define FREQ_BINS (FFT_SIZE / 2 + 1)
+#define SAMPLES_PER_FRAME 1920
+#define MAX_PEAKS 64
 
-// Tone definition structure
 struct tone_definition {
-    char tone_id[64];
-    float tone_a_freq;        // Frequency for tone A
-    float tone_b_freq;        // Frequency for tone B
-    int tone_a_length_ms;     // Minimum length for tone A (ms)
-    int tone_b_length_ms;     // Minimum length for tone B (ms)
-    int tone_a_range_hz;      // Frequency range tolerance for tone A
-    int tone_b_range_hz;      // Frequency range tolerance for tone B
-    int record_length_ms;     // How long to record after detection
-    int valid;                // 1 if this definition is valid
+    char  tone_id[64];
+    float tone_a_freq;
+    float tone_b_freq;
+    int   tone_a_length_ms;
+    int   tone_b_length_ms;
+    int   tone_a_range_hz;
+    int   tone_b_range_hz;
+    int   record_length_ms;
+    int   valid;
 };
 
-// Filter definition structure
 struct frequency_filter {
-    char filter_id[64];
+    char  filter_id[64];
     float frequency;
-    int filter_range_hz;
-    char type[16];            // "above", "below", "center"
-    int valid;                // 1 if this filter is valid
+    int   filter_range_hz;
+    char  type[16];   /* below | above | center */
+    int   valid;
 };
 
-// Tone detection configuration
-struct tone_config {
-    float threshold;           // Detection threshold (0.0 - 1.0)
-    float gain;               // Input gain multiplier
-    int db_threshold;         // dB threshold for detection
-    int detect_new_tones;     // 1 to detect unknown tones
-    int new_tone_length_ms;   // Minimum length for new tone detection
-    int new_tone_range_hz;    // Frequency range for new tone detection
-    int valid;                // 1 if config is valid
+struct tone_detection_config {
+    float threshold;
+    float gain;
+    int   db_threshold;
+    int   detect_new_tones;
+    int   new_tone_length_ms;
+    int   new_tone_range_hz;
+    int   valid;
 };
 
-// Tone detection state
 struct tone_detection_state {
-    // FFT buffers
-    double fft_input[FFT_SIZE];
-    fftw_complex fft_output[FFT_SIZE];
-    fftw_plan fft_plan;
-    
-    // Frequency analysis
-    float frequency_magnitudes[FREQ_BINS];
-    float peak_frequencies[10];  // Top 10 peak frequencies
-    int peak_count;
-    
-    // Tone detection
-    struct tone_definition tone_definitions[MAX_TONE_DEFINITIONS];
-    struct frequency_filter filters[MAX_FILTERS];
-    struct tone_config config;
-    
-    // Detection state
+    fftw_plan     fft_plan;
+    double        fft_input[FFT_SIZE];
+    fftw_complex  fft_output[FFT_SIZE];
+    float         frequency_magnitudes[FREQ_BINS];
+
+    float peak_frequencies[MAX_PEAKS];
+    int   peak_count;
+
+    struct tone_definition    tone_definitions[MAX_TONE_DEFINITIONS];
+    struct frequency_filter   filters[MAX_FILTERS];
+    struct tone_detection_config config;
+
     int current_tone_a_detected;
     int current_tone_b_detected;
     int tone_sequence_active;
     int recording_active;
-    int recording_start_time;
+
+    int tone_a_tracking;
+    int tone_b_tracking;
+    int tone_a_confirmed;
+    int tone_b_confirmed;
+    int tone_a_tracking_start;
+    int tone_b_tracking_start;
     int tone_a_start_time;
     int tone_b_start_time;
-    
-    // Duration tracking for proper tone detection
-    int tone_a_tracking;          // 1 if currently tracking tone A
-    int tone_b_tracking;          // 1 if currently tracking tone B
-    int tone_a_confirmed;         // 1 if tone A has been confirmed (duration met)
-    int tone_b_confirmed;         // 1 if tone B has been confirmed (duration met)
-    int tone_a_tracking_start;    // Start time when tone A tracking began
-    int tone_b_tracking_start;    // Start time when tone B tracking began
-    
-    // New tone detection
-    float detected_frequencies[100];  // Buffer for detected frequencies
-    int detected_frequency_count;
-    
-    // Thread control
-    int active;
+    int recording_start_time;   /* added */
+
+    float detected_frequencies[100];
+    int   detected_frequency_count;
+
     pthread_t thread;
     pthread_mutex_t mutex;
-    
-    // Statistics
+    int active;
+
     int total_detections;
     int tone_a_detections;
     int tone_b_detections;
     int new_tone_detections;
 };
 
-// Global tone detection state
 extern struct tone_detection_state global_tone_detection;
 
-// Function declarations
+/* lifecycle */
 int init_tone_detection(void);
 int start_tone_detection(void);
 void stop_tone_detection(void);
-void* tone_detection_thread(void* arg);
+void *tone_detection_thread(void *arg);
 
-// Configuration functions
-int load_tone_config_from_json(const char* filename);
-int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
-                       int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
-                       int record_length);
-int add_frequency_filter(const char* filter_id, float frequency, int range, const char* type);
-int set_tone_config(float threshold, float gain, int db_threshold, int detect_new_tones,
-                   int new_tone_length, int new_tone_range);
+/* processing */
+int analyze_frequency_spectrum(float *audio_samples, int sample_count);
+int detect_tone_sequence(float *audio_samples, int sample_count);
+int check_tone_definition(float frequency, struct tone_definition *tone_def, int is_tone_b);
+int apply_frequency_filters(float *magnitudes, int count);
+int apply_audio_frequency_filters(float *audio_samples, int sample_count);
+int check_tone_duration(int tone_type, int current_time, struct tone_definition *tone_def);
+void reset_tone_tracking(void);
+int detect_new_tones(float *magnitudes, int count);
 
-// Detection functions
-int detect_tone_sequence(float* audio_samples, int sample_count);
-int analyze_frequency_spectrum(float* audio_samples, int sample_count);
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b);
-int apply_frequency_filters(float* magnitudes, int count);
-int detect_new_tones(float* magnitudes, int count);
-
-// Utility functions
+/* utils */
 float frequency_to_bin(float frequency);
 float bin_to_frequency(int bin);
-float calculate_magnitude(fftw_complex complex_val);
-int is_frequency_in_range(float freq, float target, int range);
+float calculate_magnitude(fftw_complex cv);
+int   is_frequency_in_range(float freq, float target, int range);
 
-// Statistics functions
+/* statistics */
 void print_tone_detection_stats(void);
 void reset_tone_detection_stats(void);
 
-// Tone passthrough integration
+/* passthrough trigger */
 void trigger_tone_passthrough(void);
 
-// Audio filtering and duration detection functions
-int apply_audio_frequency_filters(float* audio_samples, int sample_count);
-int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def);
-void reset_tone_tracking(void);
+/* configuration (used by config.c) */
+int add_tone_definition(const char *tone_id, float tone_a_freq, float tone_b_freq,
+                        int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
+                        int record_length);
+int add_frequency_filter(const char *filter_id, float frequency, int range, const char *type);
+int set_tone_config(float threshold, float gain, int db_threshold, int detect_new_tones,
+                    int new_tone_length, int new_tone_range);
 
-#endif // TONE_DETECT_H
+#endif

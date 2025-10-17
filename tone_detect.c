@@ -517,6 +517,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                 current_time - global_tone_detection.recording_start_time >= tone_def->record_length_ms) {
                 global_tone_detection.recording_active = 0;
                 printf("[TONE] Recording stopped\n");
+                set_passthrough_output_mode(0); // Disable passthrough
                 break;
             }
         }
@@ -531,6 +532,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             global_tone_detection.current_tone_b_detected = 0;
             global_tone_detection.tone_sequence_active = 0;
             global_tone_detection.recording_active = 0;
+            set_passthrough_output_mode(0); // Disable passthrough
             printf("[TONE] Sequence reset due to timeout\n");
         }
     }
@@ -908,6 +910,7 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         if (!global_tone_detection.tone_definitions[i].valid) {
             strncpy(global_tone_detection.tone_definitions[i].tone_id, tone_id, 63);
+            global_tone_detection.tone_definitions[i].tone_id[63] = 0;
             global_tone_detection.tone_definitions[i].tone_a_freq = tone_a_freq;
             global_tone_detection.tone_definitions[i].tone_b_freq = tone_b_freq;
             global_tone_detection.tone_definitions[i].tone_a_length_ms = tone_a_length;
@@ -941,9 +944,11 @@ int add_frequency_filter(const char* filter_id, float frequency, int range, cons
     for (int i = 0; i < MAX_FILTERS; i++) {
         if (!global_tone_detection.filters[i].valid) {
             strncpy(global_tone_detection.filters[i].filter_id, filter_id, 63);
+            global_tone_detection.filters[i].filter_id[63] = 0;
             global_tone_detection.filters[i].frequency = frequency;
             global_tone_detection.filters[i].filter_range_hz = range;
             strncpy(global_tone_detection.filters[i].type, type, 15);
+            global_tone_detection.filters[i].type[15] = 0;
             global_tone_detection.filters[i].valid = 1;
             
             printf("[FILTER CONFIG] Added filter: %s (%.1f Hz, %s)\n",
