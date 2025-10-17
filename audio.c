@@ -111,11 +111,12 @@ int create_delayed_passthrough_output_stream(void) {
     printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
     sleep(3); // Wait 3 seconds for other channels to fully initialize
     
-    // CRITICAL: Passthrough target MUST work - keep trying until success
-    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
+    // CRITICAL: Passthrough target MUST work - try with limited attempts
+    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING WITH LIMITED ATTEMPTS ***\n");
     
     int attempt_count = 0;
-    while (1) { // Infinite loop until success
+    int max_attempts = 3; // Limit attempts to prevent infinite loop
+    while (attempt_count < max_attempts) {
         attempt_count++;
         printf("[DEBUG] *** PASSTHROUGH TARGET CREATION ATTEMPT #%d ***\n", attempt_count);
         
@@ -327,11 +328,16 @@ int create_delayed_passthrough_output_stream(void) {
         
         // If we get here, all attempts failed - wait and try again
         printf("[ERROR] *** ATTEMPT #%d FAILED - WAITING 5 SECONDS BEFORE RETRY ***\n", attempt_count);
-        printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - CONTINUING TO RETRY ***\n");
-        sleep(5); // Wait 5 seconds before next attempt
+        if (attempt_count < max_attempts) {
+            printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - CONTINUING TO RETRY ***\n");
+            sleep(5); // Wait 5 seconds before next attempt
+        } else {
+            printf("[CRITICAL] *** ALL %d ATTEMPTS FAILED - PASSTHROUGH TARGET CANNOT BE CREATED ***\n", max_attempts);
+        }
     }
     
-    // This should never be reached due to infinite loop above
+    // If we get here, all attempts failed
+    printf("[CRITICAL] *** PASSTHROUGH TARGET CREATION FAILED AFTER %d ATTEMPTS ***\n", max_attempts);
     return 0;
 }
 
