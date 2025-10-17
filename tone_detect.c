@@ -176,18 +176,24 @@ void* tone_detection_thread(void* arg) {
         
         // Process audio for tone detection
         if (samples_to_process > 0) {
-            // Apply gain
+            // CRITICAL FIX: Create a working copy to avoid modifying original audio samples
+            float working_buffer[SAMPLES_PER_FRAME];
             for (int i = 0; i < samples_to_process; i++) {
-                audio_buffer[i] *= global_tone_detection.config.gain;
+                working_buffer[i] = audio_buffer[i];
             }
             
-            // Apply frequency filters to actual audio samples
-            apply_audio_frequency_filters(audio_buffer, samples_to_process);
+            // Apply gain to working copy only
+            for (int i = 0; i < samples_to_process; i++) {
+                working_buffer[i] *= global_tone_detection.config.gain;
+            }
             
-            // Analyze frequency spectrum
-            if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
-                // Detect tone sequences with proper duration tracking
-                detect_tone_sequence(audio_buffer, samples_to_process);
+            // Apply frequency filters to working copy only (not original audio)
+            apply_audio_frequency_filters(working_buffer, samples_to_process);
+            
+            // Analyze frequency spectrum using working copy
+            if (analyze_frequency_spectrum(working_buffer, samples_to_process)) {
+                // Detect tone sequences with proper duration tracking using working copy
+                detect_tone_sequence(working_buffer, samples_to_process);
             }
             
             samples_processed += samples_to_process;
