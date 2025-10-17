@@ -33,7 +33,13 @@ struct tone_passthrough_control global_tone_passthrough = {0};
 // Get the index of the passthrough target channel
 int get_passthrough_target_channel_index(void) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    printf("[DEBUG] get_passthrough_target_channel_index: tone_cfg=%p\n", tone_cfg);
+    if (tone_cfg) {
+        printf("[DEBUG] get_passthrough_target_channel_index: tone_passthrough=%d, passthrough_channel='%s'\n", 
+               tone_cfg->tone_passthrough, tone_cfg->passthrough_channel);
+    }
     if (!tone_cfg || !tone_cfg->tone_passthrough) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning -1 (no config or passthrough disabled)\n");
         return -1;
     }
     // FALLBACK: If channel_four is configured but Device 3 is input-only, use channel_two instead
@@ -41,19 +47,31 @@ int get_passthrough_target_channel_index(void) {
         printf("[WARNING] channel_four (Device 3) is input-only - using channel_two (Device 1) as passthrough target\n");
         return 1; // Use channel_two (666) which has working output
     }
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 2 (channel_three)\n");
+        return 2;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 1 (channel_two)\n");
+        return 1;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 0 (channel_one)\n");
+        return 0;
+    }
+    printf("[DEBUG] get_passthrough_target_channel_index: returning -1 (unknown channel)\n");
     return -1;
 }
 
 // Create delayed output stream for configured passthrough target channel
 int create_delayed_passthrough_output_stream(void) {
+    printf("[DEBUG] *** create_delayed_passthrough_output_stream() CALLED ***\n");
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     
     // Get the configured passthrough target channel from config
     int passthrough_index = get_passthrough_target_channel_index();
+    printf("[DEBUG] create_delayed_passthrough_output_stream: passthrough_index=%d\n", passthrough_index);
     if (passthrough_index == -1) {
         printf("[DEBUG] No passthrough target configured - skipping delayed output stream creation\n");
         return 1; // Not an error, just no passthrough configured
