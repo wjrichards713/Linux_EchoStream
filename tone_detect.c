@@ -14,6 +14,28 @@
 // Global tone detection state
 struct tone_detection_state global_tone_detection = {0};
 
+/* Accumulation buffer for high-resolution FFT */
+static float accum_buffer[ACCUM_BUFFER_SIZE];
+static int accum_pos = 0;
+
+/* Helper: push samples into accumulation buffer (ring) */
+static void accum_push(const float *samples, int count) {
+    for (int i = 0; i < count; i++) {
+        accum_buffer[accum_pos++] = samples[i];
+        if (accum_pos >= ACCUM_BUFFER_SIZE) accum_pos = 0;
+    }
+}
+
+/* Helper: copy latest FFT_SIZE samples (handles wrap) into out[] */
+static void accum_snapshot(float *out) {
+    int start = accum_pos; // next write position = oldest sample
+    int idx = 0;
+    for (int i = 0; i < ACCUM_BUFFER_SIZE; i++) {
+        int src = (start + i) % ACCUM_BUFFER_SIZE;
+        out[idx++] = accum_buffer[src];
+    }
+}
+
 // Initialize tone detection system
 int init_tone_detection(void) {
     // Save existing tone definitions before clearing
@@ -176,18 +198,27 @@ void* tone_detection_thread(void* arg) {
         
         // Process audio for tone detection
         if (samples_to_process > 0) {
-            // Apply gain
-            for (int i = 0; i < samples_to_process; i++) {
+            for (int i = 0; i < samples_to_process; i++)
                 audio_buffer[i] *= global_tone_detection.config.gain;
-            }
-            
-            // Apply frequency filters to actual audio samples
+
             apply_audio_frequency_filters(audio_buffer, samples_to_process);
-            
-            // Analyze frequency spectrum
-            if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
-                // Detect tone sequences with proper duration tracking
-                detect_tone_sequence(audio_buffer, samples_to_process);
+
+            /* Push into accumulation buffer */
+            accum_push(audio_buffer, samples_to_process);
+
+            /* Only run FFT when accumulation has wrapped at least once */
+            static int accum_filled = 0;
+            static int fft_run_count = 0;
+            if (accum_pos == 0) accum_filled = 1;
+
+            if (accum_filled) {
+                float fft_block[FFT_SIZE];
+                accum_snapshot(fft_block);
+                if (analyze_frequency_spectrum(fft_block, FFT_SIZE)) {
+                    detect_tone_sequence(fft_block, FFT_SIZE);
+                    fft_run_count++;
+                }
+                /* Rate-limit new tone logging by only allowing detect_new_tones inside detect_tone_sequence; further suppression below */
             }
             
             samples_processed += samples_to_process;
@@ -723,6 +754,10 @@ void reset_tone_tracking(void) {
 
 // Detect new tones
 int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
+    static int call_count = 0;
+    call_count++;
+    if (call_count % 300 != 0) return 1;  // skip most calls
+
     // Simple new tone detection - look for strong peaks not in defined tones
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         float freq = global_tone_detection.peak_frequencies[i];
@@ -757,7 +792,7 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                 global_tone_detection.new_tone_detections++;
                 // Suppress NEW TONE logs for frequencies within any configured tone window
                 if (!is_known_tone) {
-                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
+                    printf("[NEW TONE] %.1f Hz\n", freq);
                 }
             }
         }

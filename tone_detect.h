@@ -6,11 +6,15 @@
 
 #define MAX_TONE_DEFINITIONS 10
 #define MAX_FILTERS 10
-#define FFT_SIZE 1024
+#undef FFT_SIZE
+#define FFT_SIZE 4096              /* higher resolution for ±5–6 Hz tone ranges */
 #define SAMPLE_RATE 48000
+#undef FREQ_BINS
 #define FREQ_BINS (FFT_SIZE / 2 + 1)
 #define SAMPLES_PER_FRAME 1920
 #define MAX_PEAKS 64
+
+#define ACCUM_BUFFER_SIZE FFT_SIZE /* accumulation buffer size for windowed FFT */
 
 struct tone_definition {
     char  tone_id[64];
