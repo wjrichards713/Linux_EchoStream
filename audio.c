@@ -274,6 +274,32 @@ int create_delayed_passthrough_output_stream(void) {
         printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
                output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
         
+        // CRITICAL: Test format support BEFORE attempting to create stream
+        printf("[DEBUG] *** TESTING FORMAT SUPPORT FOR DUPLEX STREAM ***\n");
+        PaError format_test = Pa_IsFormatSupported(&input_params, &output_params, FORCED_SAMPLE_RATE);
+        if (format_test == paFormatIsSupported) {
+            printf("[DEBUG] *** FORMAT SUPPORT TEST PASSED - DUPLEX STREAM SHOULD WORK ***\n");
+        } else {
+            printf("[ERROR] *** FORMAT SUPPORT TEST FAILED: %s (code: %d) ***\n", Pa_GetErrorText(format_test), format_test);
+            printf("[ERROR] *** Device %d does not support duplex stream with sample rate %d ***\n", 
+                   output_params.device, FORCED_SAMPLE_RATE);
+            
+            // Try with device's default sample rate instead
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(output_params.device);
+            if (device_info) {
+                double default_rate = device_info->defaultSampleRate;
+                printf("[DEBUG] *** TRYING WITH DEVICE DEFAULT SAMPLE RATE: %.0f Hz ***\n", default_rate);
+                format_test = Pa_IsFormatSupported(&input_params, &output_params, default_rate);
+                if (format_test == paFormatIsSupported) {
+                    printf("[DEBUG] *** FORMAT SUPPORT TEST PASSED WITH DEFAULT RATE %.0f Hz ***\n", default_rate);
+                    // Update the sample rate to use device default
+                    FORCED_SAMPLE_RATE = (int)default_rate;
+                } else {
+                    printf("[ERROR] *** FORMAT SUPPORT TEST FAILED EVEN WITH DEFAULT RATE: %s ***\n", Pa_GetErrorText(format_test));
+                }
+            }
+        }
+        
         PaError err = paNoError;
         for (int j = 0; j < 6 && err != paNoError; j++) {
             printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
@@ -320,6 +346,10 @@ int create_delayed_passthrough_output_stream(void) {
                 printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
                 printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
                        output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
+                printf("[ERROR] Input params: device=%d, channels=%d, format=%d, latency=%f\n",
+                       input_params.device, input_params.channelCount, input_params.sampleFormat, input_params.suggestedLatency);
+                printf("[ERROR] Output params: device=%d, channels=%d, format=%d, latency=%f\n",
+                       output_params.device, output_params.channelCount, output_params.sampleFormat, output_params.suggestedLatency);
                 err = paNoError; // Try next buffer size
             }
         }
