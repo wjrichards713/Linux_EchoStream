@@ -2140,6 +2140,9 @@ int setup_tone_passthrough(int source_channel, int target_channel) {
 
 // Start tone passthrough
 int start_tone_passthrough(void) {
+    printf("[TONE PASSTHROUGH] DISABLED - using software passthrough instead to prevent audio conflicts\n");
+    return 1; // Success but disabled
+    
     pthread_mutex_lock(&global_tone_passthrough.mutex);
     
     if (global_tone_passthrough.active) {

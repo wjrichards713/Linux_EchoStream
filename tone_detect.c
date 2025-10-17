@@ -823,78 +823,12 @@ void trigger_tone_passthrough(void) {
                 // Enable passthrough mode; audio.c routes to the configured target from JSON
                 set_passthrough_output_mode(1);
             } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - attempting to create one\n");
+                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream\n");
+                printf("[TONE PASSTHROUGH] DISABLED: Not creating conflicting output stream - using software passthrough instead\n");
                 
-                // Try to create an output stream for the passthrough target using our device conflict resolution
-                extern struct channel_context channels[];
-                if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-                    printf("[TONE PASSTHROUGH] Attempting to create output stream for passthrough target channel %d\n", target_channel_idx);
-                    
-                    // Use the same device conflict resolution logic as the main audio system
-                    extern PaDeviceIndex usb_devices[MAX_CHANNELS];
-                    PaDeviceIndex fallback_output = paNoDevice;
-                    
-                    // Find an ALSA USB device with output channels that's not in use
-                    for (int i = 0; i < MAX_CHANNELS; i++) {
-                        PaDeviceIndex cand = usb_devices[i];
-                        if (cand == paNoDevice) continue;
-                        
-                        // Check if this device is already being used by another channel for output
-                        int device_in_use = 0;
-                        for (int j = 0; j < MAX_CHANNELS; j++) {
-                            if (j != target_channel_idx && channels[j].audio.output_stream != NULL) {
-                                if (channels[j].audio.device_index == cand) {
-                                    device_in_use = 1;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        if (device_in_use) continue; // Skip devices already in use
-                        
-                        const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
-                        if (cand_info && cand_info->maxOutputChannels > 0) {
-                            // Only use ALSA devices, skip PulseAudio and default
-                            const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
-                            if (host_api && strcmp(host_api->name, "ALSA") == 0) {
-                                fallback_output = cand;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (fallback_output != paNoDevice) {
-                        printf("[TONE PASSTHROUGH] Using ALSA device %d for passthrough output\n", fallback_output);
-                        
-                        PaStreamParameters output_params;
-                        output_params.device = fallback_output;
-                        output_params.channelCount = 2;  // Try stereo first
-                        output_params.sampleFormat = paFloat32;
-                        output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
-                        output_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        PaError err = Pa_OpenStream(&channels[target_channel_idx].audio.output_stream, NULL, &output_params, 48000, 1024, 
-                                                    paClipOff, audio_output_callback, &channels[target_channel_idx].audio);
-                        
-                        if (err == paNoError) {
-                            printf("[TONE PASSTHROUGH] Successfully created output stream for passthrough target\n");
-                            // Start the output stream
-                            err = Pa_StartStream(channels[target_channel_idx].audio.output_stream);
-                            if (err == paNoError) {
-                                printf("[TONE PASSTHROUGH] Output stream started for passthrough target\n");
-                                set_passthrough_output_mode(1);
-                            } else {
-                                printf("[TONE PASSTHROUGH] Failed to start output stream: %s\n", Pa_GetErrorText(err));
-                            }
-                        } else {
-                            printf("[TONE PASSTHROUGH] Failed to create output stream: %s\n", Pa_GetErrorText(err));
-                        }
-                    } else {
-                        printf("[TONE PASSTHROUGH] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
-                        printf("[TONE PASSTHROUGH] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
-                        printf("[TONE PASSTHROUGH] Cannot create passthrough output stream - no available devices\n");
-                    }
-                }
+                // DISABLED: This was creating a conflicting audio stream that caused choppy noise
+                // Our software passthrough in audio_output_callback handles this correctly
+                set_passthrough_output_mode(1);
             }
         } else {
             printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
