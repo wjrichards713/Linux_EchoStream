@@ -1060,37 +1060,36 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         // COMPLETELY CLEAN PASSTHROUGH - NO PROCESSING AT ALL
         // Direct copy of raw input samples to preserve original audio quality
         
-        // Update shared buffer with raw samples
+        // Update shared buffer with raw samples - use actual frame size
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = 0.0f;
-        }
+        // Clear only the portion we'll use
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_shared_buffer.samples[i] = samples[i]; // Raw copy - no processing
+        }
+        // Clear any unused portion to prevent noise
+        for (unsigned long i = frames; i < SAMPLES_PER_FRAME; i++) {
+            global_shared_buffer.samples[i] = 0.0f;
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Update passthrough buffer with raw samples
+        // Update passthrough buffer with raw samples - use actual frame size
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
-        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = 0.0f;
-        }
+        // Copy only the actual frame data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
             global_passthrough_buffer.samples[i] = samples[i]; // Raw copy - no processing
+        }
+        // Clear any unused portion to prevent noise
+        for (unsigned long i = frames; i < SAMPLES_PER_FRAME; i++) {
+            global_passthrough_buffer.samples[i] = 0.0f;
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         
-        // Debug logging for buffers
-        static int buffer_count = 0;
-        if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (noise reduced)\n", 
-                   frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
-        }
+        // No debug logging to avoid timing issues
     } else {
         // When passthrough is not active, mark buffers invalid to avoid stale audio
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
@@ -1193,16 +1192,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            static float last_frame[SAMPLES_PER_FRAME];
-            static unsigned long last_frame_len = 0;
-            static int have_last_frame = 0;
-
+            // ABSOLUTELY MINIMAL PASSTHROUGH - NO CACHING, NO LOOPING, NO EXTRA LOGIC
             for (unsigned long i = 0; i < samples_to_process; i++) {
-                float sample = global_passthrough_buffer.samples[i]; // raw
-                
-                // Safety clamping to prevent digital overload
-                if (sample > 0.99f) sample = 0.99f;
-                else if (sample < -0.99f) sample = -0.99f;
+                float sample = global_passthrough_buffer.samples[i]; // raw sample - no processing at all
                 
                 // Duplicate mono to both stereo channels or write mono
                 if (output_channels >= 2) {
@@ -1211,61 +1203,35 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 } else {
                     out[i] = sample; // Mono output
                 }
-
-                if (i < SAMPLES_PER_FRAME) last_frame[i] = sample;
             }
-            last_frame_len = samples_to_process;
-            have_last_frame = 1;
             
-            // Fill any remainder with silence
+            // Fill any remainder with silence - no fancy logic
             for (unsigned long i = samples_to_process; i < frames; i++) {
                 if (output_channels >= 2) {
-                    float s = have_last_frame && last_frame_len > 0 ? last_frame[last_frame_len - 1] : 0.0f;
-                    out[i * 2] = s;     // Left channel
-                    out[i * 2 + 1] = s; // Right channel
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
                 } else {
-                    out[i] = have_last_frame && last_frame_len > 0 ? last_frame[last_frame_len - 1] : 0.0f;
+                    out[i] = 0.0f; // Mono output
                 }
             }
             
             // Keep buffer valid for smooth playback - don't invalidate to prevent choppy noise
             // The buffer will be overwritten by new audio data from input callback
         } else {
-            // No audio data - repeat last good frame to avoid choppy gaps
+            // No audio data - fill with silence (no caching logic)
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            extern float __unused; // keep compiler happy if not used
-            static float last_frame[SAMPLES_PER_FRAME];
-            static unsigned long last_frame_len = 0;
-            static int have_last_frame = 0;
-            if (have_last_frame && last_frame_len > 0) {
-                for (unsigned long i = 0; i < frames; i++) {
-                    float s = last_frame[i % last_frame_len];
-                    if (output_channels >= 2) {
-                        out[i * 2] = s;
-                        out[i * 2 + 1] = s;
-                    } else {
-                        out[i] = s;
-                    }
-                }
-            } else {
-                for (unsigned long i = 0; i < frames; i++) {
-                    if (output_channels >= 2) {
-                        out[i * 2] = 0.0f;     // Left channel
-                        out[i * 2 + 1] = 0.0f; // Right channel
-                    } else {
-                        out[i] = 0.0f; // Mono output
-                    }
+            for (unsigned long i = 0; i < frames; i++) {
+                if (output_channels >= 2) {
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
+                } else {
+                    out[i] = 0.0f; // Mono output
                 }
             }
             
-            // Debug: no audio data in passthrough buffer
-            static int no_audio_count = 0;
-            if (no_audio_count++ % 100 == 0) {
-                printf("[DEBUG] Passthrough mode active but no audio in passthrough buffer: valid=%d, sample_count=%d\n", 
-                       global_passthrough_buffer.valid, global_passthrough_buffer.sample_count);
-            }
+            // No debug logging to avoid timing issues
         }
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
@@ -1342,7 +1308,7 @@ void* audio_passthrough_thread(void* arg) {
         // DISABLED: This thread conflicts with callback-based passthrough
         // Use only the audio_output_callback approach to prevent choppy noise
         usleep(50000); // 50ms delay - thread is effectively disabled
-        continue;
+            continue;
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
