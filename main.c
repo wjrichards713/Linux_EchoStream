@@ -187,18 +187,13 @@ int main(int argc, char *argv[]) {
     
     // Wait for channel initialization to complete before creating passthrough target output stream
     printf("\n=== WAITING FOR CHANNEL INITIALIZATION TO COMPLETE ===\n");
-    printf("[INFO] Waiting 10 seconds for all channels to be fully initialized...\n");
-    sleep(10); // Wait for channel initialization to complete
-    
-    // Create delayed output stream for configured passthrough target channel
-    printf("\n=== CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET ===\n");
-    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
-    printf("[DEBUG] *** ABOUT TO CALL create_delayed_passthrough_output_stream() ***\n");
-    fflush(stdout); // Force output flush
+    printf("[INFO] Waiting 5 seconds for all channels to be initialized...\n");
+    sleep(5);
+    printf("\n=== PASSTHROUGH OUTPUT INITIALIZATION ===\n");
     if (create_delayed_passthrough_output_stream()) {
-        printf("[SUCCESS] Passthrough target output stream created successfully!\n");
+        printf("[INFO] Passthrough target output stream ready\n");
     } else {
-        printf("[CRITICAL] *** THIS SHOULD NEVER HAPPEN - PASSTHROUGH TARGET MUST WORK ***\n");
+        printf("[WARNING] Passthrough target output stream not available (will operate without passthrough)\n");
     }
     
     printf("\n=== SYSTEM BEHAVIOR ===\n");

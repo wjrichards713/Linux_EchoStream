@@ -277,8 +277,14 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
     float absolute_db_threshold = powf(10.0f, global_tone_detection.config.db_threshold / 20.0f);
     
     // Use the more permissive of the two thresholds
-    float relative_threshold = max_magnitude * 0.20f;  /* raised from 0.10 to cut weak noise peaks */
+    float relative_threshold = max_magnitude * 0.30f; /* raised from 0.20 -> 0.30 for stronger noise rejection */
     float magnitude_threshold = (absolute_db_threshold > relative_threshold) ? relative_threshold : absolute_db_threshold;
+
+    /* Noise floor skip: if overall energy very low, skip peak detection entirely */
+    if (max_magnitude < absolute_db_threshold * 2.0f) {
+        global_tone_detection.peak_count = 0;
+        return 1; /* treat as analyzed but no peaks (silence) */
+    }
     
     // Debug output for threshold analysis
     static int debug_count = 0;
@@ -564,15 +570,15 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
 int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
     static int call_count = 0;
     call_count++;
-    if (call_count % 1000 != 0) return 1;  /* much slower: roughly once per ~1s+ */
+    if (call_count % 1200 != 0) return 1; /* slower (~>1s) */
     static int minute_counter = 0;
     static int new_tones_this_minute = 0;
-    if (++minute_counter >= 48000 / (FFT_SIZE ? (FFT_SIZE) : 4096)) { /* approx each second */
+    if (++minute_counter >= 60) { /* rough minute bucket */
         minute_counter = 0;
         new_tones_this_minute = 0;
     }
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
-        if (new_tones_this_minute >= 5) break; /* cap logs per minute */
+        if (new_tones_this_minute >= 2) break; /* cap to 2 per minute */
         float freq = global_tone_detection.peak_frequencies[i];
         int known = 0, dup = 0;
         // Check if this frequency matches any defined tone
