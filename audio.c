@@ -267,7 +267,7 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        const int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
+        int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
         int buffer_sizes[] = {1024, 2048, 512, 256, 4096, 8192}; // Balanced approach
         
         printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR DELAYED CREATION ***\n");
@@ -346,9 +346,9 @@ int create_delayed_passthrough_output_stream(void) {
                 printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
                 printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
                        output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
-                printf("[ERROR] Input params: device=%d, channels=%d, format=%d, latency=%f\n",
+                printf("[ERROR] Input params: device=%d, channels=%d, format=%ld, latency=%f\n",
                        input_params.device, input_params.channelCount, input_params.sampleFormat, input_params.suggestedLatency);
-                printf("[ERROR] Output params: device=%d, channels=%d, format=%d, latency=%f\n",
+                printf("[ERROR] Output params: device=%d, channels=%d, format=%ld, latency=%f\n",
                        output_params.device, output_params.channelCount, output_params.sampleFormat, output_params.suggestedLatency);
                 err = paNoError; // Try next buffer size
             }
