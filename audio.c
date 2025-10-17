@@ -856,6 +856,17 @@ int initialize_audio_devices(void) {
     // Configure ALSA to ensure all USB audio devices are available
     printf("[AUDIO INIT] Configuring ALSA audio devices...\n");
     
+    // CRITICAL: Remove ALSA loopback devices that cause hardware passthrough conflicts
+    printf("[AUDIO INIT] Checking for and removing ALSA loopback devices...\n");
+    
+    // Check if loopback devices exist
+    system("lsmod | grep snd-aloop && echo '[WARNING] ALSA loopback device detected - removing...' || echo '[INFO] No ALSA loopback device found'");
+    system("lsmod | grep snd-dummy && echo '[WARNING] ALSA dummy device detected - removing...' || echo '[INFO] No ALSA dummy device found'");
+    
+    system("sudo modprobe -r snd-aloop 2>/dev/null || true");
+    system("sudo modprobe -r snd-dummy 2>/dev/null || true");
+    usleep(200000); // 200ms
+    
     // Force reload ALSA modules
     system("sudo modprobe -r snd-usb-audio 2>/dev/null || true");
     usleep(200000); // 200ms
@@ -1197,13 +1208,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pt_was_passthrough = 1;
         
-        // TEMPORARY TEST: Completely disable software passthrough to isolate hardware passthrough
-        // Fill with silence to see if clean tones come from hardware passthrough
-        printf("[DEBUG] PASSTHROUGH MODE - FILLING WITH SILENCE TO TEST HARDWARE PASSTHROUGH\n");
-        for (unsigned long i = 0; i < frames; i++) {
-            out[i] = 0.0f;
-        }
-        return paContinue;
+        // RESTORED: Software passthrough is working correctly
+        // The hardware passthrough was causing the noise conflict
         
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
