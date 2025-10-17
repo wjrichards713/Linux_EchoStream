@@ -33,7 +33,13 @@ struct tone_passthrough_control global_tone_passthrough = {0};
 // Get the index of the passthrough target channel
 int get_passthrough_target_channel_index(void) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
+    printf("[DEBUG] get_passthrough_target_channel_index: tone_cfg=%p\n", tone_cfg);
+    if (tone_cfg) {
+        printf("[DEBUG] get_passthrough_target_channel_index: tone_passthrough=%d, passthrough_channel='%s'\n", 
+               tone_cfg->tone_passthrough, tone_cfg->passthrough_channel);
+    }
     if (!tone_cfg || !tone_cfg->tone_passthrough) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning -1 (no config or passthrough disabled)\n");
         return -1;
     }
     // FALLBACK: If channel_four is configured but Device 3 is input-only, use channel_two instead
@@ -41,19 +47,32 @@ int get_passthrough_target_channel_index(void) {
         printf("[WARNING] channel_four (Device 3) is input-only - using channel_two (Device 1) as passthrough target\n");
         return 1; // Use channel_two (666) which has working output
     }
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 2 (channel_three)\n");
+        return 2;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 1 (channel_two)\n");
+        return 1;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+        printf("[DEBUG] get_passthrough_target_channel_index: returning 0 (channel_one)\n");
+        return 0;
+    }
+    printf("[DEBUG] get_passthrough_target_channel_index: returning -1 (unknown channel)\n");
     return -1;
 }
 
 // Create delayed output stream for configured passthrough target channel
 int create_delayed_passthrough_output_stream(void) {
+    printf("[DEBUG] *** create_delayed_passthrough_output_stream() CALLED ***\n");
+    fflush(stdout); // Force output flush
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     
     // Get the configured passthrough target channel from config
     int passthrough_index = get_passthrough_target_channel_index();
+    printf("[DEBUG] create_delayed_passthrough_output_stream: passthrough_index=%d\n", passthrough_index);
     if (passthrough_index == -1) {
         printf("[DEBUG] No passthrough target configured - skipping delayed output stream creation\n");
         return 1; // Not an error, just no passthrough configured
@@ -69,29 +88,10 @@ int create_delayed_passthrough_output_stream(void) {
     printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
     
     if (audio_stream->input_stream == NULL) {
-        printf("[CRITICAL] *** INPUT STREAM IS NULL - RECREATING IT FIRST ***\n");
-        // Recreate the input stream before attempting output stream creation
-        PaStreamParameters input_params;
-        input_params.device = audio_stream->device_index;
-        input_params.channelCount = 1;
-        input_params.sampleFormat = paFloat32;
-        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-        input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
-        if (err == paNoError) {
-            err = Pa_StartStream(audio_stream->input_stream);
-            if (err == paNoError) {
-                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-            } else {
-                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
+        printf("[CRITICAL] *** INPUT STREAM IS NULL - THIS SHOULD NOT HAPPEN ***\n");
+        printf("[ERROR] Passthrough target channel %d has no input stream - cannot create output stream\n", passthrough_index);
+        printf("[ERROR] The input stream should have been created during main channel initialization\n");
                 return 0;
-            }
-        } else {
-            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
-            return 0;
-        }
     } else {
         printf("[DEBUG] Input stream exists - checking if active\n");
         if (Pa_IsStreamActive(audio_stream->input_stream)) {
@@ -111,11 +111,12 @@ int create_delayed_passthrough_output_stream(void) {
     printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
     sleep(3); // Wait 3 seconds for other channels to fully initialize
     
-    // CRITICAL: Passthrough target MUST work - keep trying until success
-    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
+    // CRITICAL: Passthrough target MUST work - try with limited attempts
+    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING WITH LIMITED ATTEMPTS ***\n");
     
     int attempt_count = 0;
-    while (1) { // Infinite loop until success
+    int max_attempts = 3; // Limit attempts to prevent infinite loop
+    while (attempt_count < max_attempts) {
         attempt_count++;
         printf("[DEBUG] *** PASSTHROUGH TARGET CREATION ATTEMPT #%d ***\n", attempt_count);
         
@@ -132,10 +133,31 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        // Now try to create the output stream with aggressive error handling
+        // CRITICAL: Create a duplex stream (input+output) instead of separate streams
+        // This avoids device conflicts and is the proper way to handle passthrough
+        printf("[DEBUG] Creating duplex stream for passthrough target (input+output on same device)\n");
+        
+        // First, close the existing input stream to free the device
+        if (audio_stream->input_stream != NULL) {
+            printf("[DEBUG] Closing existing input stream to create duplex stream\n");
+            Pa_StopStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->input_stream);
+            audio_stream->input_stream = NULL;
+            usleep(500000); // Wait 500ms for device to be fully released
+        }
+        
+        // Set up input parameters for duplex stream
+        PaStreamParameters input_params;
+        input_params.device = audio_stream->device_index;
+        input_params.channelCount = 1;
+        input_params.sampleFormat = paFloat32;
+        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+        input_params.hostApiSpecificStreamInfo = NULL;
+        
+        // Set up output parameters for duplex stream
         PaStreamParameters output_params;
-        output_params.device = audio_stream->device_index;
-        output_params.channelCount = 2; // Changed from 1 to 2 based on user's CLI test results
+        output_params.device = audio_stream->device_index; // Same device for duplex
+        output_params.channelCount = 2;
         output_params.sampleFormat = paFloat32;
         output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
         output_params.hostApiSpecificStreamInfo = NULL;
@@ -246,61 +268,65 @@ int create_delayed_passthrough_output_stream(void) {
             continue;
         }
         
-        const int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
+        int FORCED_SAMPLE_RATE = SAMPLE_RATE; // Use consistent 48000 Hz
         int buffer_sizes[] = {1024, 2048, 512, 256, 4096, 8192}; // Balanced approach
         
         printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR DELAYED CREATION ***\n");
         printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
                output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
         
+        // CRITICAL: Test format support BEFORE attempting to create stream
+        printf("[DEBUG] *** TESTING FORMAT SUPPORT FOR DUPLEX STREAM ***\n");
+        PaError format_test = Pa_IsFormatSupported(&input_params, &output_params, FORCED_SAMPLE_RATE);
+        if (format_test == paFormatIsSupported) {
+            printf("[DEBUG] *** FORMAT SUPPORT TEST PASSED - DUPLEX STREAM SHOULD WORK ***\n");
+        } else {
+            printf("[ERROR] *** FORMAT SUPPORT TEST FAILED: %s (code: %d) ***\n", Pa_GetErrorText(format_test), format_test);
+            printf("[ERROR] *** Device %d does not support duplex stream with sample rate %d ***\n", 
+                   output_params.device, FORCED_SAMPLE_RATE);
+            
+            // Try with device's default sample rate instead
+            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(output_params.device);
+            if (device_info) {
+                double default_rate = device_info->defaultSampleRate;
+                printf("[DEBUG] *** TRYING WITH DEVICE DEFAULT SAMPLE RATE: %.0f Hz ***\n", default_rate);
+                format_test = Pa_IsFormatSupported(&input_params, &output_params, default_rate);
+                if (format_test == paFormatIsSupported) {
+                    printf("[DEBUG] *** FORMAT SUPPORT TEST PASSED WITH DEFAULT RATE %.0f Hz ***\n", default_rate);
+                    // Update the sample rate to use device default
+                    FORCED_SAMPLE_RATE = (int)default_rate;
+                } else {
+                    printf("[ERROR] *** FORMAT SUPPORT TEST FAILED EVEN WITH DEFAULT RATE: %s ***\n", Pa_GetErrorText(format_test));
+                }
+            }
+        }
+        
         PaError err = paNoError;
-        for (int j = 0; j < 6 && err != paNoError; j++) {
+        for (int j = 0; j < 6; j++) {
             printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
                    j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                    // Create duplex stream (input+output) and use output callback to ensure output is filled
+                    err = Pa_OpenStream(&audio_stream->output_stream, &input_params, &output_params, 
                                FORCED_SAMPLE_RATE, buffer_sizes[j], 
                                paClipOff, audio_output_callback, audio_stream);
             
             if (err == paNoError) {
-                printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+                printf("[DEBUG] *** SUCCESS! Delayed duplex stream created with sample_rate=%d, buffer_size=%d ***\n", 
                        FORCED_SAMPLE_RATE, buffer_sizes[j]);
                 
-                // Start the stream
+                // Start the duplex stream
                 err = Pa_StartStream(audio_stream->output_stream);
                 if (err == paNoError) {
-                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
+                    printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED DUPLEX STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
                     printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n", 
                            passthrough_index, global_channel_ids[passthrough_index]);
                     
-                    // If we closed the input stream to create the output stream, recreate it now
-                    if (audio_stream->input_stream == NULL) {
-                        printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d ***\n", passthrough_index);
-                        // Recreate input stream with same parameters as before
-                        PaStreamParameters input_params;
-                        input_params.device = audio_stream->device_index;
-                        input_params.channelCount = 1;
-                        input_params.sampleFormat = paFloat32;
-                        input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-                        input_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                                           paClipOff, audio_input_callback, audio_stream);
-                        if (err == paNoError) {
-                            err = Pa_StartStream(audio_stream->input_stream);
-                            if (err == paNoError) {
-                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER RECREATION: %p ***\n", (void*)audio_stream->input_stream);
-                            } else {
-                                printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
-                            }
-                        } else {
-                            printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
-                        }
-                    }
+                    // Set the input stream pointer to the same duplex stream
+                    audio_stream->input_stream = audio_stream->output_stream;
+                    printf("[DEBUG] *** INPUT STREAM POINTER SET TO DUPLEX STREAM FOR CHANNEL %d ***\n", passthrough_index);
                     
-                    return 1; // SUCCESS - exit the infinite loop
+                    return 1; // SUCCESS - exit the function
                 } else {
                     printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
                     Pa_CloseStream(audio_stream->output_stream);
@@ -321,17 +347,26 @@ int create_delayed_passthrough_output_stream(void) {
                 printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
                 printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
                        output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
+                printf("[ERROR] Input params: device=%d, channels=%d, format=%ld, latency=%f\n",
+                       input_params.device, input_params.channelCount, input_params.sampleFormat, input_params.suggestedLatency);
+                printf("[ERROR] Output params: device=%d, channels=%d, format=%ld, latency=%f\n",
+                       output_params.device, output_params.channelCount, output_params.sampleFormat, output_params.suggestedLatency);
                 err = paNoError; // Try next buffer size
             }
         }
         
         // If we get here, all attempts failed - wait and try again
         printf("[ERROR] *** ATTEMPT #%d FAILED - WAITING 5 SECONDS BEFORE RETRY ***\n", attempt_count);
+        if (attempt_count < max_attempts) {
         printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - CONTINUING TO RETRY ***\n");
         sleep(5); // Wait 5 seconds before next attempt
+        } else {
+            printf("[CRITICAL] *** ALL %d ATTEMPTS FAILED - PASSTHROUGH TARGET CANNOT BE CREATED ***\n", max_attempts);
+        }
     }
     
-    // This should never be reached due to infinite loop above
+    // If we get here, all attempts failed
+    printf("[CRITICAL] *** PASSTHROUGH TARGET CREATION FAILED AFTER %d ATTEMPTS ***\n", max_attempts);
     return 0;
 }
 
@@ -792,8 +827,7 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
         return 0;
     }
     
-    // Run periodic repair attempts
-    periodic_passthrough_repair();
+    // Passthrough repair disabled in minimal pipeline
     
     // SIMPLIFIED: Directly check if this is Channel 4 (the configured passthrough target)
     // Channel 4 is always index 3 and has ID "channel_4"
@@ -856,6 +890,17 @@ int initialize_audio_devices(void) {
     
     // Configure ALSA to ensure all USB audio devices are available
     printf("[AUDIO INIT] Configuring ALSA audio devices...\n");
+    
+    // CRITICAL: Remove ALSA loopback devices that cause hardware passthrough conflicts
+    printf("[AUDIO INIT] Checking for and removing ALSA loopback devices...\n");
+    
+    // Check if loopback devices exist
+    system("lsmod | grep snd-aloop && echo '[WARNING] ALSA loopback device detected - removing...' || echo '[INFO] No ALSA loopback device found'");
+    system("lsmod | grep snd-dummy && echo '[WARNING] ALSA dummy device detected - removing...' || echo '[INFO] No ALSA dummy device found'");
+    
+    system("sudo modprobe -r snd-aloop 2>/dev/null || true");
+    system("sudo modprobe -r snd-dummy 2>/dev/null || true");
+    usleep(200000); // 200ms
     
     // Force reload ALSA modules
     system("sudo modprobe -r snd-usb-audio 2>/dev/null || true");
@@ -1053,45 +1098,57 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     int should_update_shared_buffer = 0;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0) {
-        should_update_shared_buffer = 1;
+        // Only feed passthrough buffers when passthrough mode is active
+        should_update_shared_buffer = is_passthrough_mode();
     }
     
     if (should_update_shared_buffer) {
-        // Raw passthrough capture: copy input samples as-is for clean passthrough
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        // Clear buffer first to prevent noise from uninitialized memory
-        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = 0.0f;
+        // Debug: Track buffer updates
+        static int buffer_update_count = 0;
+        if (buffer_update_count++ % 1000 == 0) {
+            printf("[DEBUG] Input buffer update #%d: frames=%lu, passthrough_mode=%d\n", 
+                   buffer_update_count, frames, is_passthrough_mode());
         }
-        // Copy only the actual audio data
+        
+        // COMPLETELY CLEAN PASSTHROUGH - NO PROCESSING AT ALL
+        // Direct copy of raw input samples to preserve original audio quality
+        
+        // Update shared buffer with raw samples - use actual frame size
+        pthread_mutex_lock(&global_shared_buffer.mutex);
+        // Clear only the portion we'll use
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_shared_buffer.samples[i] = samples[i];
+            global_shared_buffer.samples[i] = samples[i]; // Raw copy - no processing
+        }
+        // Clear any unused portion to prevent noise
+        for (unsigned long i = frames; i < SAMPLES_PER_FRAME; i++) {
+            global_shared_buffer.samples[i] = 0.0f;
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Update passthrough buffer for synchronized output
+        // Update passthrough buffer with raw samples - use actual frame size
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
-        // Clear buffer first to prevent noise from uninitialized memory
-        for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = 0.0f;
-        }
-        // Copy only the actual audio data
+        // Copy only the actual frame data
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = samples[i];
+            global_passthrough_buffer.samples[i] = samples[i]; // Raw copy - no processing
+        }
+        // Clear any unused portion to prevent noise
+        for (unsigned long i = frames; i < SAMPLES_PER_FRAME; i++) {
+            global_passthrough_buffer.samples[i] = 0.0f;
         }
         global_passthrough_buffer.sample_count = frames;
         global_passthrough_buffer.valid = 1;
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         
-        // Debug logging for buffers
-        static int buffer_count = 0;
-        if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (noise reduced)\n", 
-                   frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
-        }
+        // No debug logging to avoid timing issues
+    } else {
+        // When passthrough is not active, mark buffers invalid to avoid stale audio
+        pthread_mutex_lock(&global_passthrough_buffer.mutex);
+        global_passthrough_buffer.valid = 0;
+        global_passthrough_buffer.sample_count = 0;
+        pthread_mutex_unlock(&global_passthrough_buffer.mutex);
     }
     
     // Process audio for EchoStream (only if input is enabled for this channel)
@@ -1167,6 +1224,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+    
+    // Debug: Track passthrough mode changes
+    static int last_passthrough_mode = -1;
+    if (passthrough_mode != last_passthrough_mode) {
+        printf("[DEBUG] Passthrough mode changed: %s (channel: %s, is_target: %d)\n", 
+               passthrough_mode ? "ACTIVE" : "INACTIVE", audio_stream->channel_id, is_configured_target);
+        last_passthrough_mode = passthrough_mode;
+    }
 
     // Persisted state for passthrough processing and reliable reset on mode changes
     static float pt_dc_offset = 0.0f;
@@ -1177,11 +1242,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             pt_dc_offset = 0.0f;
         }
         pt_was_passthrough = 1;
+        
+        // RESTORED: Software passthrough is working correctly
+        // The hardware passthrough was causing the noise conflict
+        
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-			// Duplicate mono to stereo with minimal processing to avoid added noise
-            // Unity gain for clean passthrough (no gain applied)
+            // COMPLETELY CLEAN PASSTHROUGH OUTPUT - NO PROCESSING AT ALL
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames) samples_to_process = frames;
             
@@ -1189,69 +1257,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-			// Minimal processing: only light DC offset removal to avoid low-frequency hum
-            const float DC_FILTER_ALPHA = 0.995f;
-			
-			// Adaptive gate to fully mute near-silence and eliminate hiss with hysteresis
-			static int gate_open = 0;
-			const float GATE_OPEN_RMS = 0.01f;  // ~ -40 dB
-			const float GATE_CLOSE_RMS = 0.003f; // ~ -50 dB
-			static int release_hold_samples = 0;
-			const int RELEASE_HOLD_TARGET = SAMPLE_RATE / 20; // 50 ms hold
-			
-			// Compute block RMS to decide gate state
-			float sum_sq = 0.0f;
-			for (unsigned long i = 0; i < samples_to_process; i++) {
-				float s = global_passthrough_buffer.samples[i];
-				sum_sq += s * s;
-			}
-			float block_rms = samples_to_process > 0 ? sqrtf(sum_sq / (float)samples_to_process) : 0.0f;
-			if (!gate_open) {
-				if (block_rms > GATE_OPEN_RMS) {
-					gate_open = 1;
-					release_hold_samples = RELEASE_HOLD_TARGET;
-				}
-			} else {
-				if (block_rms < GATE_CLOSE_RMS) {
-					if (release_hold_samples > 0) release_hold_samples--;
-					else gate_open = 0;
-				} else {
-					release_hold_samples = RELEASE_HOLD_TARGET;
-				}
-			}
-            
-			for (unsigned long i = 0; i < samples_to_process; i++) {
-				float sample = global_passthrough_buffer.samples[i];
+            // ABSOLUTELY MINIMAL PASSTHROUGH - NO CACHING, NO LOOPING, NO EXTRA LOGIC
+            for (unsigned long i = 0; i < samples_to_process; i++) {
+                float sample = global_passthrough_buffer.samples[i]; // raw sample - no processing at all
                 
-				// Apply gate: mute near-silence blocks completely
-				if (!gate_open) {
-					sample = 0.0f;
-				} else {
-					// Light DC removal only
-					pt_dc_offset = pt_dc_offset * DC_FILTER_ALPHA + sample * (1.0f - DC_FILTER_ALPHA);
-					sample = sample - pt_dc_offset;
-				}
-
-                // Unity gain
-				// Eliminate denormals and soft clamp for safety only near full-scale
-				if (fabsf(sample) < 1e-8f) sample = 0.0f;
-				if (sample > 0.99f) sample = 0.99f;
-				else if (sample < -0.99f) sample = -0.99f;
-                
-                // Duplicate mono to both stereo channels
+                // Duplicate mono to both stereo channels or write mono
                 if (output_channels >= 2) {
                     out[i * 2] = sample;     // Left channel
                     out[i * 2 + 1] = sample; // Right channel
                 } else {
                     out[i] = sample; // Mono output
                 }
-                
-                // Store last sample for smooth transitions
-                static float stored_last_sample = 0.0f;
-                stored_last_sample = sample;
             }
             
-            // Fill any remainder with silence
+            // Fill any remainder with silence - no fancy logic
             for (unsigned long i = samples_to_process; i < frames; i++) {
                 if (output_channels >= 2) {
                     out[i * 2] = 0.0f;     // Left channel
@@ -1264,33 +1283,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             // Keep buffer valid for smooth playback - don't invalidate to prevent choppy noise
             // The buffer will be overwritten by new audio data from input callback
         } else {
-            // No audio data - fill with silence using smooth fade to prevent choppy noise
+            // No audio data - fill with silence (no caching logic)
             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
             
-            // Use previous sample for smooth transition to prevent choppy noise
-            static float last_sample = 0.0f;
-            const float FADE_RATE = 0.95f; // Slow fade to prevent clicks
-            
-            // Use default fade behavior for smooth silence
-            
             for (unsigned long i = 0; i < frames; i++) {
-                last_sample *= FADE_RATE; // Smooth fade to silence
-                
                 if (output_channels >= 2) {
-                    out[i * 2] = last_sample;     // Left channel
-                    out[i * 2 + 1] = last_sample; // Right channel
+                    out[i * 2] = 0.0f;     // Left channel
+                    out[i * 2 + 1] = 0.0f; // Right channel
                 } else {
-                    out[i] = last_sample; // Mono output
+                    out[i] = 0.0f; // Mono output
                 }
             }
             
-            // Debug: no audio data in passthrough buffer
-            static int no_audio_count = 0;
-            if (no_audio_count++ % 100 == 0) {
-                printf("[DEBUG] Passthrough mode active but no audio in passthrough buffer: valid=%d, sample_count=%d\n", 
-                       global_passthrough_buffer.valid, global_passthrough_buffer.sample_count);
-            }
+            // No debug logging to avoid timing issues
         }
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
@@ -1357,16 +1363,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
 void* audio_passthrough_thread(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
-    printf("[INFO] Audio passthrough thread started\n");
+    printf("[INFO] Audio passthrough thread started - COMPLETELY DISABLED\n");
     
-    // Buffer for smoothing audio output
-    float output_buffer[SAMPLES_PER_FRAME];
-    int underflow_count = 0;
-    
+    // COMPLETELY DISABLED: This thread conflicts with callback-based passthrough
+    // Just sleep forever to prevent any interference
     while (global_passthrough.active && !global_interrupted) {
-        // DISABLED: This thread conflicts with callback-based passthrough
-        // Use only the audio_output_callback approach to prevent choppy noise
-        usleep(50000); // 50ms delay - thread is effectively disabled
+        usleep(1000000); // 1 second delay - thread is completely disabled
+        // No processing whatsoever to prevent audio conflicts
     }
     
     printf("[INFO] Audio passthrough thread stopped\n");
@@ -2172,6 +2175,9 @@ int setup_tone_passthrough(int source_channel, int target_channel) {
 
 // Start tone passthrough
 int start_tone_passthrough(void) {
+    printf("[TONE PASSTHROUGH] DISABLED - using software passthrough instead to prevent audio conflicts\n");
+    return 1; // Success but disabled
+    
     pthread_mutex_lock(&global_tone_passthrough.mutex);
     
     if (global_tone_passthrough.active) {

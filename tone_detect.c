@@ -7,33 +7,12 @@
 #include <time.h>
 #include <unistd.h>
 
+
 // Silence noisy logs while keeping confirmations
 #define NOISY_LOG(...) do { (void)0; } while(0)
 
 // Global tone detection state
 struct tone_detection_state global_tone_detection = {0};
-
-/* Accumulation buffer for high-resolution FFT */
-static float accum_buffer[ACCUM_BUFFER_SIZE];
-static int accum_pos = 0;
-
-/* Helper: push samples into accumulation buffer (ring) */
-static void accum_push(const float *samples, int count) {
-    for (int i = 0; i < count; i++) {
-        accum_buffer[accum_pos++] = samples[i];
-        if (accum_pos >= ACCUM_BUFFER_SIZE) accum_pos = 0;
-    }
-}
-
-/* Helper: copy latest FFT_SIZE samples (handles wrap) into out[] */
-static void accum_snapshot(float *out) {
-    int start = accum_pos; // next write position = oldest sample
-    int idx = 0;
-    for (int i = 0; i < ACCUM_BUFFER_SIZE; i++) {
-        int src = (start + i) % ACCUM_BUFFER_SIZE;
-        out[idx++] = accum_buffer[src];
-    }
-}
 
 // Initialize tone detection system
 int init_tone_detection(void) {
@@ -197,27 +176,24 @@ void* tone_detection_thread(void* arg) {
         
         // Process audio for tone detection
         if (samples_to_process > 0) {
-            for (int i = 0; i < samples_to_process; i++)
-                audio_buffer[i] *= global_tone_detection.config.gain;
-
-            apply_audio_frequency_filters(audio_buffer, samples_to_process);
-
-            /* Push into accumulation buffer */
-            accum_push(audio_buffer, samples_to_process);
-
-            /* Only run FFT when accumulation has wrapped at least once */
-            static int accum_filled = 0;
-            static int fft_run_count = 0;
-            if (accum_pos == 0) accum_filled = 1;
-
-            if (accum_filled) {
-                float fft_block[FFT_SIZE];
-                accum_snapshot(fft_block);
-                if (analyze_frequency_spectrum(fft_block, FFT_SIZE)) {
-                    detect_tone_sequence(fft_block, FFT_SIZE);
-                    fft_run_count++;
-                }
-                /* Rate-limit new tone logging by only allowing detect_new_tones inside detect_tone_sequence; further suppression below */
+            // CRITICAL FIX: Create a working copy to avoid modifying original audio samples
+            float working_buffer[SAMPLES_PER_FRAME];
+            for (int i = 0; i < samples_to_process; i++) {
+                working_buffer[i] = audio_buffer[i];
+            }
+            
+            // Apply gain to working copy only
+            for (int i = 0; i < samples_to_process; i++) {
+                working_buffer[i] *= global_tone_detection.config.gain;
+            }
+            
+            // Apply frequency filters to working copy only (not original audio)
+            apply_audio_frequency_filters(working_buffer, samples_to_process);
+            
+            // Analyze frequency spectrum using working copy
+            if (analyze_frequency_spectrum(working_buffer, samples_to_process)) {
+                // Detect tone sequences with proper duration tracking using working copy
+                detect_tone_sequence(working_buffer, samples_to_process);
             }
             
             samples_processed += samples_to_process;
@@ -277,14 +253,8 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
     float absolute_db_threshold = powf(10.0f, global_tone_detection.config.db_threshold / 20.0f);
     
     // Use the more permissive of the two thresholds
-    float relative_threshold = max_magnitude * 0.30f; /* raised from 0.20 -> 0.30 for stronger noise rejection */
+    float relative_threshold = max_magnitude * 0.1f;  // 10% of max magnitude
     float magnitude_threshold = (absolute_db_threshold > relative_threshold) ? relative_threshold : absolute_db_threshold;
-
-    /* Noise floor skip: if overall energy very low, skip peak detection entirely */
-    if (max_magnitude < absolute_db_threshold * 2.0f) {
-        global_tone_detection.peak_count = 0;
-        return 1; /* treat as analyzed but no peaks (silence) */
-    }
     
     // Debug output for threshold analysis
     static int debug_count = 0;
@@ -305,7 +275,7 @@ int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
         
         // Check if this is a peak and above dB threshold
         if (current > prev && current > next && current > magnitude_threshold) {
-            if (global_tone_detection.peak_count < MAX_PEAKS) {  /* allow full MAX_PEAKS, not hardcoded 10 */
+            if (global_tone_detection.peak_count < 10) {
                 // Quadratic (parabolic) interpolation around the peak to estimate sub-bin location
                 // delta = 0.5 * (prev - next) / (prev - 2*current + next)
                 float denominator = (prev - 2.0f * current + next);
@@ -378,10 +348,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     const int MISS_REQUIRED = 3;     // require K misses (increased from 2 to 3 for stability)
     const int GRACE_MS = 500;        // allow brief gaps without resetting (increased from 250ms)
 
-    /* Debounce logging: only allow one tracking-start and one reset log per tone every 4s */
-    static int last_a_start_log = 0, last_a_reset_log = 0;
-    static int last_b_start_log = 0, last_b_reset_log = 0;
-
     // Check each tone definition
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
@@ -419,10 +385,13 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     // Start tracking tone A
                     global_tone_detection.tone_a_tracking = 1;
                     global_tone_detection.tone_a_tracking_start = current_time;
-                    if (current_time - last_a_start_log > 4000) {
+                    printf("[TONE] Tone A duration tracking started - need %d ms\n", tone_def->tone_a_length_ms);
+                    // Only log if we haven't been tracking recently (debounce)
+                    static int last_tone_a_start_log = 0;
+                    if (current_time - last_tone_a_start_log > 5000) { // 5 second debounce
                         printf("[TONE] Tone A tracking started: %.1f Hz (ID: %s)\n", 
                                tone_def->tone_a_freq, tone_def->tone_id);
-                        last_a_start_log = current_time;
+                        last_tone_a_start_log = current_time;
                     }
                 } else {
                     // Check if minimum duration has been met
@@ -448,9 +417,11 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     if (global_tone_detection.tone_a_tracking) {
                         global_tone_detection.tone_a_tracking = 0;
                         global_tone_detection.tone_a_tracking_start = 0;
-                        if (current_time - last_a_reset_log > 4000) {
-                            printf("[TONE] Tone A tracking reset (lost)\n");
-                            last_a_reset_log = current_time;
+                        // Only log reset if we haven't logged recently (debounce)
+                        static int last_tone_a_reset_log = 0;
+                        if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_a_reset_log = current_time;
                         }
                     }
                 }
@@ -459,6 +430,12 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone B (only if tone A was confirmed)
         else if (!global_tone_detection.tone_b_confirmed) {
+            // Debug: Show when we're checking for tone B
+            static int tone_b_check_count = 0;
+            if (tone_b_check_count++ % 200 == 0) {
+                NOISY_LOG("[DEBUG] Checking for Tone B: %.1f Hz ±%d Hz\n", tone_def->tone_b_freq, tone_def->tone_b_range_hz);
+            }
+            
             if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
                 // Hit update
                 b_hit_streak++;
@@ -480,10 +457,13 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     // Start tracking tone B
                     global_tone_detection.tone_b_tracking = 1;
                     global_tone_detection.tone_b_tracking_start = current_time;
-                    if (current_time - last_b_start_log > 4000) {
+                    printf("[TONE] Tone B duration tracking started - need %d ms\n", tone_def->tone_b_length_ms);
+                    // Only log if we haven't been tracking recently (debounce)
+                    static int last_tone_b_start_log = 0;
+                    if (current_time - last_tone_b_start_log > 5000) { // 5 second debounce
                         printf("[TONE] Tone B tracking started: %.1f Hz (ID: %s)\n", 
                                tone_def->tone_b_freq, tone_def->tone_id);
-                        last_b_start_log = current_time;
+                        last_tone_b_start_log = current_time;
                     }
                 } else {
                     // Check if minimum duration has been met
@@ -518,9 +498,11 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                     if (global_tone_detection.tone_b_tracking) {
                         global_tone_detection.tone_b_tracking = 0;
                         global_tone_detection.tone_b_tracking_start = 0;
-                        if (current_time - last_b_reset_log > 4000) {
-                            printf("[TONE] Tone B tracking reset (lost)\n");
-                            last_b_reset_log = current_time;
+                        // Only log reset if we haven't logged recently (debounce)
+                        static int last_tone_b_reset_log = 0;
+                        if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
+                            printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
+                            last_tone_b_reset_log = current_time;
                         }
                     }
                 }
@@ -541,7 +523,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                 current_time - global_tone_detection.recording_start_time >= tone_def->record_length_ms) {
                 global_tone_detection.recording_active = 0;
                 printf("[TONE] Recording stopped\n");
-                set_passthrough_output_mode(0); // Disable passthrough
                 break;
             }
         }
@@ -555,57 +536,11 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             global_tone_detection.current_tone_a_detected = 0;
             global_tone_detection.current_tone_b_detected = 0;
             global_tone_detection.tone_sequence_active = 0;
-            /* Do NOT clear recording_active prematurely */
-            if (!global_tone_detection.recording_active) {
-                set_passthrough_output_mode(0); // Disable passthrough only if not recording
-            }
+            global_tone_detection.recording_active = 0;
             printf("[TONE] Sequence reset due to timeout\n");
         }
     }
     
-    return 1;
-}
-
-// Detect new tones
-int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
-    static int call_count = 0;
-    call_count++;
-    if (call_count % 1200 != 0) return 1; /* slower (~>1s) */
-    static int minute_counter = 0;
-    static int new_tones_this_minute = 0;
-    if (++minute_counter >= 60) { /* rough minute bucket */
-        minute_counter = 0;
-        new_tones_this_minute = 0;
-    }
-    for (int i = 0; i < global_tone_detection.peak_count; i++) {
-        if (new_tones_this_minute >= 2) break; /* cap to 2 per minute */
-        float freq = global_tone_detection.peak_frequencies[i];
-        int known = 0, dup = 0;
-        // Check if this frequency matches any defined tone
-        for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
-            struct tone_definition* tone_def = &global_tone_detection.tone_definitions[j];
-            if (tone_def->valid) {
-                if (is_frequency_in_range(freq, tone_def->tone_a_freq, tone_def->tone_a_range_hz) ||
-                    is_frequency_in_range(freq, tone_def->tone_b_freq, tone_def->tone_b_range_hz)) {
-                    known = 1;
-                    break;
-                }
-            }
-        }
-        // Check if we've already detected this frequency recently (within 3 Hz)
-        for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
-            if (fabs(global_tone_detection.detected_frequencies[k] - freq) < 3.0f) {
-                dup = 1;
-                break;
-            }
-        }
-        if (!known && !dup && global_tone_detection.detected_frequency_count < 100) {
-            global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count++] = freq;
-            global_tone_detection.new_tone_detections++;
-            printf("[NEW TONE] %.1f Hz\n", freq);
-            new_tones_this_minute++;
-        }
-    }
     return 1;
 }
 
@@ -790,6 +725,51 @@ void reset_tone_tracking(void) {
     global_tone_detection.tone_b_tracking_start = 0;
 }
 
+// Detect new tones
+int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
+    // Simple new tone detection - look for strong peaks not in defined tones
+    for (int i = 0; i < global_tone_detection.peak_count; i++) {
+        float freq = global_tone_detection.peak_frequencies[i];
+        int is_known_tone = 0;
+        int is_duplicate = 0;
+        
+        // Check if this frequency matches any defined tone
+        for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
+            struct tone_definition* tone_def = &global_tone_detection.tone_definitions[j];
+            if (tone_def->valid) {
+                if (is_frequency_in_range(freq, tone_def->tone_a_freq, tone_def->tone_a_range_hz) ||
+                    is_frequency_in_range(freq, tone_def->tone_b_freq, tone_def->tone_b_range_hz)) {
+                    is_known_tone = 1;
+                    break;
+                }
+            }
+        }
+        
+        if (!is_known_tone) {
+            // Check if we've already detected this frequency recently (within 3 Hz)
+            for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
+                if (fabs(global_tone_detection.detected_frequencies[k] - freq) < 3.0f) {
+                    is_duplicate = 1;
+                    break;
+                }
+            }
+            
+            if (!is_duplicate && global_tone_detection.detected_frequency_count < 100) {
+                // This is a genuinely new tone - only log once per frequency
+                global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
+                global_tone_detection.detected_frequency_count++;
+                global_tone_detection.new_tone_detections++;
+                // Suppress NEW TONE logs for frequencies within any configured tone window
+                if (!is_known_tone) {
+                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
+                }
+            }
+        }
+    }
+    
+    return 1;
+}
+
 // Utility functions
 float frequency_to_bin(float frequency) {
     return (frequency * FFT_SIZE) / SAMPLE_RATE;
@@ -843,78 +823,12 @@ void trigger_tone_passthrough(void) {
                 // Enable passthrough mode; audio.c routes to the configured target from JSON
                 set_passthrough_output_mode(1);
             } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - attempting to create one\n");
+                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream\n");
+                printf("[TONE PASSTHROUGH] DISABLED: Not creating conflicting output stream - using software passthrough instead\n");
                 
-                // Try to create an output stream for the passthrough target using our device conflict resolution
-                extern struct channel_context channels[];
-                if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-                    printf("[TONE PASSTHROUGH] Attempting to create output stream for passthrough target channel %d\n", target_channel_idx);
-                    
-                    // Use the same device conflict resolution logic as the main audio system
-                    extern PaDeviceIndex usb_devices[MAX_CHANNELS];
-                    PaDeviceIndex fallback_output = paNoDevice;
-                    
-                    // Find an ALSA USB device with output channels that's not in use
-                    for (int i = 0; i < MAX_CHANNELS; i++) {
-                        PaDeviceIndex cand = usb_devices[i];
-                        if (cand == paNoDevice) continue;
-                        
-                        // Check if this device is already being used by another channel for output
-                        int device_in_use = 0;
-                        for (int j = 0; j < MAX_CHANNELS; j++) {
-                            if (j != target_channel_idx && channels[j].audio.output_stream != NULL) {
-                                if (channels[j].audio.device_index == cand) {
-                                    device_in_use = 1;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        if (device_in_use) continue; // Skip devices already in use
-                        
-                        const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
-                        if (cand_info && cand_info->maxOutputChannels > 0) {
-                            // Only use ALSA devices, skip PulseAudio and default
-                            const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
-                            if (host_api && strcmp(host_api->name, "ALSA") == 0) {
-                                fallback_output = cand;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (fallback_output != paNoDevice) {
-                        printf("[TONE PASSTHROUGH] Using ALSA device %d for passthrough output\n", fallback_output);
-                        
-                        PaStreamParameters output_params;
-                        output_params.device = fallback_output;
-                        output_params.channelCount = 2;  // Try stereo first
-                        output_params.sampleFormat = paFloat32;
-                        output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
-                        output_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        PaError err = Pa_OpenStream(&channels[target_channel_idx].audio.output_stream, NULL, &output_params, 48000, 1024, 
-                                                    paClipOff, audio_output_callback, &channels[target_channel_idx].audio);
-                        
-                        if (err == paNoError) {
-                            printf("[TONE PASSTHROUGH] Successfully created output stream for passthrough target\n");
-                            // Start the output stream
-                            err = Pa_StartStream(channels[target_channel_idx].audio.output_stream);
-                            if (err == paNoError) {
-                                printf("[TONE PASSTHROUGH] Output stream started for passthrough target\n");
-                                set_passthrough_output_mode(1);
-                            } else {
-                                printf("[TONE PASSTHROUGH] Failed to start output stream: %s\n", Pa_GetErrorText(err));
-                            }
-                        } else {
-                            printf("[TONE PASSTHROUGH] Failed to create output stream: %s\n", Pa_GetErrorText(err));
-                        }
-                    } else {
-                        printf("[TONE PASSTHROUGH] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
-                        printf("[TONE PASSTHROUGH] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
-                        printf("[TONE PASSTHROUGH] Cannot create passthrough output stream - no available devices\n");
-                    }
-                }
+                // DISABLED: This was creating a conflicting audio stream that caused choppy noise
+                // Our software passthrough in audio_output_callback handles this correctly
+                set_passthrough_output_mode(1);
             }
         } else {
             printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
@@ -934,7 +848,6 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         if (!global_tone_detection.tone_definitions[i].valid) {
             strncpy(global_tone_detection.tone_definitions[i].tone_id, tone_id, 63);
-            global_tone_detection.tone_definitions[i].tone_id[63] = 0;
             global_tone_detection.tone_definitions[i].tone_a_freq = tone_a_freq;
             global_tone_detection.tone_definitions[i].tone_b_freq = tone_b_freq;
             global_tone_detection.tone_definitions[i].tone_a_length_ms = tone_a_length;
@@ -968,11 +881,9 @@ int add_frequency_filter(const char* filter_id, float frequency, int range, cons
     for (int i = 0; i < MAX_FILTERS; i++) {
         if (!global_tone_detection.filters[i].valid) {
             strncpy(global_tone_detection.filters[i].filter_id, filter_id, 63);
-            global_tone_detection.filters[i].filter_id[63] = 0;
             global_tone_detection.filters[i].frequency = frequency;
             global_tone_detection.filters[i].filter_range_hz = range;
             strncpy(global_tone_detection.filters[i].type, type, 15);
-            global_tone_detection.filters[i].type[15] = 0;
             global_tone_detection.filters[i].valid = 1;
             
             printf("[FILTER CONFIG] Added filter: %s (%.1f Hz, %s)\n",
