@@ -193,6 +193,8 @@ int main(int argc, char *argv[]) {
     // Create delayed output stream for configured passthrough target channel
     printf("\n=== CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET ===\n");
     printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
+    printf("[DEBUG] *** ABOUT TO CALL create_delayed_passthrough_output_stream() ***\n");
+    fflush(stdout); // Force output flush
     if (create_delayed_passthrough_output_stream()) {
         printf("[SUCCESS] Passthrough target output stream created successfully!\n");
     } else {

@@ -66,6 +66,7 @@ int get_passthrough_target_channel_index(void) {
 // Create delayed output stream for configured passthrough target channel
 int create_delayed_passthrough_output_stream(void) {
     printf("[DEBUG] *** create_delayed_passthrough_output_stream() CALLED ***\n");
+    fflush(stdout); // Force output flush
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     
