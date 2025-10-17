@@ -549,8 +549,10 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
             global_tone_detection.current_tone_a_detected = 0;
             global_tone_detection.current_tone_b_detected = 0;
             global_tone_detection.tone_sequence_active = 0;
-            global_tone_detection.recording_active = 0;
-            set_passthrough_output_mode(0); // Disable passthrough
+            /* Do NOT clear recording_active prematurely */
+            if (!global_tone_detection.recording_active) {
+                set_passthrough_output_mode(0); // Disable passthrough only if not recording
+            }
             printf("[TONE] Sequence reset due to timeout\n");
         }
     }
