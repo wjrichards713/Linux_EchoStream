@@ -306,10 +306,10 @@ int create_delayed_passthrough_output_stream(void) {
             printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
                    j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
             
-            // Create duplex stream (input+output) instead of just output stream
-            err = Pa_OpenStream(&audio_stream->output_stream, &input_params, &output_params, 
-                               FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                               paClipOff, audio_input_callback, audio_stream);
+                    // Create duplex stream (input+output) and use output callback to ensure output is filled
+                    err = Pa_OpenStream(&audio_stream->output_stream, &input_params, &output_params, 
+                                       FORCED_SAMPLE_RATE, buffer_sizes[j], 
+                                       paClipOff, audio_output_callback, audio_stream);
             
             if (err == paNoError) {
                 printf("[DEBUG] *** SUCCESS! Delayed duplex stream created with sample_rate=%d, buffer_size=%d ***\n", 
