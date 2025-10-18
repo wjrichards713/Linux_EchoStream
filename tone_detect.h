@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <stdint.h>
+#include <complex.h>
 
 // Configuration constants
 #define MAX_TONE_DEFINITIONS 10
@@ -220,7 +221,7 @@ void reset_tone_tracking(void);
 int detect_new_tones(float* magnitudes, int count);
 float frequency_to_bin(float frequency);
 float bin_to_frequency(int bin);
-float calculate_magnitude(fftw_complex cv);
+float calculate_magnitude(double complex cv);
 void print_tone_detection_stats(void);
 void reset_tone_detection_stats(void);
 void trigger_tone_passthrough(void);

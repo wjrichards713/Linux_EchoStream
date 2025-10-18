@@ -497,11 +497,11 @@ int apply_lowpass_filter(float* samples, int count, float cutoff_freq) {
     if (window_size > count) window_size = count;
     
     float sum = 0.0f;
-    for (int i = 0; i < count; i++) {
+            for (int i = 0; i < count; i++) {
         sum += samples[i];
         if (i >= window_size) {
             sum -= samples[i - window_size];
-        }
+                }
         samples[i] = sum / (float)window_size;
     }
     
@@ -738,8 +738,8 @@ float bin_to_frequency(int bin) {
     return (bin * SAMPLE_RATE) / 4096; // Using 4096 as FFT_SIZE equivalent
 }
 
-float calculate_magnitude(fftw_complex complex_val) {
-    return sqrt(complex_val[0] * complex_val[0] + complex_val[1] * complex_val[1]);
+float calculate_magnitude(double complex complex_val) {
+    return sqrt(creal(complex_val) * creal(complex_val) + cimag(complex_val) * cimag(complex_val));
 }
 
 void print_tone_detection_stats(void) {
@@ -842,8 +842,8 @@ int add_frequency_filter(const char* filter_id, float frequency, int range, cons
     }
     
     if (old_index == -1) {
-        fprintf(stderr, "[ERROR] No space for new frequency filter\n");
-        return 0;
+    fprintf(stderr, "[ERROR] No space for new frequency filter\n");
+    return 0;
     }
     
     // Add to legacy system for compatibility
