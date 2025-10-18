@@ -1,9 +1,9 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2 -g -DSAMPLE_RATE=48000
-LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lfftw3 -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod
+LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = echostream
 

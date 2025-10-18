@@ -285,7 +285,7 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     // Process audio samples for EchoStream functionality
     for (unsigned long i = 0; i < frames; i++) {
         // Basic audio processing - can be extended for EchoStream features
-        float sample = samples[i];
+        // float sample = samples[i];  // Unused for now
         // Add any necessary audio processing here
     }
     

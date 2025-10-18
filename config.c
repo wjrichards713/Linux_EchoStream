@@ -267,7 +267,8 @@ int load_complete_config(void) {
                                 // Add tone definition
                                 printf("[CONFIG] Loading tone from JSON: ID=%s, A=%.1f Hz±%d (dur:%dms), B=%.1f Hz±%d (dur:%dms), rec:%dms\n",
                                        tone_id, tone_a, tone_a_range, tone_a_length, tone_b, tone_b_range, tone_b_length, record_length);
-                                add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length);
+                                // Note: Tone detection system removed - tone definitions not loaded
+                                // add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length);
                             }
                         }
                         
@@ -302,16 +303,17 @@ int load_complete_config(void) {
                                 // Add frequency filter
                                 printf("[CONFIG] Loading filter from JSON: ID=%s, freq=%.1f Hz, range=%d, type=%s\n",
                                        filter_id, frequency, filter_range, type);
-                                add_frequency_filter(filter_id, frequency, filter_range, type);
+                                // Note: Tone detection system removed - filters not loaded
+                                // add_frequency_filter(filter_id, frequency, filter_range, type);
                             }
                         }
                         
                         tone_config->valid = 1;
                         
-                        // Apply tone configuration to the detection system
-                        set_tone_config(tone_config->threshold, tone_config->gain, 
-                                      tone_config->db_threshold, tone_config->detect_new_tones,
-                                      tone_config->new_tone_length_ms, tone_config->new_tone_range_hz);
+                        // Note: Tone detection system removed - configuration not applied
+                        // set_tone_config(tone_config->threshold, tone_config->gain, 
+                        //               tone_config->db_threshold, tone_config->detect_new_tones,
+                        //               tone_config->new_tone_length_ms, tone_config->new_tone_range_hz);
                         
                         printf("Loaded tone detection config for channel %d: passthrough=%d, channel=%s\n", 
                                i+1, tone_config->tone_passthrough, tone_config->passthrough_channel);
