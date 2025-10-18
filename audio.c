@@ -51,6 +51,7 @@ int init_passthrough_pipeline(void) {
                        channel_config->channel_id, i);
                 
                 // Find the passthrough target channel
+                // First try exact match
                 for (int j = 0; j < MAX_CHANNELS; j++) {
                     struct channel_config* target_config = get_channel_config(j);
                     if (target_config && target_config->valid) {
@@ -59,6 +60,33 @@ int init_passthrough_pipeline(void) {
                             printf("[PASSTHROUGH] Found passthrough target channel: %s (index %d)\n", 
                                    target_config->channel_id, j);
                             break;
+                        }
+                    }
+                }
+                
+                // If not found, try mapping channel names to indices
+                if (passthrough_target_index == -1) {
+                    const char* target_name = channel_config->tone_config.passthrough_channel;
+                    printf("[PASSTHROUGH] Exact match failed, trying channel name mapping: %s\n", target_name);
+                    
+                    if (strcmp(target_name, "channel_one") == 0) {
+                        passthrough_target_index = 0;
+                    } else if (strcmp(target_name, "channel_two") == 0) {
+                        passthrough_target_index = 1;
+                    } else if (strcmp(target_name, "channel_three") == 0) {
+                        passthrough_target_index = 2;
+                    } else if (strcmp(target_name, "channel_four") == 0) {
+                        passthrough_target_index = 3;
+                    }
+                    
+                    if (passthrough_target_index != -1) {
+                        struct channel_config* target_config = get_channel_config(passthrough_target_index);
+                        if (target_config && target_config->valid) {
+                            printf("[PASSTHROUGH] Found passthrough target channel via mapping: %s -> %s (index %d)\n", 
+                                   target_name, target_config->channel_id, passthrough_target_index);
+                        } else {
+                            printf("[PASSTHROUGH] Channel mapping found but channel %d is invalid\n", passthrough_target_index);
+                            passthrough_target_index = -1;
                         }
                     }
                 }
@@ -496,6 +524,8 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
         return 0;
     }
     
+    printf("[SETUP] Setting up channel: %s\n", channel_id);
+    
     strncpy(ctx->audio.channel_id, channel_id, CHANNEL_ID_LEN - 1);
     ctx->audio.channel_id[CHANNEL_ID_LEN - 1] = '\0';
     
@@ -503,12 +533,25 @@ int setup_channel(struct channel_context *ctx, const char *channel_id) {
     ctx->audio.device_index = get_device_for_channel(channel_id);
     if (ctx->audio.device_index == paNoDevice) {
         printf("[ERROR] No device found for channel %s\n", channel_id);
+        printf("[ERROR] Available devices: ");
+        for (int i = 0; i < device_assigned; i++) {
+            printf("%d ", usb_devices[i]);
+        }
+        printf("\n");
         return 0;
     }
+    
+    printf("[SETUP] Channel %s assigned to device %d\n", channel_id, ctx->audio.device_index);
     
     // Setup audio for channel
     if (!setup_audio_for_channel(&ctx->audio)) {
         printf("[ERROR] Failed to setup audio for channel %s\n", channel_id);
+        return 0;
+    }
+    
+    // Start transmission for channel
+    if (!start_transmission_for_channel(&ctx->audio)) {
+        printf("[ERROR] Failed to start transmission for channel %s\n", channel_id);
         return 0;
     }
     
@@ -523,7 +566,19 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
         return paNoDevice;
     }
     
-    // Simple mapping - can be extended
+    // First try to find the channel in the configuration to get its index
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        struct channel_config* channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid) {
+            if (strcmp(channel_config->channel_id, channel) == 0) {
+                printf("[DEVICE] Found channel %s at index %d, assigning device %d\n", 
+                       channel, i, usb_devices[i]);
+                return usb_devices[i];
+            }
+        }
+    }
+    
+    // Fallback to old hardcoded mapping for backward compatibility
     if (strcmp(channel, "channel_one") == 0) {
         return usb_devices[0];
     } else if (strcmp(channel, "channel_two") == 0) {
@@ -534,6 +589,7 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
         return usb_devices[3];
     }
     
+    printf("[DEVICE] No device found for channel: %s\n", channel);
     return paNoDevice;
 }
 
