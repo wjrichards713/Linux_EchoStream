@@ -571,9 +571,21 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
         struct channel_config* channel_config = get_channel_config(i);
         if (channel_config && channel_config->valid) {
             if (strcmp(channel_config->channel_id, channel) == 0) {
-                printf("[DEVICE] Found channel %s at index %d, assigning device %d\n", 
-                       channel, i, usb_devices[i]);
-                return usb_devices[i];
+                // Check if we have a device available for this index
+                if (i < device_assigned) {
+                    printf("[DEVICE] Found channel %s at index %d, assigning device %d\n", 
+                           channel, i, usb_devices[i]);
+                    return usb_devices[i];
+                } else {
+                    printf("[DEVICE] Channel %s at index %d but no device available (only %d devices)\n", 
+                           channel, i, device_assigned);
+                    // Try to assign to the last available device instead
+                    if (device_assigned > 0) {
+                        printf("[DEVICE] Assigning to last available device %d instead\n", usb_devices[device_assigned-1]);
+                        return usb_devices[device_assigned-1];
+                    }
+                    return paNoDevice;
+                }
             }
         }
     }
@@ -586,7 +598,13 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
     } else if (strcmp(channel, "channel_three") == 0) {
         return usb_devices[2];
     } else if (strcmp(channel, "channel_four") == 0) {
-        return usb_devices[3];
+        // Use the last available device (device 4, which is index 3 in usb_devices array)
+        if (device_assigned >= 4) {
+            return usb_devices[3];  // This is actually device 4
+        } else {
+            printf("[DEVICE] Channel four requested but only %d devices available\n", device_assigned);
+            return paNoDevice;
+        }
     }
     
     printf("[DEVICE] No device found for channel: %s\n", channel);
