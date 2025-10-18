@@ -607,6 +607,18 @@ PaDeviceIndex get_device_for_channel(const char* channel) {
         }
     }
     
+    // Handle empty or invalid channel IDs by assigning to available devices
+    if (strlen(channel) == 0 || strcmp(channel, "channel_4") == 0) {
+        // For channel_4 or empty channels, assign to device 4 (which is usb_devices[3])
+        if (device_assigned >= 4) {
+            printf("[DEVICE] Assigning empty/invalid channel %s to device 4 (usb_devices[3])\n", channel);
+            return usb_devices[3];  // This is device 4
+        } else {
+            printf("[DEVICE] Channel %s requested but only %d devices available\n", channel, device_assigned);
+            return paNoDevice;
+        }
+    }
+    
     printf("[DEVICE] No device found for channel: %s\n", channel);
     return paNoDevice;
 }
