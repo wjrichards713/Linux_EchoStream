@@ -1225,11 +1225,16 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
     
-    // Debug: Track passthrough mode changes
+    // Debug: Track passthrough mode changes (with throttling to prevent spam)
     static int last_passthrough_mode = -1;
+    static int passthrough_change_count = 0;
     if (passthrough_mode != last_passthrough_mode) {
-        printf("[DEBUG] Passthrough mode changed: %s (channel: %s, is_target: %d)\n", 
-               passthrough_mode ? "ACTIVE" : "INACTIVE", audio_stream->channel_id, is_configured_target);
+        passthrough_change_count++;
+        // Only log every 100th change to reduce spam
+        if (passthrough_change_count % 100 == 0) {
+            printf("[DEBUG] Passthrough mode changed: %s (channel: %s, is_target: %d) [change #%d]\n", 
+                   passthrough_mode ? "ACTIVE" : "INACTIVE", audio_stream->channel_id, is_configured_target, passthrough_change_count);
+        }
         last_passthrough_mode = passthrough_mode;
     }
 

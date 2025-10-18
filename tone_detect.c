@@ -164,6 +164,21 @@ void* tone_detection_thread(void* arg) {
             samples_processed += samples_to_process;
             thread_iterations++;
             
+            // Check for passthrough timeout (disable after 5 seconds)
+            static uint64_t passthrough_start_time = 0;
+            uint64_t current_time = get_timestamp_ms();
+            if (is_passthrough_mode()) {
+                if (passthrough_start_time == 0) {
+                    passthrough_start_time = current_time;
+                } else if (current_time - passthrough_start_time > 5000) { // 5 seconds
+                    printf("[TONE] Auto-disabling passthrough after timeout\n");
+                    set_passthrough_output_mode(0);
+                    passthrough_start_time = 0;
+                }
+            } else {
+                passthrough_start_time = 0; // Reset when not in passthrough mode
+            }
+            
             // Print debug info occasionally
             if (thread_iterations % 1000 == 0) {
                 printf("[TONE] Thread iteration #%d: processed %d samples, active_filters=%d, active_sequences=%d\n", 
@@ -297,8 +312,8 @@ int check_tone_sequences(void) {
                                    sequence->sequence_id, sequence->tone_b.target_frequency);
                             printf("[TONE] Complete sequence detected! Starting recording...\n");
                             
-                            // Trigger passthrough
-                            trigger_tone_passthrough();
+                            // Trigger passthrough using new Goertzel system
+                            trigger_goertzel_passthrough(sequence->sequence_id);
                         }
                     }
                     
@@ -668,6 +683,34 @@ int start_passthrough(int source_channel, int target_channel, int duration_ms) {
     return 1; // Placeholder - actual implementation would be in audio.c
 }
 
+// Trigger passthrough from Goertzel system
+void trigger_goertzel_passthrough(const char* sequence_id) {
+    printf("[TONE] Goertzel system detected complete sequence: %s\n", sequence_id);
+    
+    // Check if tone passthrough is configured for channel 1 (index 0)
+    struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
+    
+    if (tone_config && tone_config->tone_passthrough) {
+        // Check if the target channel has a working output stream
+        int target_channel_idx = get_passthrough_target_channel_index();
+        if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
+            if (channel_has_output_stream(target_channel_idx)) {
+                printf("[TONE] Activating passthrough for sequence: %s\n", sequence_id);
+                // Enable passthrough mode; audio.c routes to the configured target from JSON
+                set_passthrough_output_mode(1);
+                
+                printf("[TONE] Passthrough activated for sequence: %s (will auto-disable in 5s)\n", sequence_id);
+            } else {
+                printf("[TONE] Sequence detected but target channel has no output stream\n");
+            }
+        } else {
+            printf("[TONE] Sequence detected but invalid target channel index\n");
+        }
+    } else {
+        printf("[TONE] Sequence detected but passthrough not configured\n");
+    }
+}
+
 // Utility functions
 float frequency_to_goertzel_coeff(float frequency, int sample_rate) {
     return 2.0f * cosf(2.0f * M_PI * frequency / sample_rate);
@@ -778,32 +821,10 @@ void reset_tone_detection_stats(void) {
 
 // Trigger tone passthrough when tones are detected
 void trigger_tone_passthrough(void) {
-    // Check if tone passthrough is configured for channel 1 (index 0)
-    struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
-    
-    if (tone_config && tone_config->tone_passthrough) {
-        // Check if the target channel has a working output stream
-        int target_channel_idx = get_passthrough_target_channel_index();
-        if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-            if (channel_has_output_stream(target_channel_idx)) {
-                printf("[TONE PASSTHROUGH] Goertzel system detected tone, activating passthrough\n");
-                // Enable passthrough mode; audio.c routes to the configured target from JSON
-                set_passthrough_output_mode(1);
-                
-                // Also trigger the new system's passthrough
-                start_passthrough(0, target_channel_idx, 5000); // 5 second default duration
-            } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream\n");
-                printf("[TONE PASSTHROUGH] Using software passthrough instead\n");
-                set_passthrough_output_mode(1);
-                start_passthrough(0, target_channel_idx, 5000);
-            }
-        } else {
-            printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
-        }
-    } else {
-        printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
-    }
+    // DISABLED: Old FFT system no longer controls passthrough mode
+    // The new Goertzel system handles all passthrough control
+    printf("[TONE PASSTHROUGH] Legacy trigger called - passthrough now controlled by Goertzel system\n");
+    return;
 }
 
 // Configuration functions (compatibility)
