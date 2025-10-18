@@ -10,8 +10,8 @@
 
 // Forward declarations
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
-                               const PaStreamCallbackTimeInfo* time_info,
-                               PaStreamCallbackFlags flags, void *user_data);
+                                const PaStreamCallbackTimeInfo *time_info,
+                                PaStreamCallbackFlags flags, void *user_data);
 void kill_processes_using_audio_device(PaDeviceIndex device_index);
 
 // Global audio state
@@ -31,44 +31,53 @@ struct tone_detect_control global_tone_detect = {0};
 struct tone_passthrough_control global_tone_passthrough = {0};
 
 // Get the index of the passthrough target channel
-int get_passthrough_target_channel_index(void) {
-    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    if (!tone_cfg || !tone_cfg->tone_passthrough) {
+int get_passthrough_target_channel_index(void)
+{
+    struct tone_detect_config *tone_cfg = get_tone_detect_config(0);
+    if (!tone_cfg || !tone_cfg->tone_passthrough)
+    {
         return -1;
     }
     // FALLBACK: If channel_four is configured but Device 3 is input-only, use channel_two instead
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0)
+    {
         printf("[WARNING] channel_four (Device 3) is input-only - using channel_two (Device 1) as passthrough target\n");
         return 1; // Use channel_two (666) which has working output
     }
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0)
+        return 2;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0)
+        return 1;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0)
+        return 0;
     return -1;
 }
 
 // Create delayed output stream for configured passthrough target channel
-int create_delayed_passthrough_output_stream(void) {
+int create_delayed_passthrough_output_stream(void)
+{
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    
+
     // Get the configured passthrough target channel from config
     int passthrough_index = get_passthrough_target_channel_index();
-    if (passthrough_index == -1) {
+    if (passthrough_index == -1)
+    {
         printf("[DEBUG] No passthrough target configured - skipping delayed output stream creation\n");
         return 1; // Not an error, just no passthrough configured
     }
-    
+
     // Check input stream status before proceeding
-    struct channel_context* channel = &channels[passthrough_index];
-    struct audio_stream* audio_stream = &channel->audio;
-    
+    struct channel_context *channel = &channels[passthrough_index];
+    struct audio_stream *audio_stream = &channel->audio;
+
     printf("[DEBUG] *** INPUT STREAM STATUS CHECK FOR CHANNEL %d ***\n", passthrough_index);
-    printf("[DEBUG] Input stream pointer: %p\n", (void*)audio_stream->input_stream);
-    printf("[DEBUG] Output stream pointer: %p\n", (void*)audio_stream->output_stream);
+    printf("[DEBUG] Input stream pointer: %p\n", (void *)audio_stream->input_stream);
+    printf("[DEBUG] Output stream pointer: %p\n", (void *)audio_stream->output_stream);
     printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
-    
-    if (audio_stream->input_stream == NULL) {
+
+    if (audio_stream->input_stream == NULL)
+    {
         printf("[CRITICAL] *** INPUT STREAM IS NULL - RECREATING IT FIRST ***\n");
         // Recreate the input stream before attempting output stream creation
         PaStreamParameters input_params;
@@ -77,61 +86,75 @@ int create_delayed_passthrough_output_stream(void) {
         input_params.sampleFormat = paFloat32;
         input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
         input_params.hostApiSpecificStreamInfo = NULL;
-        
-        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                   44100, 512, paClipOff, audio_input_callback, audio_stream);
-        if (err == paNoError) {
+
+        PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL,
+                                    44100, 512, paClipOff, audio_input_callback, audio_stream);
+        if (err == paNoError)
+        {
             err = Pa_StartStream(audio_stream->input_stream);
-            if (err == paNoError) {
+            if (err == paNoError)
+            {
                 printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-            } else {
+            }
+            else
+            {
                 printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
                 return 0;
             }
-        } else {
+        }
+        else
+        {
             printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
             return 0;
         }
-    } else {
+    }
+    else
+    {
         printf("[DEBUG] Input stream exists - checking if active\n");
-        if (Pa_IsStreamActive(audio_stream->input_stream)) {
+        if (Pa_IsStreamActive(audio_stream->input_stream))
+        {
             printf("[DEBUG] Input stream is active ✓\n");
-        } else {
+        }
+        else
+        {
             printf("[WARNING] Input stream exists but is not active\n");
         }
     }
-    
-    if (passthrough_index >= MAX_CHANNELS) {
+
+    if (passthrough_index >= MAX_CHANNELS)
+    {
         printf("[ERROR] Invalid passthrough target index %d\n", passthrough_index);
         return 0;
     }
-    
-    printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
+
+    printf("[DEBUG] *** CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n",
            passthrough_index, global_channel_ids[passthrough_index]);
     printf("[DEBUG] Waiting 3 seconds for other channels to stabilize...\n");
     sleep(3); // Wait 3 seconds for other channels to fully initialize
-    
+
     // CRITICAL: Passthrough target MUST work - keep trying until success
     printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
-    
+
     int attempt_count = 0;
-    while (1) { // Infinite loop until success
+    while (1)
+    { // Infinite loop until success
         attempt_count++;
         printf("[DEBUG] *** PASSTHROUGH TARGET CREATION ATTEMPT #%d ***\n", attempt_count);
-        
+
         // List all devices for debugging
         list_all_audio_devices();
-        
+
         // Check if device index is valid
         int total_devices = Pa_GetDeviceCount();
-        if (audio_stream->device_index >= total_devices) {
-            printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n", 
+        if (audio_stream->device_index >= total_devices)
+        {
+            printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n",
                    audio_stream->device_index, total_devices);
             printf("[ERROR] *** This is why passthrough target is failing! ***\n");
             sleep(5); // Wait before retry
             continue;
         }
-        
+
         // Now try to create the output stream with aggressive error handling
         PaStreamParameters output_params;
         output_params.device = audio_stream->device_index;
@@ -139,142 +162,173 @@ int create_delayed_passthrough_output_stream(void) {
         output_params.sampleFormat = paFloat32;
         output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
         output_params.hostApiSpecificStreamInfo = NULL;
-        
+
         // Add comprehensive device diagnostics
         printf("[DEBUG] Device diagnostics for device %d:\n", audio_stream->device_index);
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-        if (device_info) {
+        const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+        if (device_info)
+        {
             printf("[DEBUG] Device name: %s\n", device_info->name);
             printf("[DEBUG] Max output channels: %d\n", device_info->maxOutputChannels);
             printf("[DEBUG] Default sample rate: %f\n", device_info->defaultSampleRate);
             printf("[DEBUG] Default low output latency: %f\n", device_info->defaultLowOutputLatency);
             printf("[DEBUG] Default high output latency: %f\n", device_info->defaultHighOutputLatency);
-            
+
             // Check if device supports output
-            if (device_info->maxOutputChannels == 0) {
+            if (device_info->maxOutputChannels == 0)
+            {
                 printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
                 printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
                 // Try to select an alternative USB device with output capability for OUTPUT ONLY
                 // Check if any other channels are using the same device for output
                 PaDeviceIndex fallback_output = paNoDevice;
-                for (int i = 0; i < MAX_CHANNELS; i++) {
+                for (int i = 0; i < MAX_CHANNELS; i++)
+                {
                     PaDeviceIndex cand = usb_devices[i];
-                    if (cand == paNoDevice || cand == audio_stream->device_index) continue;
-                    
+                    if (cand == paNoDevice || cand == audio_stream->device_index)
+                        continue;
+
                     // Check if this device is already being used by another channel for output
                     int device_in_use = 0;
-                    for (int j = 0; j < MAX_CHANNELS; j++) {
-                        if (j != passthrough_index && channels[j].audio.output_stream != NULL) {
+                    for (int j = 0; j < MAX_CHANNELS; j++)
+                    {
+                        if (j != passthrough_index && channels[j].audio.output_stream != NULL)
+                        {
                             // Check if this channel is using the same device
-                            if (channels[j].audio.device_index == cand) {
+                            if (channels[j].audio.device_index == cand)
+                            {
                                 device_in_use = 1;
                                 break;
                             }
                         }
                     }
-                    
-                    if (device_in_use) continue; // Skip devices already in use
-                    
-                    const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
-                    if (cand_info && cand_info->maxOutputChannels > 0) {
+
+                    if (device_in_use)
+                        continue; // Skip devices already in use
+
+                    const PaDeviceInfo *cand_info = Pa_GetDeviceInfo(cand);
+                    if (cand_info && cand_info->maxOutputChannels > 0)
+                    {
                         // Only use ALSA devices, skip PulseAudio and default
-                        const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
-                        if (host_api && strcmp(host_api->name, "ALSA") == 0) {
+                        const PaHostApiInfo *host_api = Pa_GetHostApiInfo(cand_info->hostApi);
+                        if (host_api && strcmp(host_api->name, "ALSA") == 0)
+                        {
                             fallback_output = cand;
                             break;
                         }
                     }
                 }
-                if (fallback_output != paNoDevice) {
+                if (fallback_output != paNoDevice)
+                {
                     printf("[DEBUG] Using alternative device %d for OUTPUT while keeping INPUT on %d\n", fallback_output, audio_stream->device_index);
                     output_params.device = fallback_output;
                     output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
-                } else {
+                }
+                else
+                {
                     printf("[CRITICAL] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
                     printf("[CRITICAL] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
                     sleep(5);
                     continue;
                 }
             }
-            
+
             // Check if device supports 44100 Hz (native sample rate) - test the ACTUAL output device
             PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-            if (test_err != paFormatIsSupported) {
-                if (test_err == paUnanticipatedHostError) {
+            if (test_err != paFormatIsSupported)
+            {
+                if (test_err == paUnanticipatedHostError)
+                {
                     printf("[WARNING] *** OUTPUT DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", output_params.device);
                     printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
-                    
+
                     // Check if this device is being used by the input stream of the same channel
-                    if (audio_stream->input_stream != NULL) {
+                    if (audio_stream->input_stream != NULL)
+                    {
                         printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
-                        printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) ***\n", 
+                        printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) ***\n",
                                passthrough_index, audio_stream->device_index);
                         Pa_StopStream(audio_stream->input_stream);
                         Pa_CloseStream(audio_stream->input_stream);
                         audio_stream->input_stream = NULL;
                         printf("[DEBUG] *** INPUT STREAM CLOSED AND SET TO NULL FOR CHANNEL %d ***\n", passthrough_index);
                         usleep(1000000); // Wait 1 second for device to be fully released
-                        
+
                         // Retry the format test
                         test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-                        if (test_err == paFormatIsSupported) {
+                        if (test_err == paFormatIsSupported)
+                        {
                             printf("[DEBUG] Output device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", output_params.device);
-                        } else {
+                        }
+                        else
+                        {
                             printf("[ERROR] *** OUTPUT DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", output_params.device);
                             printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                             sleep(5); // Wait before retry
                             continue;
                         }
-                    } else {
+                    }
+                    else
+                    {
                         printf("[ERROR] *** DEVICE %d IS BUSY BUT NO INPUT STREAM TO CLOSE! ***\n", audio_stream->device_index);
                         sleep(5); // Wait before retry
                         continue;
                     }
-                } else {
+                }
+                else
+                {
                     printf("[ERROR] *** OUTPUT DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", output_params.device);
                     printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                     sleep(5); // Wait before retry
                     continue;
                 }
-            } else {
+            }
+            else
+            {
                 printf("[DEBUG] Output device %d supports 44100 Hz sample rate ✓\n", output_params.device);
             }
-        } else {
+        }
+        else
+        {
             printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
             printf("[ERROR] *** This is a critical error - device %d is invalid! ***\n", audio_stream->device_index);
             sleep(5); // Wait before retry
             continue;
         }
-        
+
         const int FORCED_SAMPLE_RATE = 44100;
         int buffer_sizes[] = {512, 256, 1024, 2048, 4096, 8192};
-        
+
         printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR DELAYED CREATION ***\n");
-        printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
+        printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n",
                output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
-        
+
         PaError err = paNoError;
-        for (int j = 0; j < 6 && err != paNoError; j++) {
-            printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n", 
-                   j+1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
-            
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                               FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                               paClipOff, audio_output_callback, audio_stream);
-            
-            if (err == paNoError) {
-                printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n", 
+        for (int j = 0; j < 6 && err != paNoError; j++)
+        {
+            printf("[DEBUG] *** DELAYED CREATION ATTEMPT %d/6: Trying sample_rate=%d, buffer_size=%d ***\n",
+                   j + 1, FORCED_SAMPLE_RATE, buffer_sizes[j]);
+
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params,
+                                FORCED_SAMPLE_RATE, buffer_sizes[j],
+                                paClipOff, audio_output_callback, audio_stream);
+
+            if (err == paNoError)
+            {
+                printf("[DEBUG] *** SUCCESS! Delayed output stream created with sample_rate=%d, buffer_size=%d ***\n",
                        FORCED_SAMPLE_RATE, buffer_sizes[j]);
-                
+
                 // Start the stream
                 err = Pa_StartStream(audio_stream->output_stream);
-                if (err == paNoError) {
+                if (err == paNoError)
+                {
                     printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d DELAYED OUTPUT STREAM STARTED SUCCESSFULLY! ***\n", passthrough_index);
-                    printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n", 
+                    printf("[DEBUG] *** PASSTHROUGH AUDIO SHOULD NOW WORK ON CHANNEL %d (%s)! ***\n",
                            passthrough_index, global_channel_ids[passthrough_index]);
-                    
+
                     // If we closed the input stream to create the output stream, recreate it now
-                    if (audio_stream->input_stream == NULL) {
+                    if (audio_stream->input_stream == NULL)
+                    {
                         printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d ***\n", passthrough_index);
                         // Recreate input stream with same parameters as before
                         PaStreamParameters input_params;
@@ -283,73 +337,92 @@ int create_delayed_passthrough_output_stream(void) {
                         input_params.sampleFormat = paFloat32;
                         input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
                         input_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                                           paClipOff, audio_input_callback, audio_stream);
-                        if (err == paNoError) {
+
+                        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL,
+                                            FORCED_SAMPLE_RATE, buffer_sizes[j],
+                                            paClipOff, audio_input_callback, audio_stream);
+                        if (err == paNoError)
+                        {
                             err = Pa_StartStream(audio_stream->input_stream);
-                            if (err == paNoError) {
+                            if (err == paNoError)
+                            {
                                 printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d ***\n", passthrough_index);
-                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER RECREATION: %p ***\n", (void*)audio_stream->input_stream);
-                            } else {
+                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER RECREATION: %p ***\n", (void *)audio_stream->input_stream);
+                            }
+                            else
+                            {
                                 printf("[ERROR] Failed to start recreated input stream: %s\n", Pa_GetErrorText(err));
                             }
-                        } else {
+                        }
+                        else
+                        {
                             printf("[ERROR] Failed to recreate input stream: %s\n", Pa_GetErrorText(err));
                         }
                     }
-                    
+
                     return 1; // SUCCESS - exit the infinite loop
-                } else {
+                }
+                else
+                {
                     printf("[ERROR] Pa_StartStream failed for delayed stream: %s\n", Pa_GetErrorText(err));
                     Pa_CloseStream(audio_stream->output_stream);
                     audio_stream->output_stream = NULL;
                     err = paNoError;
                 }
-            } else if (err == paDeviceUnavailable) {
+            }
+            else if (err == paDeviceUnavailable)
+            {
                 printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
                 kill_processes_using_audio_device(output_params.device);
                 usleep(1000000); // Wait 1 second
                 err = paNoError;
-            } else if (err == paUnanticipatedHostError) {
+            }
+            else if (err == paUnanticipatedHostError)
+            {
                 printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
                 usleep(2000000); // Wait 2 seconds
                 err = paNoError;
-            } else {
+            }
+            else
+            {
                 // Log any other errors with full details
                 printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
-                printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n", 
+                printf("[ERROR] Device: %d, Sample Rate: %d, Buffer Size: %d\n",
                        output_params.device, FORCED_SAMPLE_RATE, buffer_sizes[j]);
                 err = paNoError; // Try next buffer size
             }
         }
-        
+
         // If we get here, all attempts failed - wait and try again
         printf("[ERROR] *** ATTEMPT #%d FAILED - WAITING 5 SECONDS BEFORE RETRY ***\n", attempt_count);
         printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - CONTINUING TO RETRY ***\n");
         sleep(5); // Wait 5 seconds before next attempt
     }
-    
+
     // This should never be reached due to infinite loop above
     return 0;
 }
 
 // List all available PortAudio devices for debugging
-void list_all_audio_devices(void) {
+void list_all_audio_devices(void)
+{
     printf("[DEBUG] === LISTING ALL AVAILABLE AUDIO DEVICES ===\n");
     int num_devices = Pa_GetDeviceCount();
     printf("[DEBUG] Total devices available: %d\n", num_devices);
-    
-    for (int i = 0; i < num_devices; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-        if (device_info) {
+
+    for (int i = 0; i < num_devices; i++)
+    {
+        const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+        if (device_info)
+        {
             printf("[DEBUG] Device %d: %s\n", i, device_info->name);
             printf("[DEBUG]   - Max input channels: %d\n", device_info->maxInputChannels);
             printf("[DEBUG]   - Max output channels: %d\n", device_info->maxOutputChannels);
             printf("[DEBUG]   - Default sample rate: %f\n", device_info->defaultSampleRate);
             printf("[DEBUG]   - Host API: %s\n", Pa_GetHostApiInfo(device_info->hostApi)->name);
-        } else {
+        }
+        else
+        {
             printf("[DEBUG] Device %d: <INVALID>\n", i);
         }
     }
@@ -357,99 +430,107 @@ void list_all_audio_devices(void) {
 }
 
 // Kill processes using a specific audio device
-void kill_processes_using_audio_device(PaDeviceIndex device_index) {
+void kill_processes_using_audio_device(PaDeviceIndex device_index)
+{
     // Convert PortAudio device index to ALSA device name
     // Device 3 = hw:5,0 (PortAudio device 3 maps to ALSA card 5)
     int alsa_card = device_index + 2; // PortAudio device 3 -> ALSA card 5
-    
+
     printf("[DEBUG] Killing processes using ALSA card %d (PortAudio device %d)\n", alsa_card, device_index);
-    
+
     // Kill processes using the specific ALSA card
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "fuser -k /dev/snd/pcmC%dD0p 2>/dev/null", alsa_card);
     printf("[DEBUG] Executing: %s\n", cmd);
     system(cmd);
-    
+
     // Also kill processes using the card in general
     snprintf(cmd, sizeof(cmd), "fuser -k /dev/snd/controlC%d 2>/dev/null", alsa_card);
     printf("[DEBUG] Executing: %s\n", cmd);
     system(cmd);
-    
+
     // Kill any PulseAudio processes that might be using the device
     system("pkill -f pulseaudio 2>/dev/null");
-    
+
     // Small delay to let processes terminate
     usleep(100000); // 100ms
-    
+
     printf("[DEBUG] Finished killing processes for device %d\n", device_index);
 }
 
 // Repair/restart an inactive output stream for a passthrough target channel
-int repair_passthrough_output_stream(int channel_index) {
+int repair_passthrough_output_stream(int channel_index)
+{
     extern struct channel_context channels[];
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    
-    if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+
+    if (channel_index < 0 || channel_index >= MAX_CHANNELS)
+    {
         printf("[ERROR] repair_passthrough_output_stream: invalid channel_index %d\n", channel_index);
         return 0;
     }
-    
-    struct channel_context* channel = &channels[channel_index];
-    struct audio_stream* audio_stream = &channel->audio;
-    
+
+    struct channel_context *channel = &channels[channel_index];
+    struct audio_stream *audio_stream = &channel->audio;
+
     printf("[DEBUG] *** REPAIR FUNCTION STREAM STATUS CHECK FOR CHANNEL %d ***\n", channel_index);
-    printf("[DEBUG] Input stream pointer: %p\n", (void*)audio_stream->input_stream);
-    printf("[DEBUG] Output stream pointer: %p\n", (void*)audio_stream->output_stream);
+    printf("[DEBUG] Input stream pointer: %p\n", (void *)audio_stream->input_stream);
+    printf("[DEBUG] Output stream pointer: %p\n", (void *)audio_stream->output_stream);
     printf("[DEBUG] Device index: %d\n", audio_stream->device_index);
-    
+
     // If both streams are NULL, prefer creating OUTPUT first;
     // input will be recreated after output succeeds.
-    if (!audio_stream->input_stream && !audio_stream->output_stream) {
+    if (!audio_stream->input_stream && !audio_stream->output_stream)
+    {
         printf("[CRITICAL] *** NO AUDIO STREAMS FOR CHANNEL %d - WILL CREATE OUTPUT FIRST ***\n", channel_index);
     }
-    
-    printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n", 
+
+    printf("[DEBUG] *** ATTEMPTING TO REPAIR PASSTHROUGH TARGET CHANNEL %d (%s) ***\n",
            channel_index, global_channel_ids[channel_index]);
-    
+
     // If stream exists but is inactive, try to restart it
-    if (audio_stream->output_stream) {
+    if (audio_stream->output_stream)
+    {
         printf("[DEBUG] Channel %d has output stream but is inactive - attempting restart\n", channel_index);
-        
+
         // Stop the stream first
         PaError err = Pa_StopStream(audio_stream->output_stream);
-        if (err != paNoError) {
+        if (err != paNoError)
+        {
             printf("[DEBUG] Pa_StopStream failed: %s\n", Pa_GetErrorText(err));
         }
-        
+
         // Close the stream
         err = Pa_CloseStream(audio_stream->output_stream);
-        if (err != paNoError) {
+        if (err != paNoError)
+        {
             printf("[DEBUG] Pa_CloseStream failed: %s\n", Pa_GetErrorText(err));
         }
-        
+
         audio_stream->output_stream = NULL;
     }
-    
+
     // Now try to recreate the output stream - FORCE 48000 Hz ONLY
     printf("[DEBUG] Recreating output stream for passthrough target channel %d\n", channel_index);
-    
+
     // List all devices for debugging
     list_all_audio_devices();
-    
+
     // Check if device index is valid
     int total_devices = Pa_GetDeviceCount();
-    if (audio_stream->device_index >= total_devices) {
-        printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n", 
+    if (audio_stream->device_index >= total_devices)
+    {
+        printf("[ERROR] *** DEVICE INDEX %d IS INVALID - ONLY %d DEVICES AVAILABLE! ***\n",
                audio_stream->device_index, total_devices);
         printf("[ERROR] *** This is why passthrough target is failing! ***\n");
         return 0;
     }
-    
+
     // Define constants locally
     const int AUDIO_BUFFER_SIZE = 512;
     const int AUDIO_CHANNELS = 2;
     const int FORCED_SAMPLE_RATE = 44100; // Use device's native sample rate
-    
+
     // Set up output parameters for diagnostics
     PaStreamParameters output_params;
     output_params.device = audio_stream->device_index;
@@ -457,203 +538,253 @@ int repair_passthrough_output_stream(int channel_index) {
     output_params.sampleFormat = paFloat32;
     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
-    
+
     // Add comprehensive device diagnostics
     printf("[DEBUG] Device diagnostics for device %d:\n", audio_stream->device_index);
-    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-    if (device_info) {
+    const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+    if (device_info)
+    {
         printf("[DEBUG] Device name: %s\n", device_info->name);
         printf("[DEBUG] Max output channels: %d\n", device_info->maxOutputChannels);
         printf("[DEBUG] Default sample rate: %f\n", device_info->defaultSampleRate);
         printf("[DEBUG] Default low output latency: %f\n", device_info->defaultLowOutputLatency);
         printf("[DEBUG] Default high output latency: %f\n", device_info->defaultHighOutputLatency);
-        
+
         // Check if device supports output
-        if (device_info->maxOutputChannels == 0) {
+        if (device_info->maxOutputChannels == 0)
+        {
             printf("[ERROR] *** DEVICE %d HAS NO OUTPUT CHANNELS - CANNOT CREATE OUTPUT STREAM! ***\n", audio_stream->device_index);
             printf("[ERROR] *** This device is INPUT-ONLY and cannot be used for passthrough! ***\n");
             // Try to select an alternative USB device with output capability for OUTPUT ONLY
             // Check if any other channels are using the same device for output
             PaDeviceIndex fallback_output = paNoDevice;
-            for (int i = 0; i < MAX_CHANNELS; i++) {
+            for (int i = 0; i < MAX_CHANNELS; i++)
+            {
                 PaDeviceIndex cand = usb_devices[i];
-                if (cand == paNoDevice || cand == audio_stream->device_index) continue;
-                
+                if (cand == paNoDevice || cand == audio_stream->device_index)
+                    continue;
+
                 // Check if this device is already being used by another channel for output
                 int device_in_use = 0;
-                for (int j = 0; j < MAX_CHANNELS; j++) {
-                    if (j != channel_index && channels[j].audio.output_stream != NULL) {
+                for (int j = 0; j < MAX_CHANNELS; j++)
+                {
+                    if (j != channel_index && channels[j].audio.output_stream != NULL)
+                    {
                         // Check if this channel is using the same device
-                        if (channels[j].audio.device_index == cand) {
+                        if (channels[j].audio.device_index == cand)
+                        {
                             device_in_use = 1;
                             break;
                         }
                     }
                 }
-                
-                if (device_in_use) continue; // Skip devices already in use
-                
-                const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
-                if (cand_info && cand_info->maxOutputChannels > 0) {
+
+                if (device_in_use)
+                    continue; // Skip devices already in use
+
+                const PaDeviceInfo *cand_info = Pa_GetDeviceInfo(cand);
+                if (cand_info && cand_info->maxOutputChannels > 0)
+                {
                     // Only use ALSA devices, skip PulseAudio and default
-                    const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
-                    if (host_api && strcmp(host_api->name, "ALSA") == 0) {
+                    const PaHostApiInfo *host_api = Pa_GetHostApiInfo(cand_info->hostApi);
+                    if (host_api && strcmp(host_api->name, "ALSA") == 0)
+                    {
                         fallback_output = cand;
                         break;
                     }
                 }
             }
-            if (fallback_output != paNoDevice) {
+            if (fallback_output != paNoDevice)
+            {
                 printf("[DEBUG] Using alternative device %d for OUTPUT while keeping INPUT on %d (repair)\n", fallback_output, audio_stream->device_index);
                 output_params.device = fallback_output;
                 output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
-            } else {
+            }
+            else
+            {
                 printf("[CRITICAL] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
                 printf("[CRITICAL] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
                 return 0;
             }
         }
-        
+
         // Check if device supports 44100 Hz (native sample rate) - test the ACTUAL output device
         PaError test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-        if (test_err != paFormatIsSupported) {
-        if (test_err == paUnanticipatedHostError) {
-            printf("[WARNING] *** DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", audio_stream->device_index);
-            printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
-            
-            // Check if this device is being used by the input stream of the same channel
-            if (audio_stream->input_stream != NULL) {
-                printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
-                printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) IN REPAIR FUNCTION ***\n", 
-                       channel_index, audio_stream->device_index);
-                Pa_StopStream(audio_stream->input_stream);
-                Pa_CloseStream(audio_stream->input_stream);
-                audio_stream->input_stream = NULL;
-                printf("[DEBUG] *** INPUT STREAM CLOSED AND SET TO NULL FOR CHANNEL %d IN REPAIR FUNCTION ***\n", channel_index);
-                usleep(500000); // Wait 500ms for device to be fully released
-                
-                // Retry the format test
-                test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
-                if (test_err == paFormatIsSupported) {
-                    printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
-                } else {
-                    printf("[ERROR] *** OUTPUT DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", output_params.device);
-                    printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+        if (test_err != paFormatIsSupported)
+        {
+            if (test_err == paUnanticipatedHostError)
+            {
+                printf("[WARNING] *** DEVICE %d IS BUSY - LIKELY USED BY INPUT STREAM ***\n", audio_stream->device_index);
+                printf("[WARNING] *** Format test error: %s (code: %d) - Device is in use ***\n", Pa_GetErrorText(test_err), test_err);
+
+                // Check if this device is being used by the input stream of the same channel
+                if (audio_stream->input_stream != NULL)
+                {
+                    printf("[DEBUG] *** TEMPORARILY CLOSING INPUT STREAM TO FREE DEVICE FOR OUTPUT ***\n");
+                    printf("[DEBUG] *** CLOSING INPUT STREAM FOR CHANNEL %d (device %d) IN REPAIR FUNCTION ***\n",
+                           channel_index, audio_stream->device_index);
+                    Pa_StopStream(audio_stream->input_stream);
+                    Pa_CloseStream(audio_stream->input_stream);
+                    audio_stream->input_stream = NULL;
+                    printf("[DEBUG] *** INPUT STREAM CLOSED AND SET TO NULL FOR CHANNEL %d IN REPAIR FUNCTION ***\n", channel_index);
+                    usleep(500000); // Wait 500ms for device to be fully released
+
+                    // Retry the format test
+                    test_err = Pa_IsFormatSupported(NULL, &output_params, 44100.0);
+                    if (test_err == paFormatIsSupported)
+                    {
+                        printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓ (after closing input stream)\n", audio_stream->device_index);
+                    }
+                    else
+                    {
+                        printf("[ERROR] *** OUTPUT DEVICE %d STILL BUSY AFTER CLOSING INPUT STREAM! ***\n", output_params.device);
+                        printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
+                        return 0;
+                    }
+                }
+                else
+                {
+                    printf("[ERROR] *** DEVICE %d IS BUSY BUT NO INPUT STREAM TO CLOSE! ***\n", audio_stream->device_index);
                     return 0;
                 }
-            } else {
-                printf("[ERROR] *** DEVICE %d IS BUSY BUT NO INPUT STREAM TO CLOSE! ***\n", audio_stream->device_index);
-                return 0;
             }
-            } else {
+            else
+            {
                 printf("[ERROR] *** OUTPUT DEVICE %d DOES NOT SUPPORT 44100 Hz SAMPLE RATE! ***\n", output_params.device);
                 printf("[ERROR] *** Format test error: %s (code: %d) ***\n", Pa_GetErrorText(test_err), test_err);
                 return 0;
             }
-        } else {
+        }
+        else
+        {
             printf("[DEBUG] Device %d supports 44100 Hz sample rate ✓\n", audio_stream->device_index);
         }
-    } else {
+    }
+    else
+    {
         printf("[ERROR] *** CANNOT GET DEVICE INFO FOR DEVICE %d - DEVICE DOES NOT EXIST! ***\n", audio_stream->device_index);
         printf("[ERROR] *** This is a critical error - device %d is invalid! ***\n", audio_stream->device_index);
         return 0;
     }
-    
+
     // Try different parameters with FORCED 44100 Hz sample rate
     int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 0, 256, 1024, 2048, 4096, 8192}; // 0 = paFramesPerBufferUnspecified
-    PaSampleFormat sample_formats[] = { paFloat32, paInt16, paInt24, paInt32 };
-    const char* sample_format_names[] = { "paFloat32", "paInt16", "paInt24", "paInt32" };
-    double latencies[] = { Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency,
-                           Pa_GetDeviceInfo(output_params.device)->defaultHighOutputLatency };
-    int channel_counts[] = { AUDIO_CHANNELS, 1 };
-    
+    PaSampleFormat sample_formats[] = {paFloat32, paInt16, paInt24, paInt32};
+    const char *sample_format_names[] = {"paFloat32", "paInt16", "paInt24", "paInt32"};
+    double latencies[] = {Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency,
+                          Pa_GetDeviceInfo(output_params.device)->defaultHighOutputLatency};
+    int channel_counts[] = {AUDIO_CHANNELS, 1};
+
     // Always free the input stream if it's on the same device before opening output
-    if (audio_stream->input_stream != NULL && audio_stream->device_index == output_params.device) {
+    if (audio_stream->input_stream != NULL && audio_stream->device_index == output_params.device)
+    {
         printf("[DEBUG] *** ALWAYS CLOSING INPUT STREAM BEFORE OUTPUT OPEN ON DEVICE %d ***\n", output_params.device);
         Pa_StopStream(audio_stream->input_stream);
         Pa_CloseStream(audio_stream->input_stream);
         audio_stream->input_stream = NULL;
         usleep(500000); // allow ALSA to fully release device
     }
-    
+
     printf("[DEBUG] *** STARTING STREAM CREATION LOOP FOR REPAIR ***\n");
-    printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n", 
+    printf("[DEBUG] *** Device %d, Sample Rate: %d, Channels: %d ***\n",
            output_params.device, FORCED_SAMPLE_RATE, output_params.channelCount);
-    
+
     PaError err = paNoError;
-    for (int sf = 0; sf < 4; sf++) {
-        for (int cc = 0; cc < 2; cc++) {
-            for (int lt = 0; lt < 2; lt++) {
-                for (int j = 0; j < 7; j++) {
+    for (int sf = 0; sf < 4; sf++)
+    {
+        for (int cc = 0; cc < 2; cc++)
+        {
+            for (int lt = 0; lt < 2; lt++)
+            {
+                for (int j = 0; j < 7; j++)
+                {
                     output_params.channelCount = channel_counts[cc];
                     output_params.sampleFormat = sample_formats[sf];
                     output_params.suggestedLatency = latencies[lt];
                     printf("[DEBUG] *** REPAIR TRY: fmt=%s, channels=%d, latency=%s, rate=%d, buffer=%d ***\n",
                            sample_format_names[sf], output_params.channelCount,
                            lt == 0 ? "low" : "high", FORCED_SAMPLE_RATE, buffer_sizes[j]);
-        
-        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                           FORCED_SAMPLE_RATE, buffer_sizes[j], 
-                           paClipOff, audio_output_callback, audio_stream);
-        
-        if (err == paNoError) {
+
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params,
+                                        FORCED_SAMPLE_RATE, buffer_sizes[j],
+                                        paClipOff, audio_output_callback, audio_stream);
+
+                    if (err == paNoError)
+                    {
                         printf("[DEBUG] *** SUCCESS! Repaired output stream with rate=%d, buffer=%d, fmt=%s, ch=%d, latency=%s ***\n",
                                FORCED_SAMPLE_RATE, buffer_sizes[j], sample_format_names[sf], output_params.channelCount,
                                lt == 0 ? "low" : "high");
-            
+
                         PaError start_err = Pa_StartStream(audio_stream->output_stream);
-                        if (start_err == paNoError) {
-                printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
-                printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
-                printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
-                
-                if (audio_stream->input_stream == NULL) {
-                    printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
-                    PaStreamParameters input_params;
-                    input_params.device = audio_stream->device_index;
-                    input_params.channelCount = 1;
-                    input_params.sampleFormat = paFloat32;
-                    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
-                    input_params.hostApiSpecificStreamInfo = NULL;
-                    
+                        if (start_err == paNoError)
+                        {
+                            printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR COMPLETE! ***\n", channel_index);
+                            printf("[DEBUG] *** CHANNEL %d NOW HAS WORKING OUTPUT STREAM - PASSTHROUGH SHOULD WORK! ***\n", channel_index);
+                            printf("[DEBUG] *** AUDIO SHOULD NOW BE PLAYING ON CHANNEL %d OUTPUT! ***\n", channel_index);
+
+                            if (audio_stream->input_stream == NULL)
+                            {
+                                printf("[DEBUG] *** RECREATING INPUT STREAM FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                                PaStreamParameters input_params;
+                                input_params.device = audio_stream->device_index;
+                                input_params.channelCount = 1;
+                                input_params.sampleFormat = paFloat32;
+                                input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+                                input_params.hostApiSpecificStreamInfo = NULL;
+
                                 int input_buffer = buffer_sizes[j] == 0 ? AUDIO_BUFFER_SIZE : buffer_sizes[j];
                                 PaError in_err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL,
                                                                FORCED_SAMPLE_RATE, input_buffer,
-                                       paClipOff, audio_input_callback, audio_stream);
-                                if (in_err == paNoError) {
+                                                               paClipOff, audio_input_callback, audio_stream);
+                                if (in_err == paNoError)
+                                {
                                     in_err = Pa_StartStream(audio_stream->input_stream);
-                                    if (in_err == paNoError) {
-                                printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
-                                printf("[DEBUG] *** INPUT STREAM POINTER AFTER REPAIR RECREATION: %p ***\n", (void*)audio_stream->input_stream);
-                            } else {
+                                    if (in_err == paNoError)
+                                    {
+                                        printf("[DEBUG] *** INPUT STREAM RECREATED SUCCESSFULLY FOR CHANNEL %d AFTER REPAIR ***\n", channel_index);
+                                        printf("[DEBUG] *** INPUT STREAM POINTER AFTER REPAIR RECREATION: %p ***\n", (void *)audio_stream->input_stream);
+                                    }
+                                    else
+                                    {
                                         printf("[ERROR] Failed to start recreated input stream after repair: %s\n", Pa_GetErrorText(in_err));
-                            }
-                        } else {
+                                    }
+                                }
+                                else
+                                {
                                     printf("[ERROR] Failed to recreate input stream after repair: %s\n", Pa_GetErrorText(in_err));
-                        }
-                }
-                
+                                }
+                            }
+
                             force_passthrough_reevaluation = 1;
-                return 1;
-            } else {
+                            return 1;
+                        }
+                        else
+                        {
                             printf("[ERROR] Pa_StartStream failed after repair: %s\n", Pa_GetErrorText(start_err));
-                Pa_CloseStream(audio_stream->output_stream);
-                audio_stream->output_stream = NULL;
+                            Pa_CloseStream(audio_stream->output_stream);
+                            audio_stream->output_stream = NULL;
                             // continue trying
-            }
-        } else if (err == paDeviceUnavailable) {
-            printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
-            kill_processes_using_audio_device(output_params.device);
+                        }
+                    }
+                    else if (err == paDeviceUnavailable)
+                    {
+                        printf("[DEBUG] Device %d is busy - killing processes using it\n", output_params.device);
+                        kill_processes_using_audio_device(output_params.device);
                         usleep(500000);
                         // continue trying other combos
-        } else if (err == paUnanticipatedHostError) {
-            printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
+                    }
+                    else if (err == paUnanticipatedHostError)
+                    {
+                        printf("[DEBUG] Device %d has hardware error - waiting and retrying\n", output_params.device);
                         usleep(1000000);
                         // continue
-        } else {
-            printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
-                        const PaHostErrorInfo* host_err = Pa_GetLastHostErrorInfo();
-                        if (host_err) {
+                    }
+                    else
+                    {
+                        printf("[ERROR] Pa_OpenStream failed with error: %s (code: %d)\n", Pa_GetErrorText(err), err);
+                        const PaHostErrorInfo *host_err = Pa_GetLastHostErrorInfo();
+                        if (host_err)
+                        {
                             printf("[ERROR] Host error API: %d, Code: %ld, Text: %s\n", host_err->hostApiType, (long)host_err->errorCode, host_err->errorText ? host_err->errorText : "(null)");
                         }
                         printf("[ERROR] Device: %d, Rate: %d, Buffer: %d, Fmt: %s, Ch: %d, Latency: %s\n",
@@ -665,84 +796,99 @@ int repair_passthrough_output_stream(int channel_index) {
             }
         }
     }
-    
+
     // NO ALTERNATIVE DEVICES - Passthrough target must use its assigned device
-    if (err != paNoError) {
+    if (err != paNoError)
+    {
         printf("[ERROR] *** FAILED TO CREATE OUTPUT STREAM ON ASSIGNED DEVICE %d ***\n", output_params.device);
         printf("[ERROR] *** Passthrough target MUST use its assigned device - no alternatives allowed ***\n");
     }
-    
+
     printf("[ERROR] *** FAILED TO REPAIR PASSTHROUGH TARGET CHANNEL %d ***\n", channel_index);
     return 0;
 }
 
 // Find the best available channel for passthrough (one with working output stream)
-int find_best_passthrough_channel(void) {
+int find_best_passthrough_channel(void)
+{
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     extern int global_channel_count;
-    
+
     // Check if we need to force re-evaluation due to successful repair
-    if (force_passthrough_reevaluation) {
+    if (force_passthrough_reevaluation)
+    {
         printf("[DEBUG] *** FORCING PASSTHROUGH RE-EVALUATION DUE TO SUCCESSFUL REPAIR ***\n");
         force_passthrough_reevaluation = 0; // Reset flag
     }
-    
+
     // First try the configured passthrough target
     int configured_target = get_passthrough_target_channel_index();
-    if (configured_target >= 0 && configured_target < global_channel_count) {
-        if (channel_has_output_stream(configured_target)) {
-            printf("[DEBUG] Configured passthrough target channel %d (%s) has working output stream\n", 
+    if (configured_target >= 0 && configured_target < global_channel_count)
+    {
+        if (channel_has_output_stream(configured_target))
+        {
+            printf("[DEBUG] Configured passthrough target channel %d (%s) has working output stream\n",
                    configured_target, global_channel_ids[configured_target]);
             return configured_target;
-        } else {
-            printf("[WARNING] Configured passthrough target channel %d (%s) has no working output stream - attempting repair\n", 
+        }
+        else
+        {
+            printf("[WARNING] Configured passthrough target channel %d (%s) has no working output stream - attempting repair\n",
                    configured_target, global_channel_ids[configured_target]);
-            
+
             // Try to repair the passthrough target channel
-            if (repair_passthrough_output_stream(configured_target)) {
+            if (repair_passthrough_output_stream(configured_target))
+            {
                 printf("[DEBUG] *** PASSTHROUGH TARGET CHANNEL %d REPAIR SUCCESSFUL! ***\n", configured_target);
                 printf("[DEBUG] *** FORCING PASSTHROUGH TO USE REPAIRED CHANNEL %d ***\n", configured_target);
                 return configured_target;
-            } else {
+            }
+            else
+            {
                 printf("[ERROR] *** PASSTHROUGH TARGET CHANNEL %d REPAIR FAILED! ***\n", configured_target);
             }
         }
     }
-    
+
     // CRITICAL: Channel 4 MUST be the passthrough target - no alternatives allowed
     return configured_target; // Return the configured target even if it's not working
 }
 
 // Check if a channel has a working output stream
-int channel_has_output_stream(int channel_index) {
-    if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+int channel_has_output_stream(int channel_index)
+{
+    if (channel_index < 0 || channel_index >= MAX_CHANNELS)
+    {
         printf("[DEBUG] channel_has_output_stream: invalid channel_index %d\n", channel_index);
         return 0;
     }
-    
-    PaStream* stream = channels[channel_index].audio.output_stream;
-    if (stream == NULL) {
+
+    PaStream *stream = channels[channel_index].audio.output_stream;
+    if (stream == NULL)
+    {
         printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=0, stream_ptr=NULL\n", channel_index);
         return 0;
     }
-    
+
     // Check if the stream is actually active
     PaError err = Pa_IsStreamActive(stream);
     int is_active = (err == 1) ? 1 : 0;
-    
-    printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n", 
+
+    printf("[DEBUG] channel_has_output_stream: channel_index=%d, has_stream=1, stream_ptr=%p, is_active=%d, pa_error=%d\n",
            channel_index, stream, is_active, err);
-    
+
     // Special handling for the last channel (typically the passthrough target) - log when stream becomes inactive
     extern int global_channel_count;
-    if (!is_active && channel_index == (global_channel_count - 1)) {
+    if (!is_active && channel_index == (global_channel_count - 1))
+    {
         static int last_channel_inactive_count = 0;
-        if (last_channel_inactive_count++ % 100 == 0) {
-            printf("[DEBUG] Last channel (index %d) output stream is inactive (count: %d)\n", 
+        if (last_channel_inactive_count++ % 100 == 0)
+        {
+            printf("[DEBUG] Last channel (index %d) output stream is inactive (count: %d)\n",
                    channel_index, last_channel_inactive_count);
         }
     }
-    
+
     // Return true only if stream exists AND is active
     // A stream that exists but isn't active can't play audio
     return is_active;
@@ -752,27 +898,32 @@ int channel_has_output_stream(int channel_index) {
 int force_passthrough_reevaluation = 0;
 
 // Periodic repair attempt for passthrough target channels
-static void periodic_passthrough_repair(void) {
+static void periodic_passthrough_repair(void)
+{
     static int repair_attempt_count = 0;
     repair_attempt_count++;
-    
+
     // Try to repair every 1000 calls (roughly every 10-20 seconds) - MUST SUCCEED
-    if (repair_attempt_count % 1000 == 0) {
+    if (repair_attempt_count % 1000 == 0)
+    {
         int configured_target = get_passthrough_target_channel_index();
-        if (configured_target >= 0) {
-            if (!channel_has_output_stream(configured_target)) {
-                printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n", 
+        if (configured_target >= 0)
+        {
+            if (!channel_has_output_stream(configured_target))
+            {
+                printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n",
                        repair_attempt_count / 1000, configured_target);
                 printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - ATTEMPTING REPAIR ***\n");
-                
+
                 // Keep trying repair until success
                 int repair_attempts = 0;
-                while (!repair_passthrough_output_stream(configured_target)) {
+                while (!repair_passthrough_output_stream(configured_target))
+                {
                     repair_attempts++;
                     printf("[CRITICAL] *** REPAIR ATTEMPT #%d FAILED - RETRYING IN 2 SECONDS ***\n", repair_attempts);
                     sleep(2); // Wait 2 seconds before retry
                 }
-                
+
                 printf("[DEBUG] *** PERIODIC REPAIR SUCCESSFUL AFTER %d ATTEMPTS - FORCING PASSTHROUGH RE-EVALUATION ***\n", repair_attempts + 1);
                 force_passthrough_reevaluation = 1;
             }
@@ -781,50 +932,61 @@ static void periodic_passthrough_repair(void) {
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
-static int is_configured_passthrough_channel_id(const char* channel_id) {
-    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    if (!tone_cfg || !tone_cfg->tone_passthrough) {
+static int is_configured_passthrough_channel_id(const char *channel_id)
+{
+    struct tone_detect_config *tone_cfg = get_tone_detect_config(0);
+    if (!tone_cfg || !tone_cfg->tone_passthrough)
+    {
         static int debug_count = 0;
-        if (debug_count++ % 10000 == 0) {
-            printf("[DEBUG] is_configured_passthrough_channel_id: tone_cfg=%p, tone_passthrough=%d\n", 
+        if (debug_count++ % 10000 == 0)
+        {
+            printf("[DEBUG] is_configured_passthrough_channel_id: tone_cfg=%p, tone_passthrough=%d\n",
                    tone_cfg, tone_cfg ? tone_cfg->tone_passthrough : -1);
         }
         return 0;
     }
-    
+
     // Run periodic repair attempts
     periodic_passthrough_repair();
-    
+
     // SIMPLIFIED: Directly check if this is Channel 4 (the configured passthrough target)
     // Channel 4 is always index 3 and has ID "channel_4"
-    if (strcmp(channel_id, "channel_4") == 0) {
+    if (strcmp(channel_id, "channel_4") == 0)
+    {
         return 1;
     }
-    
+
     // Fallback to original logic
     int idx = -1;
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) idx = 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) idx = 0;
-    
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0)
+        idx = 3;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0)
+        idx = 2;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0)
+        idx = 1;
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0)
+        idx = 0;
+
     static int debug_count = 0;
-    if (debug_count++ % 10000 == 0) {
-        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, passthrough_channel=%s, idx=%d\n", 
+    if (debug_count++ % 10000 == 0)
+    {
+        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, passthrough_channel=%s, idx=%d\n",
                channel_id, tone_cfg->passthrough_channel, idx);
     }
-    
-    if (idx < 0) return 0;
+
+    if (idx < 0)
+        return 0;
     return (strcmp(channel_id, global_channel_ids[idx]) == 0) ? 1 : 0;
 }
 
 // Initialize tone detection control
-int init_tone_detect_control(void) {
+int init_tone_detect_control(void)
+{
     memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
     // Initialize based on shadow config
-    struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
-    global_tone_detect.enabled = 1;  // Start enabled by default
-    global_tone_detect.card1_input_enabled = 1;  // Channel 1 input enabled by default
+    struct tone_detect_config *tone_cfg = get_tone_detect_config(0);
+    global_tone_detect.enabled = 1;             // Start enabled by default
+    global_tone_detect.card1_input_enabled = 1; // Channel 1 input enabled by default
     global_tone_detect.passthrough_mode = (tone_cfg && tone_cfg->tone_passthrough) ? 1 : 0;
     pthread_mutex_init(&global_tone_detect.mutex, NULL);
     printf("[INFO] Tone detection control initialized (enabled by default)\n");
@@ -832,9 +994,10 @@ int init_tone_detect_control(void) {
 }
 
 // Initialize audio devices and kill interfering processes
-int initialize_audio_devices(void) {
+int initialize_audio_devices(void)
+{
     printf("[AUDIO INIT] Starting comprehensive audio device initialization...\n");
-    
+
     // Kill any audio processes that might interfere
     printf("[AUDIO INIT] Killing interfering audio processes...\n");
     system("pkill -f pulseaudio 2>/dev/null || true");
@@ -843,67 +1006,74 @@ int initialize_audio_devices(void) {
     system("pkill -f audio 2>/dev/null || true");
     system("pkill -f arecord 2>/dev/null || true");
     system("pkill -f aplay 2>/dev/null || true");
-    
+
     // Wait a moment for processes to terminate
     usleep(500000); // 500ms
-    
+
     // Restart PulseAudio to ensure it's working properly
     printf("[AUDIO INIT] Restarting PulseAudio...\n");
     system("pulseaudio --kill 2>/dev/null || true");
     usleep(200000); // 200ms
     system("pulseaudio --start 2>/dev/null || true");
     usleep(500000); // 500ms
-    
+
     // Configure ALSA to ensure all USB audio devices are available
     printf("[AUDIO INIT] Configuring ALSA audio devices...\n");
-    
+
     // Force reload ALSA modules
     system("sudo modprobe -r snd-usb-audio 2>/dev/null || true");
     usleep(200000); // 200ms
     system("sudo modprobe snd-usb-audio 2>/dev/null || true");
     usleep(500000); // 500ms
-    
+
     // Set all USB audio cards to both input and output mode
     printf("[AUDIO INIT] Configuring USB audio cards for input/output mode...\n");
-    
+
     // Get list of USB audio cards
     FILE *fp = popen("cat /proc/asound/cards | grep -E 'USB Audio Device' | awk '{print $1}'", "r");
-    if (fp) {
+    if (fp)
+    {
         char card_num[10];
-        while (fgets(card_num, sizeof(card_num), fp)) {
+        while (fgets(card_num, sizeof(card_num), fp))
+        {
             int card = atoi(card_num);
-            if (card >= 0) {
+            if (card >= 0)
+            {
                 printf("[AUDIO INIT] Found USB audio card %d\n", card);
-                
+
                 // Just verify the card exists and is accessible
                 char cmd[256];
-                snprintf(cmd, sizeof(cmd), 
-                    "test -e /proc/asound/card%d && echo 'Card %d: EXISTS' || echo 'Card %d: NOT FOUND'", 
-                    card, card, card);
+                snprintf(cmd, sizeof(cmd),
+                         "test -e /proc/asound/card%d && echo 'Card %d: EXISTS' || echo 'Card %d: NOT FOUND'",
+                         card, card, card);
                 system(cmd);
-                
+
                 // Configure the card for both input and output
                 printf("[AUDIO INIT] Configuring card %d for input/output...\n", card);
-                
+
                 // Test input capability
-                snprintf(cmd, sizeof(cmd), 
-                    "arecord -D hw:%d,0 -f S16_LE -r 48000 -c 1 -d 1 /dev/null 2>&1 | head -1", card);
+                snprintf(cmd, sizeof(cmd),
+                         "arecord -D hw:%d,0 -f S16_LE -r 48000 -c 1 -d 1 /dev/null 2>&1 | head -1", card);
                 FILE *test_fp = popen(cmd, "r");
-                if (test_fp) {
+                if (test_fp)
+                {
                     char result[256];
-                    if (fgets(result, sizeof(result), test_fp)) {
+                    if (fgets(result, sizeof(result), test_fp))
+                    {
                         printf("[AUDIO INIT] Card %d input test: %s", card, result);
                     }
                     pclose(test_fp);
                 }
-                
+
                 // Test output capability
-                snprintf(cmd, sizeof(cmd), 
-                    "aplay -D hw:%d,0 -f S16_LE -r 48000 -c 1 /dev/zero 2>&1 | head -1", card);
+                snprintf(cmd, sizeof(cmd),
+                         "aplay -D hw:%d,0 -f S16_LE -r 48000 -c 1 /dev/zero 2>&1 | head -1", card);
                 test_fp = popen(cmd, "r");
-                if (test_fp) {
+                if (test_fp)
+                {
                     char result[256];
-                    if (fgets(result, sizeof(result), test_fp)) {
+                    if (fgets(result, sizeof(result), test_fp))
+                    {
                         printf("[AUDIO INIT] Card %d output test: %s", card, result);
                     }
                     pclose(test_fp);
@@ -912,49 +1082,53 @@ int initialize_audio_devices(void) {
         }
         pclose(fp);
     }
-    
+
     // Verify PortAudio can see all devices
     printf("[AUDIO INIT] Verifying PortAudio device enumeration...\n");
     int device_count = Pa_GetDeviceCount();
     printf("[AUDIO INIT] PortAudio found %d audio devices\n", device_count);
-    
-    for (int i = 0; i < device_count; i++) {
+
+    for (int i = 0; i < device_count; i++)
+    {
         const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
-        if (device_info) {
-            printf("[AUDIO INIT] Device %d: %s (Input: %d, Output: %d)\n", 
+        if (device_info)
+        {
+            printf("[AUDIO INIT] Device %d: %s (Input: %d, Output: %d)\n",
                    i, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
         }
     }
-    
+
     printf("[AUDIO INIT] Audio device initialization completed\n");
     return 1;
 }
 
 // Cleanup audio devices and restore normal state
-int cleanup_audio_devices(void) {
+int cleanup_audio_devices(void)
+{
     printf("[AUDIO CLEANUP] Restoring audio devices to normal state...\n");
-    
+
     // Stop any audio streams
     printf("[AUDIO CLEANUP] Stopping audio streams...\n");
-    
+
     // Restart PulseAudio if it was running before
     printf("[AUDIO CLEANUP] Restarting PulseAudio...\n");
     system("pulseaudio --start 2>/dev/null || true");
-    
+
     // Clean up temporary ALSA configurations
     printf("[AUDIO CLEANUP] Cleaning up temporary ALSA configurations...\n");
     system("rm -f /tmp/asound_card*.conf 2>/dev/null || true");
-    
+
     printf("[AUDIO CLEANUP] Audio device cleanup completed\n");
     return 1;
 }
 
 // Enable tone detection
-int enable_tone_detection(void) {
+int enable_tone_detection(void)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 1;
-    global_tone_detect.card1_input_enabled = 1;  // Enable Card 1 input for tone detection
-    global_tone_detect.passthrough_mode = 1;  // Enable passthrough mode
+    global_tone_detect.card1_input_enabled = 1; // Enable Card 1 input for tone detection
+    global_tone_detect.passthrough_mode = 1;    // Enable passthrough mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
     printf("[INFO] Tone detection ENABLED - source input active for tone detection, passthrough mode enabled\n");
     printf("[INFO] Primary output continues to play EchoStream audio\n");
@@ -962,11 +1136,12 @@ int enable_tone_detection(void) {
 }
 
 // Disable tone detection
-int disable_tone_detection(void) {
+int disable_tone_detection(void)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.enabled = 0;
-    global_tone_detect.card1_input_enabled = 0;  // Disable Card 1 input for tone detection
-    global_tone_detect.passthrough_mode = 0;  // Switch output to EchoStream mode
+    global_tone_detect.card1_input_enabled = 0; // Disable Card 1 input for tone detection
+    global_tone_detect.passthrough_mode = 0;    // Switch output to EchoStream mode
     pthread_mutex_unlock(&global_tone_detect.mutex);
     printf("[INFO] Tone detection DISABLED - source input disabled for tone detection, EchoStream mode\n");
     printf("[INFO] Primary output continues to play EchoStream audio\n");
@@ -974,7 +1149,8 @@ int disable_tone_detection(void) {
 }
 
 // Set passthrough output mode (for configured target channel)
-int set_passthrough_output_mode(int passthrough_mode) {
+int set_passthrough_output_mode(int passthrough_mode)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     global_tone_detect.passthrough_mode = passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
@@ -983,7 +1159,8 @@ int set_passthrough_output_mode(int passthrough_mode) {
 }
 
 // Check if tone detection is enabled
-int is_tone_detect_enabled(void) {
+int is_tone_detect_enabled(void)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     int enabled = global_tone_detect.enabled;
     pthread_mutex_unlock(&global_tone_detect.mutex);
@@ -991,7 +1168,8 @@ int is_tone_detect_enabled(void) {
 }
 
 // Check if Card 1 input is enabled
-int is_card1_input_enabled(void) {
+int is_card1_input_enabled(void)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     int enabled = global_tone_detect.card1_input_enabled;
     pthread_mutex_unlock(&global_tone_detect.mutex);
@@ -999,7 +1177,8 @@ int is_card1_input_enabled(void) {
 }
 
 // Check if passthrough mode is enabled
-int is_passthrough_mode(void) {
+int is_passthrough_mode(void)
+{
     pthread_mutex_lock(&global_tone_detect.mutex);
     int passthrough = global_tone_detect.passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
@@ -1008,592 +1187,684 @@ int is_passthrough_mode(void) {
 
 // Modified audio input callback with tone detection control
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
-                                const PaStreamCallbackTimeInfo* time_info,
-                                PaStreamCallbackFlags flags, void *user_data) {
-    (void)output; // Suppress unused parameter warning
+                                const PaStreamCallbackTimeInfo *time_info,
+                                PaStreamCallbackFlags flags, void *user_data)
+{
+    (void)output;    // Suppress unused parameter warning
     (void)time_info; // Suppress unused parameter warning
-    (void)flags; // Suppress unused parameter warning
-    
-    struct audio_stream* audio_stream = (struct audio_stream*)user_data;
-    
+    (void)flags;     // Suppress unused parameter warning
+
+    struct audio_stream *audio_stream = (struct audio_stream *)user_data;
+
     static int callback_count = 0;
-    if (callback_count++ % 1000 == 0) {  // More frequent logging - about every 3 seconds
-        printf("Audio input callback called #%d (frames=%lu, transmitting=%d, gpio_active=%d)\n", 
+    if (callback_count++ % 1000 == 0)
+    { // More frequent logging - about every 3 seconds
+        printf("Audio input callback called #%d (frames=%lu, transmitting=%d, gpio_active=%d)\n",
                callback_count, frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
-    
+
     // Check if this channel has tone detection enabled (configurable from config.json)
     int channel_has_tone_detect = 0;
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        struct channel_config* channel_config = get_channel_config(i);
-        if (channel_config && channel_config->valid && 
-            strcmp(channel_config->channel_id, audio_stream->channel_id) == 0) {
+    for (int i = 0; i < MAX_CHANNELS; i++)
+    {
+        struct channel_config *channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid &&
+            strcmp(channel_config->channel_id, audio_stream->channel_id) == 0)
+        {
             channel_has_tone_detect = channel_config->tone_detect;
             break;
         }
     }
-    
+
     // For channels with tone detection, check if input is enabled
     // For other channels, always enable input
     int input_enabled = channel_has_tone_detect ? is_card1_input_enabled() : 1;
-    
-    if (!audio_stream->transmitting || !input || !audio_stream->gpio_active) {
+
+    if (!audio_stream->transmitting || !input || !audio_stream->gpio_active)
+    {
         return paContinue;
     }
-    
+
     static int audio_processing_count = 0;
-    if (audio_processing_count++ % 1000 == 0) {  // More frequent logging - about every 3 seconds
-        printf("Audio processing for channel %s (frames=%lu, input_enabled=%d)\n", 
+    if (audio_processing_count++ % 1000 == 0)
+    { // More frequent logging - about every 3 seconds
+        printf("Audio processing for channel %s (frames=%lu, input_enabled=%d)\n",
                audio_stream->channel_id, frames, input_enabled);
     }
-    
-    const float *samples = (const float*)input;
-    
+
+    const float *samples = (const float *)input;
+
     // Update shared buffer strictly from the source input (channel_one) for passthrough
     int should_update_shared_buffer = 0;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0) {
+    if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0)
+    {
         should_update_shared_buffer = 1;
     }
-    
-    if (should_update_shared_buffer) {
-        // Use raw audio samples without any smoothing to eliminate choppiness
+
+    if (should_update_shared_buffer)
+    {
+        // Use raw audio samples for tone detection processing
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
+        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++)
+        {
             global_shared_buffer.samples[i] = samples[i];
         }
         global_shared_buffer.sample_count = frames;
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Update passthrough buffer for synchronized output
-        pthread_mutex_lock(&global_passthrough_buffer.mutex);
-        for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++) {
-            global_passthrough_buffer.samples[i] = samples[i];
-        }
-        global_passthrough_buffer.sample_count = frames;
-        global_passthrough_buffer.valid = 1;
-        pthread_mutex_unlock(&global_passthrough_buffer.mutex);
-        
-        // Debug logging for buffers
+
+        // Note: passthrough buffer is now updated by tone detection thread with processed audio
+        // Debug logging for shared buffer only
         static int buffer_count = 0;
-        if (buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Both buffers updated: frames=%lu, shared_valid=%d, passthrough_valid=%d (raw audio)\n", 
-                   frames, global_shared_buffer.valid, global_passthrough_buffer.valid);
+        if (buffer_count++ % 10000 == 0)
+        {
+            printf("[DEBUG] Shared buffer updated: frames=%lu, shared_valid=%d (raw audio for tone detection)\n",
+                   frames, global_shared_buffer.valid);
         }
     }
-    
+
     // Process audio for EchoStream (only if input is enabled for this channel)
-    if (input_enabled) {
-        for (unsigned long i = 0; i < frames; i++) {
+    if (input_enabled)
+    {
+        for (unsigned long i = 0; i < frames; i++)
+        {
             audio_stream->input_buffer[audio_stream->input_buffer_pos++] = samples[i];
-            
-            if (audio_stream->input_buffer_pos >= 1920) {
+
+            if (audio_stream->input_buffer_pos >= 1920)
+            {
                 short pcm[1920];
-                for (int j = 0; j < 1920; j++) {
+                for (int j = 0; j < 1920; j++)
+                {
                     float sample = audio_stream->input_buffer[j];
-                    if (sample > 1.0f) sample = 1.0f;
-                    if (sample < -1.0f) sample = -1.0f;
+                    if (sample > 1.0f)
+                        sample = 1.0f;
+                    if (sample < -1.0f)
+                        sample = -1.0f;
                     pcm[j] = (short)(sample * 32767.0f);
                 }
-                
+
                 unsigned char opus_data[4000];
                 int opus_len = opus_encode(audio_stream->encoder, pcm, 1920, opus_data, sizeof(opus_data));
-                
-                if (opus_len > 0) {
+
+                if (opus_len > 0)
+                {
                     size_t encrypted_len;
-                    unsigned char* encrypted = encrypt_data(opus_data, opus_len, audio_stream->key, &encrypted_len);
-                    
-                    if (encrypted) {
-                        char* b64_data = encode_base64(encrypted, encrypted_len);
-                        
-                        if (b64_data) {
+                    unsigned char *encrypted = encrypt_data(opus_data, opus_len, audio_stream->key, &encrypted_len);
+
+                    if (encrypted)
+                    {
+                        char *b64_data = encode_base64(encrypted, encrypted_len);
+
+                        if (b64_data)
+                        {
                             char msg[8192];
                             snprintf(msg, sizeof(msg),
-                                    "{\"channel_id\":\"%s\",\"type\":\"audio\",\"data\":\"%s\"}", audio_stream->channel_id, b64_data);
-                            
+                                     "{\"channel_id\":\"%s\",\"type\":\"audio\",\"data\":\"%s\"}", audio_stream->channel_id, b64_data);
+
                             int sent = sendto(global_udp_socket, msg, strlen(msg), 0,
-                                   (struct sockaddr*)&global_server_addr, sizeof(global_server_addr));
-                            
+                                              (struct sockaddr *)&global_server_addr, sizeof(global_server_addr));
+
                             static int audio_send_count = 0;
-                            if (audio_send_count++ % 10000 == 0) {  // Even less frequent logging
-                                printf("Audio sent for channel %s (%d bytes, UDP result: %d)\n", 
+                            if (audio_send_count++ % 10000 == 0)
+                            { // Even less frequent logging
+                                printf("Audio sent for channel %s (%d bytes, UDP result: %d)\n",
                                        audio_stream->channel_id, (int)strlen(msg), sent);
                             }
-                            
+
                             free(b64_data);
                         }
                         free(encrypted);
                     }
                 }
-                
+
                 audio_stream->input_buffer_pos = 0;
             }
         }
     }
-    
+
     return paContinue;
 }
 
 // Modified audio output callback
 int audio_output_callback(const void *input, void *output, unsigned long frames,
-                                const PaStreamCallbackTimeInfo* time_info,
-                                PaStreamCallbackFlags flags, void *user_data) {
-    (void)input; // Suppress unused parameter warning
+                          const PaStreamCallbackTimeInfo *time_info,
+                          PaStreamCallbackFlags flags, void *user_data)
+{
+    (void)input;     // Suppress unused parameter warning
     (void)time_info; // Suppress unused parameter warning
-    (void)flags; // Suppress unused parameter warning
-    
-    struct audio_stream* audio_stream = (struct audio_stream*)user_data;
-    float *out = (float*)output;
+    (void)flags;     // Suppress unused parameter warning
+
+    struct audio_stream *audio_stream = (struct audio_stream *)user_data;
+    float *out = (float *)output;
     struct jitter_buffer *jitter = &audio_stream->output_jitter;
-    
+
     static int callback_count = 0;
-    if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
-        printf("Audio output callback called for channel %s (frames=%lu, buffer_count=%d)\n", 
+    if (callback_count++ % 100000 == 0)
+    { // Even less frequent logging - about every 30 seconds
+        printf("Audio output callback called for channel %s (frames=%lu, buffer_count=%d)\n",
                audio_stream->channel_id, frames, jitter->frame_count);
     }
-    
+
     // Check if this channel is the configured passthrough target
     int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
     int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
-    
-    if (passthrough_mode) {
+
+    if (passthrough_mode)
+    {
         // Configured passthrough target in passthrough mode - play audio from dedicated passthrough buffer
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
-        if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-            // Apply moderate gain and duplicate mono to stereo with proper clamping
-            const float PASSTHROUGH_OUTPUT_GAIN = 1.5f; // Reduced from 3.0f to prevent distortion
+        if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0)
+        {
+            // Apply minimal gain since audio is already processed by tone detection
+            const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // No additional gain since tone detection already applied gain
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
-            if (samples_to_process > frames) samples_to_process = frames;
-            
+            if (samples_to_process > frames)
+                samples_to_process = frames;
+
             // Get device info to determine output channel count
-            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+            const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
-            
+
             // Process mono input and duplicate to stereo output
-            for (unsigned long i = 0; i < samples_to_process; i++) {
+            for (unsigned long i = 0; i < samples_to_process; i++)
+            {
                 float sample = global_passthrough_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
-                
+
                 // Clamp to prevent distortion
-                if (sample > 1.0f) sample = 1.0f;
-                else if (sample < -1.0f) sample = -1.0f;
-                
+                if (sample > 1.0f)
+                    sample = 1.0f;
+                else if (sample < -1.0f)
+                    sample = -1.0f;
+
                 // Duplicate mono to both stereo channels
-                if (output_channels >= 2) {
+                if (output_channels >= 2)
+                {
                     out[i * 2] = sample;     // Left channel
                     out[i * 2 + 1] = sample; // Right channel
-                } else {
+                }
+                else
+                {
                     out[i] = sample; // Mono output
                 }
             }
-            
+
             // Fill any remainder with silence
-            for (unsigned long i = samples_to_process; i < frames; i++) {
-                if (output_channels >= 2) {
+            for (unsigned long i = samples_to_process; i < frames; i++)
+            {
+                if (output_channels >= 2)
+                {
                     out[i * 2] = 0.0f;     // Left channel
                     out[i * 2 + 1] = 0.0f; // Right channel
-                } else {
+                }
+                else
+                {
                     out[i] = 0.0f; // Mono output
                 }
             }
-            
+
             // Keep buffer valid - it will be overwritten by new audio data
             // Don't invalidate to prevent choppy on/off pattern
-        } else {
+        }
+        else
+        {
             // No audio data - fill with silence
-            const PaDeviceInfo* device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+            const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
             int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
-            
-            for (unsigned long i = 0; i < frames; i++) {
-                if (output_channels >= 2) {
+
+            for (unsigned long i = 0; i < frames; i++)
+            {
+                if (output_channels >= 2)
+                {
                     out[i * 2] = 0.0f;     // Left channel
                     out[i * 2 + 1] = 0.0f; // Right channel
-                } else {
+                }
+                else
+                {
                     out[i] = 0.0f; // Mono output
                 }
             }
-            
+
             // Debug: no audio data in passthrough buffer
             static int no_audio_count = 0;
-            if (no_audio_count++ % 100 == 0) {
-                printf("[DEBUG] Passthrough mode active but no audio in passthrough buffer: valid=%d, sample_count=%d\n", 
+            if (no_audio_count++ % 100 == 0)
+            {
+                printf("[DEBUG] Passthrough mode active but no audio in passthrough buffer: valid=%d, sample_count=%d\n",
                        global_passthrough_buffer.valid, global_passthrough_buffer.sample_count);
             }
         }
         pthread_mutex_unlock(&global_passthrough_buffer.mutex);
         return paContinue;
     }
-    
+
     // Normal EchoStream output processing
     pthread_mutex_lock(&jitter->mutex);
-    
+
     unsigned long frames_filled = 0;
-    
-    while (frames_filled < frames) {
+
+    while (frames_filled < frames)
+    {
         // Check if we have a current frame to read from
-        if (jitter->frame_count > 0) {
+        if (jitter->frame_count > 0)
+        {
             struct audio_frame *current_frame = &jitter->frames[jitter->read_index];
-            
-            if (current_frame->valid) {
+
+            if (current_frame->valid)
+            {
                 // Calculate how many samples we can copy from current frame
                 int remaining_in_frame = current_frame->sample_count - audio_stream->current_output_frame_pos;
                 unsigned long frames_to_copy = frames - frames_filled;
-                
-                if (frames_to_copy > (unsigned long)remaining_in_frame) {
+
+                if (frames_to_copy > (unsigned long)remaining_in_frame)
+                {
                     frames_to_copy = (unsigned long)remaining_in_frame;
                 }
-                
+
                 // Copy samples from current frame
-                for (unsigned long i = 0; i < frames_to_copy; i++) {
+                for (unsigned long i = 0; i < frames_to_copy; i++)
+                {
                     out[frames_filled + i] = current_frame->samples[audio_stream->current_output_frame_pos + i];
                 }
-                
+
                 frames_filled += frames_to_copy;
                 audio_stream->current_output_frame_pos += frames_to_copy;
-                
+
                 // Check if we finished this frame
-                if (audio_stream->current_output_frame_pos >= current_frame->sample_count) {
+                if (audio_stream->current_output_frame_pos >= current_frame->sample_count)
+                {
                     // Mark frame as consumed
                     current_frame->valid = 0;
                     jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
                     jitter->frame_count--;
                     audio_stream->current_output_frame_pos = 0;
                 }
-            } else {
+            }
+            else
+            {
                 // Frame is invalid, skip it
                 jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
                 jitter->frame_count--;
                 audio_stream->current_output_frame_pos = 0;
             }
-        } else {
+        }
+        else
+        {
             // No frames available, fill with silence
-            for (unsigned long i = frames_filled; i < frames; i++) {
+            for (unsigned long i = frames_filled; i < frames; i++)
+            {
                 out[i] = 0.0f;
             }
             frames_filled = frames;
         }
     }
-    
+
     pthread_mutex_unlock(&jitter->mutex);
     return paContinue;
 }
 
 // Passthrough thread outputs the shared input when in passthrough mode
-void* audio_passthrough_thread(void* arg) {
+void *audio_passthrough_thread(void *arg)
+{
     (void)arg; // Suppress unused parameter warning
-    
+
     printf("[INFO] Audio passthrough thread started\n");
-    
+
     // Buffer for smoothing audio output
     float output_buffer[SAMPLES_PER_FRAME];
     int underflow_count = 0;
-    
-    while (global_passthrough.active && !global_interrupted) {
+
+    while (global_passthrough.active && !global_interrupted)
+    {
         int samples_to_copy = 0;
-        
+
         // Only process if passthrough mode is enabled
-        if (!is_passthrough_mode()) {
+        if (!is_passthrough_mode())
+        {
             usleep(10000); // 10ms delay when not in passthrough mode
             continue;
         }
-        
+
         pthread_mutex_lock(&global_shared_buffer.mutex);
-        
+
         // Wait for new audio data
-        while (!global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
+        while (!global_shared_buffer.valid && global_passthrough.active && !global_interrupted)
+        {
             pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
         }
-        
-        if (global_shared_buffer.valid && global_passthrough.active && !global_interrupted) {
+
+        if (global_shared_buffer.valid && global_passthrough.active && !global_interrupted)
+        {
             // Copy audio data to output buffer
             samples_to_copy = global_shared_buffer.sample_count;
-            if (samples_to_copy > SAMPLES_PER_FRAME) {
+            if (samples_to_copy > SAMPLES_PER_FRAME)
+            {
                 samples_to_copy = SAMPLES_PER_FRAME;
             }
-            
-            for (int i = 0; i < samples_to_copy; i++) {
+
+            for (int i = 0; i < samples_to_copy; i++)
+            {
                 output_buffer[i] = global_shared_buffer.samples[i];
             }
-            
+
             global_shared_buffer.valid = 0; // Mark as consumed
         }
-        
+
         pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
+
         // Write audio data to output stream (only if in passthrough mode)
-        if (samples_to_copy > 0 && is_passthrough_mode()) {
+        if (samples_to_copy > 0 && is_passthrough_mode())
+        {
             static int write_count = 0;
             write_count++;
-            
-            PaError err = Pa_WriteStream(global_passthrough.output_stream, 
-                                       output_buffer, 
-                                       samples_to_copy);
-            
-            if (err != paNoError) {
-                if (err == paOutputUnderflowed) {
+
+            PaError err = Pa_WriteStream(global_passthrough.output_stream,
+                                         output_buffer,
+                                         samples_to_copy);
+
+            if (err != paNoError)
+            {
+                if (err == paOutputUnderflowed)
+                {
                     underflow_count++;
-                    if (underflow_count % 50 == 0) {
+                    if (underflow_count % 50 == 0)
+                    {
                         printf("[DEBUG] Passthrough underflow count: %d (writes: %d)\n", underflow_count, write_count);
                     }
-                } else {
+                }
+                else
+                {
                     fprintf(stderr, "PortAudio write error in passthrough: %s\n", Pa_GetErrorText(err));
                 }
-                } else {
-                    underflow_count = 0; // Reset counter on successful write
-                    if (write_count % 5000 == 0) {  // Much less frequent logging
-                        printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
-                    }
+            }
+            else
+            {
+                underflow_count = 0; // Reset counter on successful write
+                if (write_count % 5000 == 0)
+                { // Much less frequent logging
+                    printf("[DEBUG] Passthrough successful writes: %d\n", write_count);
                 }
+            }
         }
-        
+
         // Small delay to prevent overwhelming the output device
         usleep(5000); // 5ms delay to reduce underflow
     }
-    
+
     printf("[INFO] Audio passthrough thread stopped\n");
     return NULL;
 }
 
 // Initialize shared audio buffer
-int init_shared_audio_buffer(void) {
+int init_shared_audio_buffer(void)
+{
     memset(&global_shared_buffer, 0, sizeof(struct shared_audio_buffer));
     pthread_mutex_init(&global_shared_buffer.mutex, NULL);
     pthread_cond_init(&global_shared_buffer.data_ready, NULL);
     printf("[INFO] Shared audio buffer initialized\n");
-    
+
     // Initialize dedicated passthrough buffer
     memset(&global_passthrough_buffer, 0, sizeof(struct passthrough_audio_buffer));
     pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
     printf("[INFO] Passthrough audio buffer initialized\n");
-    
+
     return 1;
 }
 
 // Initialize audio passthrough
-int init_audio_passthrough(void) {
+int init_audio_passthrough(void)
+{
     memset(&global_passthrough, 0, sizeof(struct audio_passthrough));
     global_passthrough.shared_buffer = &global_shared_buffer;
-    
+
     // Debug: Print all available devices
     int num_devices = Pa_GetDeviceCount();
     printf("[DEBUG] Available audio devices:\n");
-    for (int i = 0; i < num_devices; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-        if (device_info) {
-            printf("  Device %d: %s (Input: %d, Output: %d)\n", 
+    for (int i = 0; i < num_devices; i++)
+    {
+        const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+        if (device_info)
+        {
+            printf("  Device %d: %s (Input: %d, Output: %d)\n",
                    i, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
         }
     }
-    
+
     // Debug: Print USB device assignments
     printf("[DEBUG] USB device assignments:\n");
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++)
+    {
         printf("  USB device %d: %d\n", i, usb_devices[i]);
     }
-    
+
     global_passthrough.active = 0;
     printf("[INFO] Audio passthrough initialized (callback-based, no extra streams)\n");
     return 1;
 }
 
 // Start audio passthrough
-int start_audio_passthrough(void) {
+int start_audio_passthrough(void)
+{
     // Callback-based passthrough: nothing to start, output callback will handle routing
     printf("[INFO] Audio passthrough enabled (callback-based)\n");
     return 1;
 }
 
 // Stop audio passthrough
-void stop_audio_passthrough(void) {
-    if (!global_passthrough.active) {
+void stop_audio_passthrough(void)
+{
+    if (!global_passthrough.active)
+    {
         return;
     }
-    
+
     global_passthrough.active = 0;
-    
+
     // Signal the thread to wake up
     pthread_mutex_lock(&global_shared_buffer.mutex);
     pthread_cond_signal(&global_shared_buffer.data_ready);
     pthread_mutex_unlock(&global_shared_buffer.mutex);
-    
+
     // Wait for thread to finish
     pthread_join(global_passthrough.thread, NULL);
-    
+
     // Stop and close stream
-    if (global_passthrough.output_stream) {
+    if (global_passthrough.output_stream)
+    {
         Pa_StopStream(global_passthrough.output_stream);
         Pa_CloseStream(global_passthrough.output_stream);
         global_passthrough.output_stream = NULL;
     }
-    
+
     printf("[INFO] Audio passthrough stopped\n");
 }
 
-int setup_audio_for_channel(struct audio_stream* audio_stream) {
+int setup_audio_for_channel(struct audio_stream *audio_stream)
+{
     int error;
-    
+
     // Setup encoder
     audio_stream->encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
-    if (error != OPUS_OK) {
+    if (error != OPUS_OK)
+    {
         fprintf(stderr, "Opus encoder error: %s\n", opus_strerror(error));
         return 0;
     }
-    
+
     opus_encoder_ctl(audio_stream->encoder, OPUS_SET_BITRATE(64000));
     opus_encoder_ctl(audio_stream->encoder, OPUS_SET_VBR(1));
-    
+
     // Setup decoder
     audio_stream->decoder = opus_decoder_create(48000, 1, &error);
-    if (error != OPUS_OK) {
+    if (error != OPUS_OK)
+    {
         fprintf(stderr, "Opus decoder error: %s\n", opus_strerror(error));
         opus_encoder_destroy(audio_stream->encoder);
         return 0;
     }
-    
+
     // Setup buffers - use smaller buffer for lower latency
-    audio_stream->buffer_size = 2400;  // Reduced from 4800 for lower latency
+    audio_stream->buffer_size = 2400; // Reduced from 4800 for lower latency
     audio_stream->input_buffer = malloc(audio_stream->buffer_size * sizeof(float));
     audio_stream->input_buffer_pos = 0;
     audio_stream->current_output_frame_pos = 0;
     audio_stream->gpio_active = 0;
-    
+
     // Initialize jitter buffer
     memset(&audio_stream->output_jitter, 0, sizeof(struct jitter_buffer));
     pthread_mutex_init(&audio_stream->output_jitter.mutex, NULL);
-    
-    for (int i = 0; i < JITTER_BUFFER_SIZE; i++) {
+
+    for (int i = 0; i < JITTER_BUFFER_SIZE; i++)
+    {
         audio_stream->output_jitter.frames[i].valid = 0;
         audio_stream->output_jitter.frames[i].sample_count = 0;
     }
-    
+
     return 1;
 }
 
-int initialize_portaudio() {
+int initialize_portaudio()
+{
     static int initialized = 0;
-    if (initialized) return 1;
-    
+    if (initialized)
+        return 1;
+
     PaError err = Pa_Initialize();
-    if (err != paNoError) {
+    if (err != paNoError)
+    {
         fprintf(stderr, "PortAudio error: %s\n", Pa_GetErrorText(err));
         return 0;
     }
-    
+
     initialized = 1;
     return 1;
 }
 
-int start_transmission_for_channel(struct audio_stream* audio_stream) {
+int start_transmission_for_channel(struct audio_stream *audio_stream)
+{
     PaStreamParameters input_params, output_params;
-    
+
     audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
-    
+
     // Force consistent audio parameters for all channels
     const int AUDIO_BUFFER_SIZE = 512;
     const int AUDIO_CHANNELS = 1;
-    
+
     // No channel is hard-reserved for passthrough; selection is driven by JSON.
-    
+
     // Setup input stream for other channels
     input_params.device = audio_stream->device_index;
-    if (input_params.device == paNoDevice) {
+    if (input_params.device == paNoDevice)
+    {
         fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
         return 0;
     }
-    
+
     input_params.channelCount = AUDIO_CHANNELS;
     input_params.sampleFormat = paFloat32;
     input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
-    
+
     printf("[DEBUG] About to call Pa_OpenStream for input stream...\n");
     // Use consistent sample rate and smaller buffer for lower latency
-    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE, 
+    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
                                 paClipOff, audio_input_callback, audio_stream);
     printf("[DEBUG] Pa_OpenStream for input stream returned: %s\n", Pa_GetErrorText(err));
-    
-    if (err != paNoError) {
-        printf("WARNING: USB device %d failed for channel %s: %s\n", 
+
+    if (err != paNoError)
+    {
+        printf("WARNING: USB device %d failed for channel %s: %s\n",
                audio_stream->device_index, audio_stream->channel_id, Pa_GetErrorText(err));
         fflush(stdout);
-        
+
         // Try different parameters for the same USB device first
         printf("[DEBUG] Retrying USB device %d with different parameters...\n", audio_stream->device_index);
-        
+
         // Try different sample rates - prioritize 48000 for consistency
         int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
         int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 1024, 2048};
-        
-        for (int i = 0; i < 3 && err != paNoError; i++) {
-            for (int j = 0; j < 3 && err != paNoError; j++) {
-                printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", 
+
+        for (int i = 0; i < 3 && err != paNoError; i++)
+        {
+            for (int j = 0; j < 3 && err != paNoError; j++)
+            {
+                printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n",
                        audio_stream->device_index, sample_rates[i], buffer_sizes[j]);
-                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 
-                                   sample_rates[i], buffer_sizes[j], paClipOff, audio_input_callback, audio_stream);
-                if (err == paNoError) {
-                    printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n", 
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL,
+                                    sample_rates[i], buffer_sizes[j], paClipOff, audio_input_callback, audio_stream);
+                if (err == paNoError)
+                {
+                    printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n",
                            audio_stream->device_index, sample_rates[i], buffer_sizes[j]);
                     break;
                 }
             }
         }
-        
+
         // If USB device still fails, try other USB devices
-        if (err != paNoError) {
-            printf("[DEBUG] USB device %d failed with all parameters, trying other USB devices...\n", 
+        if (err != paNoError)
+        {
+            printf("[DEBUG] USB device %d failed with all parameters, trying other USB devices...\n",
                    audio_stream->device_index);
-            
-            for (int i = 0; i < MAX_CHANNELS && err != paNoError; i++) {
-                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice) {
+
+            for (int i = 0; i < MAX_CHANNELS && err != paNoError; i++)
+            {
+                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice)
+                {
                     input_params.device = usb_devices[i];
                     input_params.suggestedLatency = Pa_GetDeviceInfo(usb_devices[i])->defaultLowInputLatency;
-                    
-                    printf("[DEBUG] Trying alternative USB device %d for channel %s\n", 
+
+                    printf("[DEBUG] Trying alternative USB device %d for channel %s\n",
                            usb_devices[i], audio_stream->channel_id);
-                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE, 
+                    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
                                         paClipOff, audio_input_callback, audio_stream);
-                    
-                    if (err == paNoError) {
-                        printf("Successfully opened input stream on USB device %d for channel %s\n", 
+
+                    if (err == paNoError)
+                    {
+                        printf("Successfully opened input stream on USB device %d for channel %s\n",
                                usb_devices[i], audio_stream->channel_id);
                         audio_stream->device_index = usb_devices[i];
                         break;
-                    } else {
-                        printf("[DEBUG] Alternative USB device %d also failed: %s\n", 
+                    }
+                    else
+                    {
+                        printf("[DEBUG] Alternative USB device %d also failed: %s\n",
                                usb_devices[i], Pa_GetErrorText(err));
                     }
                 }
             }
         }
-        
+
         // If all USB devices fail, try default device as last resort
-        if (err != paNoError) {
+        if (err != paNoError)
+        {
             printf("[ERROR] All ALSA USB devices failed for channel %s; aborting setup to avoid PulseAudio fallback.\n", audio_stream->channel_id);
             return 0;
         }
     }
-    
+
     // Create output stream for audio playback
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
-    
+
     // Check if this is a passthrough target channel - give it priority treatment
     int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-    
+
     // SPECIAL HANDLING: Skip passthrough target output stream creation initially to avoid conflicts
-    if (is_passthrough_target) {
+    if (is_passthrough_target)
+    {
         printf("[DEBUG] *** SKIPPING PASSTHROUGH TARGET OUTPUT STREAM CREATION - WILL CREATE LATER ***\n");
         printf("[DEBUG] *** Passthrough target input stream created successfully, output will be created after other channels ***\n");
-        
+
         // Start only the input stream for now
         err = Pa_StartStream(audio_stream->input_stream);
-        if (err != paNoError) {
-            printf("[ERROR] Failed to start input stream for channel %s: %s\n", 
+        if (err != paNoError)
+        {
+            printf("[ERROR] Failed to start input stream for channel %s: %s\n",
                    audio_stream->channel_id, Pa_GetErrorText(err));
             return 0;
         }
-        
+
         printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
         printf("[DEBUG] Input stream is active for channel %s\n", audio_stream->channel_id);
         printf("[DEBUG] Stream status check for channel %s:\n", audio_stream->channel_id);
@@ -1605,271 +1876,330 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
         printf("Audio transmission started for channel %s (input only - output delayed)\n", audio_stream->channel_id);
         printf("Audio transmission ready for channel %s (waiting for GPIO activation)\n", audio_stream->channel_id);
-        
+
         return 1; // Success - input stream created, output will be created later
     }
-    
+
     // Initialize output parameters with consistent settings
     output_params.channelCount = AUDIO_CHANNELS;
     output_params.sampleFormat = paFloat32;
     output_params.hostApiSpecificStreamInfo = NULL;
-    
+
     // Try to use the same device as input for output (if it supports output)
-    const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-    if (input_device_info && input_device_info->maxOutputChannels > 0) {
-    output_params.device = audio_stream->device_index;
+    const PaDeviceInfo *input_device_info = Pa_GetDeviceInfo(audio_stream->device_index);
+    if (input_device_info && input_device_info->maxOutputChannels > 0)
+    {
+        output_params.device = audio_stream->device_index;
         output_params.suggestedLatency = input_device_info->defaultLowOutputLatency;
-        printf("[DEBUG] Using same device %d for both input and output for channel %s\n", 
+        printf("[DEBUG] Using same device %d for both input and output for channel %s\n",
                audio_stream->device_index, audio_stream->channel_id);
-    } else {
+    }
+    else
+    {
         // Find a dedicated output device for this channel
-        printf("[DEBUG] Input device %d doesn't support output, finding dedicated output device...\n", 
+        printf("[DEBUG] Input device %d doesn't support output, finding dedicated output device...\n",
                audio_stream->device_index);
-        
+
         // Try to use a different USB device for output
         int output_device_found = 0;
-        for (int i = 0; i < MAX_CHANNELS; i++) {
-            if (usb_devices[i] != paNoDevice && usb_devices[i] != audio_stream->device_index) {
-                const PaDeviceInfo* device_info = Pa_GetDeviceInfo(usb_devices[i]);
-                if (device_info && device_info->maxOutputChannels > 0) {
+        for (int i = 0; i < MAX_CHANNELS; i++)
+        {
+            if (usb_devices[i] != paNoDevice && usb_devices[i] != audio_stream->device_index)
+            {
+                const PaDeviceInfo *device_info = Pa_GetDeviceInfo(usb_devices[i]);
+                if (device_info && device_info->maxOutputChannels > 0)
+                {
                     output_params.device = usb_devices[i];
                     output_params.suggestedLatency = device_info->defaultLowOutputLatency;
-                    printf("[DEBUG] Using USB device %d for output for channel %s\n", 
+                    printf("[DEBUG] Using USB device %d for output for channel %s\n",
                            usb_devices[i], audio_stream->channel_id);
                     output_device_found = 1;
                     break;
                 }
             }
         }
-        
-        if (!output_device_found) {
+
+        if (!output_device_found)
+        {
             // Fall back to default output device
             PaDeviceIndex default_output_device = Pa_GetDefaultOutputDevice();
-            if (default_output_device != paNoDevice) {
+            if (default_output_device != paNoDevice)
+            {
                 output_params.device = default_output_device;
                 output_params.suggestedLatency = Pa_GetDeviceInfo(default_output_device)->defaultLowOutputLatency;
-                printf("[DEBUG] Using default output device %d for channel %s\n", 
+                printf("[DEBUG] Using default output device %d for channel %s\n",
                        default_output_device, audio_stream->channel_id);
-            } else {
+            }
+            else
+            {
                 printf("[DEBUG] No output device available for channel %s\n", audio_stream->channel_id);
                 audio_stream->output_stream = NULL;
-                err = paNoError;  // Continue with input-only mode
+                err = paNoError; // Continue with input-only mode
             }
         }
     }
-    
-    if (audio_stream->output_stream == NULL) {  // Only try to create if not already set to NULL
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
-                        paClipOff, audio_output_callback, audio_stream);
-        
-        if (err != paNoError) {
-            printf("[DEBUG] Output stream creation failed for channel %s: %s\n", 
+
+    if (audio_stream->output_stream == NULL)
+    { // Only try to create if not already set to NULL
+        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
+                            paClipOff, audio_output_callback, audio_stream);
+
+        if (err != paNoError)
+        {
+            printf("[DEBUG] Output stream creation failed for channel %s: %s\n",
                    audio_stream->channel_id, Pa_GetErrorText(err));
-            printf("WARNING: Output device %d failed for channel %s, trying different parameters\n", 
+            printf("WARNING: Output device %d failed for channel %s, trying different parameters\n",
                    output_params.device, audio_stream->channel_id);
             fflush(stdout);
-            
+
             // Try different parameters for output - prioritize 48000 for consistency
             int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
             int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 1024, 2048};
             int channel_counts[] = {AUDIO_CHANNELS, 2};
-            
-            for (int i = 0; i < 3 && err != paNoError; i++) {
-                for (int j = 0; j < 3 && err != paNoError; j++) {
-                    for (int k = 0; k < 2 && err != paNoError; k++) {
+
+            for (int i = 0; i < 3 && err != paNoError; i++)
+            {
+                for (int j = 0; j < 3 && err != paNoError; j++)
+                {
+                    for (int k = 0; k < 2 && err != paNoError; k++)
+                    {
                         output_params.channelCount = channel_counts[k];
-                        printf("[DEBUG] Trying output device %d with sample_rate=%d, buffer_size=%d, channels=%d\n", 
+                        printf("[DEBUG] Trying output device %d with sample_rate=%d, buffer_size=%d, channels=%d\n",
                                output_params.device, sample_rates[i], buffer_sizes[j], channel_counts[k]);
-                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                                           sample_rates[i], buffer_sizes[j], paClipOff, audio_output_callback, audio_stream);
-                        if (err == paNoError) {
-                            printf("[DEBUG] Output device %d succeeded with sample_rate=%d, buffer_size=%d, channels=%d\n", 
+                        err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params,
+                                            sample_rates[i], buffer_sizes[j], paClipOff, audio_output_callback, audio_stream);
+                        if (err == paNoError)
+                        {
+                            printf("[DEBUG] Output device %d succeeded with sample_rate=%d, buffer_size=%d, channels=%d\n",
                                    output_params.device, sample_rates[i], buffer_sizes[j], channel_counts[k]);
                             break;
                         }
                     }
                 }
             }
-            
-            if (err != paNoError) {
-                printf("[DEBUG] Output device %d failed with all parameters: %s\n", 
+
+            if (err != paNoError)
+            {
+                printf("[DEBUG] Output device %d failed with all parameters: %s\n",
                        output_params.device, Pa_GetErrorText(err));
-                
+
                 // CRITICAL: Passthrough target channels CANNOT be input-only
-                if (is_passthrough_target) {
+                if (is_passthrough_target)
+                {
                     printf("[ERROR] *** CRITICAL ERROR: PASSTHROUGH TARGET CHANNEL %s HAS NO OUTPUT STREAM! ***\n", audio_stream->channel_id);
                     printf("[ERROR] Tone passthrough will NOT work without an output stream on this channel!\n");
                     printf("[ERROR] This is a configuration error - passthrough target must have working output.\n");
                     // Don't set to NULL - keep trying to create output stream
-                } else {
+                }
+                else
+                {
                     printf("[DEBUG] Continuing with input-only mode for channel %s\n", audio_stream->channel_id);
-                    audio_stream->output_stream = NULL;  // No output stream
-                    err = paNoError;  // Continue with input-only mode
+                    audio_stream->output_stream = NULL; // No output stream
+                    err = paNoError;                    // Continue with input-only mode
                 }
             }
-        } else {
-            printf("[DEBUG] Output stream created successfully for channel %s on device %d\n", 
+        }
+        else
+        {
+            printf("[DEBUG] Output stream created successfully for channel %s on device %d\n",
                    audio_stream->channel_id, output_params.device);
         }
     }
-    
-    if (err != paNoError) {
+
+    if (err != paNoError)
+    {
         printf("[DEBUG] Output stream creation failed, continuing with input-only mode\n");
-    } else {
+    }
+    else
+    {
         printf("[DEBUG] Output stream created successfully, proceeding to start streams\n");
     }
 
-    if (err != paNoError) {
+    if (err != paNoError)
+    {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
         printf("[DEBUG] Failed to create output stream for channel %s\n", audio_stream->channel_id);
-        
+
         // Try alternative approaches for devices that fail with standard parameters
         printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
-        
+
         // Try with different buffer sizes and sample rates - prioritize 48000
         int buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048};
         int sample_rates[] = {SAMPLE_RATE, 44100, 22050};
-        
+
         // Special handling for passthrough target channels - FORCE 44100 Hz ONLY
-        if (is_passthrough_target) {
+        if (is_passthrough_target)
+        {
             printf("[DEBUG] *** CRITICAL: PASSTHROUGH TARGET CHANNEL FAILED - FORCING 44100 Hz ***\n");
-            
+
             // FORCE 44100 Hz sample rate only - no alternatives
             const int FORCED_SAMPLE_RATE = 44100;
             int passthrough_buffer_sizes[] = {AUDIO_BUFFER_SIZE, 256, 1024, 2048, 4096, 8192};
-            
+
             // Try with FORCED 44100 Hz sample rate
-            for (int j = 0; j < 6 && err != paNoError; j++) {
-                printf("[DEBUG] Trying passthrough device %d with FORCED sample_rate=%d, buffer_size=%d\n", 
+            for (int j = 0; j < 6 && err != paNoError; j++)
+            {
+                printf("[DEBUG] Trying passthrough device %d with FORCED sample_rate=%d, buffer_size=%d\n",
                        output_params.device, FORCED_SAMPLE_RATE, passthrough_buffer_sizes[j]);
-                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
-                                   FORCED_SAMPLE_RATE, passthrough_buffer_sizes[j], 
-                                   paClipOff, audio_output_callback, audio_stream);
-                if (err == paNoError) {
-                    printf("[DEBUG] Passthrough device %d succeeded with FORCED sample_rate=%d, buffer_size=%d\n", 
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params,
+                                    FORCED_SAMPLE_RATE, passthrough_buffer_sizes[j],
+                                    paClipOff, audio_output_callback, audio_stream);
+                if (err == paNoError)
+                {
+                    printf("[DEBUG] Passthrough device %d succeeded with FORCED sample_rate=%d, buffer_size=%d\n",
                            output_params.device, FORCED_SAMPLE_RATE, passthrough_buffer_sizes[j]);
                     break;
-                } else if (err == paDeviceUnavailable) {
+                }
+                else if (err == paDeviceUnavailable)
+                {
                     // Device is busy - kill processes using it
                     printf("[DEBUG] Passthrough device %d is busy - killing processes using it\n", output_params.device);
                     kill_processes_using_audio_device(output_params.device);
-                    usleep(500000); // Wait 500ms for processes to fully terminate
+                    usleep(500000);  // Wait 500ms for processes to fully terminate
                     err = paNoError; // Try again after killing processes
-                } else if (err == paUnanticipatedHostError) {
+                }
+                else if (err == paUnanticipatedHostError)
+                {
                     // Device has hardware issues - wait longer and try again
                     printf("[DEBUG] Passthrough device %d has hardware error - waiting and retrying\n", output_params.device);
                     usleep(1000000); // Wait 1 second for hardware to stabilize
                     err = paNoError; // Try again
                 }
             }
-            
+
             // NO ALTERNATIVE DEVICES - Passthrough target must use its assigned device
-            if (err != paNoError) {
+            if (err != paNoError)
+            {
                 printf("[ERROR] *** FAILED TO CREATE PASSTHROUGH OUTPUT STREAM ON ASSIGNED DEVICE %d ***\n", output_params.device);
                 printf("[ERROR] *** Passthrough target MUST use its assigned device - no alternatives allowed ***\n");
                 printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - WILL BE RETRIED LATER ***\n");
             }
         }
-        
-        for (int i = 0; i < 3 && err != paNoError; i++) {
-            for (int j = 0; j < 4 && err != paNoError; j++) {
+
+        for (int i = 0; i < 3 && err != paNoError; i++)
+        {
+            for (int j = 0; j < 4 && err != paNoError; j++)
+            {
                 printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
                 err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, sample_rates[i], buffer_sizes[j],
                                     paClipOff, audio_output_callback, audio_stream);
-                if (err == paNoError) {
+                if (err == paNoError)
+                {
                     printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
                     break;
                 }
             }
         }
-        
-         // If still failed, retry with default output device (skip for last channel to avoid PulseAudio issues)
-         extern int global_channel_count;
-         extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-         int is_last_channel_fallback = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
-         
-         if (err != paNoError && !is_last_channel_fallback) {
-        PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
-        if (defOut != paNoDevice && defOut != output_params.device) {
-            output_params.device = defOut;
-            output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
-            printf("[DEBUG] Retrying output open for channel %s using default output device %d\n", audio_stream->channel_id, (int)defOut);
-            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
-                                paClipOff, audio_output_callback, audio_stream);
-                 
-                 if (err == paNoError) {
-                     printf("[DEBUG] Successfully opened output stream for channel %s on default device %d\n", 
-                            audio_stream->channel_id, (int)defOut);
-                 } else {
-                     printf("[DEBUG] Default device %d also failed for channel %s: %s\n", 
-                            (int)defOut, audio_stream->channel_id, Pa_GetErrorText(err));
-                 }
-             }
+
+        // If still failed, retry with default output device (skip for last channel to avoid PulseAudio issues)
+        extern int global_channel_count;
+        extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+        int is_last_channel_fallback = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+
+        if (err != paNoError && !is_last_channel_fallback)
+        {
+            PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
+            if (defOut != paNoDevice && defOut != output_params.device)
+            {
+                output_params.device = defOut;
+                output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+                printf("[DEBUG] Retrying output open for channel %s using default output device %d\n", audio_stream->channel_id, (int)defOut);
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
+                                    paClipOff, audio_output_callback, audio_stream);
+
+                if (err == paNoError)
+                {
+                    printf("[DEBUG] Successfully opened output stream for channel %s on default device %d\n",
+                           audio_stream->channel_id, (int)defOut);
+                }
+                else
+                {
+                    printf("[DEBUG] Default device %d also failed for channel %s: %s\n",
+                           (int)defOut, audio_stream->channel_id, Pa_GetErrorText(err));
+                }
+            }
         }
-        if (err != paNoError) {
+        if (err != paNoError)
+        {
             printf("WARNING: Output stream failed for channel %s (device %d), trying alternative output devices\n",
                    audio_stream->channel_id, audio_stream->device_index);
 
             // Special handling for the last channel - use Device 0 for output
-            if (is_last_channel_fallback) {
+            if (is_last_channel_fallback)
+            {
                 printf("[DEBUG] Last channel: Using Device 0 for output (bypassing problematic device)\n");
                 output_params.device = 0; // Use Device 0 which we know works
                 output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
                 err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
                                     paClipOff, audio_output_callback, audio_stream);
-                
-                if (err == paNoError) {
+
+                if (err == paNoError)
+                {
                     printf("[DEBUG] Successfully opened last channel output on Device 0\n");
-                } else {
+                }
+                else
+                {
                     printf("[DEBUG] Device 0 also failed for last channel: %s\n", Pa_GetErrorText(err));
                 }
             }
 
             // Try other USB devices as output fallback
-            for (int i = 0; i < 4; i++) {
-                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice) {
+            for (int i = 0; i < 4; i++)
+            {
+                if (usb_devices[i] != audio_stream->device_index && usb_devices[i] != paNoDevice)
+                {
                     output_params.device = usb_devices[i];
                     output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
                     printf("[DEBUG] Trying alternative output device %d for channel %s\n", usb_devices[i], audio_stream->channel_id);
-                    
+
                     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
                                         paClipOff, audio_output_callback, audio_stream);
-                    if (err == paNoError) {
-                        printf("[INFO] Successfully opened output stream for channel %s on alternative device %d\n", 
+                    if (err == paNoError)
+                    {
+                        printf("[INFO] Successfully opened output stream for channel %s on alternative device %d\n",
                                audio_stream->channel_id, usb_devices[i]);
                         break;
-                    } else {
+                    }
+                    else
+                    {
                         printf("[DEBUG] Alternative device %d also failed: %s\n", usb_devices[i], Pa_GetErrorText(err));
                     }
                 }
             }
-            
+
             // If USB devices failed, try any available output device
-            if (err != paNoError) {
+            if (err != paNoError)
+            {
                 printf("[DEBUG] All USB devices failed, trying any available output device for channel %s\n", audio_stream->channel_id);
                 int device_count = Pa_GetDeviceCount();
-                for (int i = 0; i < device_count; i++) {
-                    const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-                    if (device_info && device_info->maxOutputChannels > 0) {
+                for (int i = 0; i < device_count; i++)
+                {
+                    const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+                    if (device_info && device_info->maxOutputChannels > 0)
+                    {
                         output_params.device = i;
                         output_params.suggestedLatency = device_info->defaultLowOutputLatency;
                         printf("[DEBUG] Trying output device %d (%s) for channel %s\n", i, device_info->name, audio_stream->channel_id);
-                        
+
                         err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
                                             paClipOff, audio_output_callback, audio_stream);
-                        if (err == paNoError) {
-                            printf("[INFO] Successfully opened output stream for channel %s on device %d (%s)\n", 
+                        if (err == paNoError)
+                        {
+                            printf("[INFO] Successfully opened output stream for channel %s on device %d (%s)\n",
                                    audio_stream->channel_id, i, device_info->name);
                             break;
-                        } else {
+                        }
+                        else
+                        {
                             printf("[DEBUG] Device %d (%s) also failed: %s\n", i, device_info->name, Pa_GetErrorText(err));
                         }
                     }
                 }
             }
-            
+
             // If all USB devices failed, try input-only mode as last resort
-            if (err != paNoError) {
+            if (err != paNoError)
+            {
                 printf("WARNING: All output devices failed for channel %s, trying input-only mode\n",
                        audio_stream->channel_id);
 
@@ -1881,144 +2211,173 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                 err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024,
                                     paClipOff, audio_input_callback, audio_stream);
 
-                if (err != paNoError) {
+                if (err != paNoError)
+                {
                     fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
                     return 0;
                 }
 
                 // Start input stream only
                 err = Pa_StartStream(audio_stream->input_stream);
-                if (err != paNoError) {
+                if (err != paNoError)
+                {
                     fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
                     Pa_CloseStream(audio_stream->input_stream);
                     return 0;
                 }
 
                 printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
-                
+
                 // Special debug for the last channel
-                if (is_last_channel_fallback) {
+                if (is_last_channel_fallback)
+                {
                     printf("[DEBUG] Last channel is running in INPUT-ONLY mode - no output stream!\n");
                 }
-                
+
                 // Check if this channel is configured as a passthrough target
-                if (is_configured_passthrough_channel_id(audio_stream->channel_id)) {
+                if (is_configured_passthrough_channel_id(audio_stream->channel_id))
+                {
                     printf("[WARNING] Channel %s is configured as passthrough target but has no output stream!\n", audio_stream->channel_id);
                     printf("[WARNING] Passthrough audio will not work for this channel.\n");
                 }
-                
+
                 audio_stream->transmitting = 1;
                 return 1;
             }
         }
     }
-    
+
     // Start input stream (output stream is skipped for now)
     printf("[DEBUG] Starting input stream for channel %s...\n", audio_stream->channel_id);
     fflush(stdout);
-    
+
     err = Pa_StartStream(audio_stream->input_stream);
-    if (err != paNoError) {
+    if (err != paNoError)
+    {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
         return 0;
     }
     printf("[DEBUG] Input stream started successfully for channel %s\n", audio_stream->channel_id);
     fflush(stdout);
-    
+
     // Skip output stream for now - focus on getting tone detection working
-    if (audio_stream->output_stream) {
+    if (audio_stream->output_stream)
+    {
         printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
         fflush(stdout);
-    
-    err = Pa_StartStream(audio_stream->output_stream);
-    if (err != paNoError) {
-        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
+
+        err = Pa_StartStream(audio_stream->output_stream);
+        if (err != paNoError)
+        {
+            fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->output_stream);
+            return 0;
         }
         printf("[DEBUG] Output stream started successfully for channel %s\n", audio_stream->channel_id);
         fflush(stdout);
-    } else {
+    }
+    else
+    {
         printf("[DEBUG] No output stream to start for channel %s (input-only mode)\n", audio_stream->channel_id);
         fflush(stdout);
     }
-    
+
     // Check if streams are actually running
-    if (Pa_IsStreamActive(audio_stream->input_stream)) {
+    if (Pa_IsStreamActive(audio_stream->input_stream))
+    {
         printf("Input stream is active for channel %s\n", audio_stream->channel_id);
-    } else {
+    }
+    else
+    {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
-    
+
     // Additional debugging for stream status
     printf("[DEBUG] Stream status check for channel %s:\n", audio_stream->channel_id);
     printf("[DEBUG] - Pa_IsStreamActive(input): %s\n", Pa_IsStreamActive(audio_stream->input_stream) ? "YES" : "NO");
     printf("[DEBUG] - Pa_IsStreamStopped(input): %s\n", Pa_IsStreamStopped(audio_stream->input_stream) ? "YES" : "NO");
-    
+
     // Check stream info
-    const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->input_stream);
-    if (stream_info) {
+    const PaStreamInfo *stream_info = Pa_GetStreamInfo(audio_stream->input_stream);
+    if (stream_info)
+    {
         printf("[DEBUG] - Input latency: %.3f ms\n", stream_info->inputLatency * 1000.0);
         printf("[DEBUG] - Sample rate: %.1f Hz\n", stream_info->sampleRate);
     }
-    
-    if (audio_stream->output_stream) {
-    if (Pa_IsStreamActive(audio_stream->output_stream)) {
-        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
-    } else {
-        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+
+    if (audio_stream->output_stream)
+    {
+        if (Pa_IsStreamActive(audio_stream->output_stream))
+        {
+            printf("Output stream is active for channel %s\n", audio_stream->channel_id);
         }
-    } else {
+        else
+        {
+            printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        }
+    }
+    else
+    {
         printf("No output stream for channel %s (input-only mode)\n", audio_stream->channel_id);
     }
-    
-    if (audio_stream->output_stream) {
+
+    if (audio_stream->output_stream)
+    {
         printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
-    } else {
+    }
+    else
+    {
         printf("Audio transmission started for channel %s (input-only mode)\n", audio_stream->channel_id);
     }
-    
+
     // Special debug for the last channel
     extern int global_channel_count;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     int is_last_channel_debug = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
-    
-    if (is_last_channel_debug) {
-        printf("[DEBUG] Last channel stream status: input_active=%d, output_active=%d\n", 
-               Pa_IsStreamActive(audio_stream->input_stream), 
+
+    if (is_last_channel_debug)
+    {
+        printf("[DEBUG] Last channel stream status: input_active=%d, output_active=%d\n",
+               Pa_IsStreamActive(audio_stream->input_stream),
                Pa_IsStreamActive(audio_stream->output_stream));
-        printf("[DEBUG] Last channel stream pointers: input=%p, output=%p\n", 
+        printf("[DEBUG] Last channel stream pointers: input=%p, output=%p\n",
                audio_stream->input_stream, audio_stream->output_stream);
     }
-    
+
     audio_stream->transmitting = 1;
     printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
     return 1;
 }
 
-void auto_assign_usb_devices() {
-    if (device_assigned) return;
-    
+void auto_assign_usb_devices()
+{
+    if (device_assigned)
+        return;
+
     int num_devices = Pa_GetDeviceCount();
     int usb_count = 0;
-    
+
     printf("Scanning for USB audio devices...\n");
-    
-     for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++) {
-        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-        if (device_info && device_info->maxInputChannels > 0) {
-            const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-            printf("[DEBUG] Device %d: %s (Host API: %s, Type: %d)\n", 
+
+    for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++)
+    {
+        const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+        if (device_info && device_info->maxInputChannels > 0)
+        {
+            const PaHostApiInfo *host_info = Pa_GetHostApiInfo(device_info->hostApi);
+            printf("[DEBUG] Device %d: %s (Host API: %s, Type: %d)\n",
                    i, device_info->name, host_info->name, host_info->type);
-            
-            if (host_info && host_info->type == paALSA) {
-                const char* name = device_info->name;
-                if (strstr(name, "USB") || strstr(name, "usb") || 
+
+            if (host_info && host_info->type == paALSA)
+            {
+                const char *name = device_info->name;
+                if (strstr(name, "USB") || strstr(name, "usb") ||
                     strstr(name, "Audio Device") || strstr(name, "Headset") ||
-                    strstr(name, "hw:2") || strstr(name, "hw:3") || 
-                    strstr(name, "hw:4") || strstr(name, "hw:5")) {
+                    strstr(name, "hw:2") || strstr(name, "hw:3") ||
+                    strstr(name, "hw:4") || strstr(name, "hw:5"))
+                {
                     usb_devices[usb_count] = i;
                     printf("USB Device %d assigned to slot %d: %s\n", i, usb_count, name);
                     usb_count++;
@@ -2026,90 +2385,108 @@ void auto_assign_usb_devices() {
             }
         }
     }
-    
-     if (usb_count == 0) {
-         printf("No direct ALSA USB devices found, checking PulseAudio devices...\n");
-         // Try to use PulseAudio devices that might be USB
-         for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++) {
-             const PaDeviceInfo* device_info = Pa_GetDeviceInfo(i);
-             if (device_info && device_info->maxInputChannels > 0) {
-                 const PaHostApiInfo* host_info = Pa_GetHostApiInfo(device_info->hostApi);
-                 if (host_info && strstr(host_info->name, "PulseAudio")) {
-                     const char* name = device_info->name;
-                     // For PulseAudio, we'll use the first few devices as they're likely USB
-                     if (usb_count < 4) {  // We have 4 USB cards (2,3,4,5)
-                         usb_devices[usb_count] = i;
-                         printf("PulseAudio Device %d assigned to slot %d: %s\n", i, usb_count, name);
-                    usb_count++;
+
+    if (usb_count == 0)
+    {
+        printf("No direct ALSA USB devices found, checking PulseAudio devices...\n");
+        // Try to use PulseAudio devices that might be USB
+        for (int i = 0; i < num_devices && usb_count < MAX_CHANNELS; i++)
+        {
+            const PaDeviceInfo *device_info = Pa_GetDeviceInfo(i);
+            if (device_info && device_info->maxInputChannels > 0)
+            {
+                const PaHostApiInfo *host_info = Pa_GetHostApiInfo(device_info->hostApi);
+                if (host_info && strstr(host_info->name, "PulseAudio"))
+                {
+                    const char *name = device_info->name;
+                    // For PulseAudio, we'll use the first few devices as they're likely USB
+                    if (usb_count < 4)
+                    { // We have 4 USB cards (2,3,4,5)
+                        usb_devices[usb_count] = i;
+                        printf("PulseAudio Device %d assigned to slot %d: %s\n", i, usb_count, name);
+                        usb_count++;
+                    }
                 }
             }
         }
-    }
-    
-    if (usb_count == 0) {
-        printf("No USB audio devices found, using default input device for all channels\n");
-             for (int i = 0; i < MAX_CHANNELS; i++) {
-            usb_devices[i] = Pa_GetDefaultInputDevice();
+
+        if (usb_count == 0)
+        {
+            printf("No USB audio devices found, using default input device for all channels\n");
+            for (int i = 0; i < MAX_CHANNELS; i++)
+            {
+                usb_devices[i] = Pa_GetDefaultInputDevice();
+            }
         }
-         }
-     } else if (usb_count < MAX_CHANNELS) {
+    }
+    else if (usb_count < MAX_CHANNELS)
+    {
         printf("Only %d USB device(s) found, some channels will share devices\n", usb_count);
         // Fill remaining slots with available devices
-         for (int i = usb_count; i < MAX_CHANNELS; i++) {
+        for (int i = usb_count; i < MAX_CHANNELS; i++)
+        {
             usb_devices[i] = usb_devices[i % usb_count];
         }
     }
-    
+
     printf("Channel assignments:\n");
     extern int global_channel_count;
-    for (int i = 0; i < global_channel_count; i++) {
+    for (int i = 0; i < global_channel_count; i++)
+    {
         printf("Channel %s -> Device %d\n", global_channel_ids[i], usb_devices[i]);
     }
-    
+
     device_assigned = 1;
 }
 
-PaDeviceIndex get_device_for_channel(const char* channel) {
+PaDeviceIndex get_device_for_channel(const char *channel)
+{
     auto_assign_usb_devices();
-    
+
     // Dynamic channel mapping based on config.json channel order
     // Find the channel index in the loaded configuration
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
     extern int global_channel_count;
-    
+
     int channel_index = -1;
-    for (int i = 0; i < global_channel_count; i++) {
-        if (strcmp(channel, global_channel_ids[i]) == 0) {
+    for (int i = 0; i < global_channel_count; i++)
+    {
+        if (strcmp(channel, global_channel_ids[i]) == 0)
+        {
             channel_index = i;
             break;
         }
     }
-    
-    if (channel_index >= 0 && channel_index < MAX_CHANNELS) {
-        printf("[DEBUG] Channel %s (index %d) assigned to USB device %d (device %d)\n", 
+
+    if (channel_index >= 0 && channel_index < MAX_CHANNELS)
+    {
+        printf("[DEBUG] Channel %s (index %d) assigned to USB device %d (device %d)\n",
                channel, channel_index, channel_index, usb_devices[channel_index]);
         return usb_devices[channel_index];
     }
-    
+
     printf("[DEBUG] Channel %s using default fallback (device %d)\n", channel, usb_devices[0]);
-    return usb_devices[0];  // Default fallback
+    return usb_devices[0]; // Default fallback
 }
 
-int setup_channel(struct channel_context *ctx, const char *channel_id) {
+int setup_channel(struct channel_context *ctx, const char *channel_id)
+{
     strcpy(ctx->audio.channel_id, channel_id);
-    
-    if (!setup_audio_for_channel(&ctx->audio)) {
+
+    if (!setup_audio_for_channel(&ctx->audio))
+    {
         fprintf(stderr, "[ERROR] Audio setup failed for channel %s\n", channel_id);
         return 0;
     }
-    
+
     ctx->active = 1;
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
 }
 
 // Initialize tone passthrough control
-int init_tone_passthrough_control(void) {
+int init_tone_passthrough_control(void)
+{
     memset(&global_tone_passthrough, 0, sizeof(struct tone_passthrough_control));
     global_tone_passthrough.active = 0;
     global_tone_passthrough.source_channel = -1;
@@ -2121,117 +2498,129 @@ int init_tone_passthrough_control(void) {
 }
 
 // Setup tone passthrough routing
-int setup_tone_passthrough(int source_channel, int target_channel) {
-    if (source_channel < 0 || source_channel >= MAX_CHANNELS || 
-        target_channel < 0 || target_channel >= MAX_CHANNELS) {
+int setup_tone_passthrough(int source_channel, int target_channel)
+{
+    if (source_channel < 0 || source_channel >= MAX_CHANNELS ||
+        target_channel < 0 || target_channel >= MAX_CHANNELS)
+    {
         printf("[ERROR] Invalid channel indices for tone passthrough\n");
         return 0;
     }
-    
+
     pthread_mutex_lock(&global_tone_passthrough.mutex);
     global_tone_passthrough.source_channel = source_channel;
     global_tone_passthrough.target_channel = target_channel;
     pthread_mutex_unlock(&global_tone_passthrough.mutex);
-    
-    printf("[INFO] Tone passthrough configured: Channel %d -> Channel %d\n", 
+
+    printf("[INFO] Tone passthrough configured: Channel %d -> Channel %d\n",
            source_channel + 1, target_channel + 1);
     return 1;
 }
 
 // Start tone passthrough
-int start_tone_passthrough(void) {
+int start_tone_passthrough(void)
+{
     pthread_mutex_lock(&global_tone_passthrough.mutex);
-    
-    if (global_tone_passthrough.active) {
+
+    if (global_tone_passthrough.active)
+    {
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         printf("[WARNING] Tone passthrough already active\n");
         return 1;
     }
-    
-    if (global_tone_passthrough.source_channel < 0 || global_tone_passthrough.target_channel < 0) {
+
+    if (global_tone_passthrough.source_channel < 0 || global_tone_passthrough.target_channel < 0)
+    {
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         printf("[ERROR] Tone passthrough not configured\n");
         return 0;
     }
-    
+
     // Get source and target audio devices
     PaDeviceIndex source_device = channels[global_tone_passthrough.source_channel].audio.device_index;
     PaDeviceIndex target_device = channels[global_tone_passthrough.target_channel].audio.device_index;
-    
-    if (source_device == paNoDevice || target_device == paNoDevice) {
+
+    if (source_device == paNoDevice || target_device == paNoDevice)
+    {
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         printf("[ERROR] Invalid audio devices for tone passthrough\n");
         return 0;
     }
-    
+
     // Setup passthrough stream parameters
     PaStreamParameters input_params, output_params;
-    
+
     input_params.device = source_device;
     input_params.channelCount = 1;
     input_params.sampleFormat = paFloat32;
     input_params.suggestedLatency = Pa_GetDeviceInfo(source_device)->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
-    
+
     output_params.device = target_device;
     output_params.channelCount = 1;
     output_params.sampleFormat = paFloat32;
     output_params.suggestedLatency = Pa_GetDeviceInfo(target_device)->defaultLowOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
-    
+
     // Open passthrough stream
     PaError err = Pa_OpenStream(&global_tone_passthrough.passthrough_stream,
-                               &input_params, &output_params, 48000, 1024,
-                               paClipOff, tone_passthrough_callback, NULL);
-    
-    if (err != paNoError) {
+                                &input_params, &output_params, 48000, 1024,
+                                paClipOff, tone_passthrough_callback, NULL);
+
+    if (err != paNoError)
+    {
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         printf("[ERROR] Failed to open tone passthrough stream: %s\n", Pa_GetErrorText(err));
         return 0;
     }
-    
+
     // Start the stream
     err = Pa_StartStream(global_tone_passthrough.passthrough_stream);
-    if (err != paNoError) {
+    if (err != paNoError)
+    {
         Pa_CloseStream(global_tone_passthrough.passthrough_stream);
         global_tone_passthrough.passthrough_stream = NULL;
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         printf("[ERROR] Failed to start tone passthrough stream: %s\n", Pa_GetErrorText(err));
         return 0;
     }
-    
+
     global_tone_passthrough.active = 1;
     pthread_mutex_unlock(&global_tone_passthrough.mutex);
-    
-    printf("[INFO] Tone passthrough started: Channel %d -> Channel %d\n", 
+
+    printf("[INFO] Tone passthrough started: Channel %d -> Channel %d\n",
            global_tone_passthrough.source_channel + 1, global_tone_passthrough.target_channel + 1);
     return 1;
 }
 
 // Stop tone passthrough
-int stop_tone_passthrough(void) {
+int stop_tone_passthrough(void)
+{
     pthread_mutex_lock(&global_tone_passthrough.mutex);
-    
-    if (!global_tone_passthrough.active) {
+
+    if (!global_tone_passthrough.active)
+    {
         pthread_mutex_unlock(&global_tone_passthrough.mutex);
         return 1;
     }
-    
-    if (global_tone_passthrough.passthrough_stream) {
+
+    if (global_tone_passthrough.passthrough_stream)
+    {
         Pa_AbortStream(global_tone_passthrough.passthrough_stream);
         Pa_CloseStream(global_tone_passthrough.passthrough_stream);
         global_tone_passthrough.passthrough_stream = NULL;
     }
-    
+
     global_tone_passthrough.active = 0;
     pthread_mutex_unlock(&global_tone_passthrough.mutex);
-    
+
     printf("[INFO] Tone passthrough stopped\n");
     return 1;
 }
 
 // Check if tone passthrough is active
-int is_tone_passthrough_active(void) {
+int is_tone_passthrough_active(void)
+{
     pthread_mutex_lock(&global_tone_passthrough.mutex);
     int active = global_tone_passthrough.active;
     pthread_mutex_unlock(&global_tone_passthrough.mutex);
@@ -2240,23 +2629,26 @@ int is_tone_passthrough_active(void) {
 
 // Tone passthrough callback
 int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
-                              const PaStreamCallbackTimeInfo* time_info,
-                              PaStreamCallbackFlags flags, void *user_data) {
+                              const PaStreamCallbackTimeInfo *time_info,
+                              PaStreamCallbackFlags flags, void *user_data)
+{
     (void)time_info; // Suppress unused parameter warning
     (void)flags;     // Suppress unused parameter warning
     (void)user_data; // Suppress unused parameter warning
-    
-    if (!input || !output) {
+
+    if (!input || !output)
+    {
         return paContinue;
     }
-    
+
     // Direct audio passthrough - copy input to output
-    const float *in = (const float*)input;
-    float *out = (float*)output;
-    
-    for (unsigned long i = 0; i < frames; i++) {
+    const float *in = (const float *)input;
+    float *out = (float *)output;
+
+    for (unsigned long i = 0; i < frames; i++)
+    {
         out[i] = in[i];
     }
-    
+
     return paContinue;
 }

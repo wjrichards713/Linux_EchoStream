@@ -7,6 +7,9 @@
 #include <time.h>
 #include <unistd.h>
 
+// External reference to passthrough buffer
+extern struct passthrough_audio_buffer global_passthrough_buffer;
+
 
 // Silence noisy logs while keeping confirmations
 #define NOISY_LOG(...) do { (void)0; } while(0)
@@ -183,6 +186,15 @@ void* tone_detection_thread(void* arg) {
             
             // Apply frequency filters to actual audio samples
             apply_audio_frequency_filters(audio_buffer, samples_to_process);
+            
+            // Update passthrough buffer with processed audio (after gain and filtering)
+            pthread_mutex_lock(&global_passthrough_buffer.mutex);
+            for (int i = 0; i < samples_to_process && i < SAMPLES_PER_FRAME; i++) {
+                global_passthrough_buffer.samples[i] = audio_buffer[i];
+            }
+            global_passthrough_buffer.sample_count = samples_to_process;
+            global_passthrough_buffer.valid = 1;
+            pthread_mutex_unlock(&global_passthrough_buffer.mutex);
             
             // Analyze frequency spectrum
             if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
