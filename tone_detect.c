@@ -73,7 +73,7 @@ int init_tone_detection(void) {
     
     // Set default configuration
     global_tone_detection.config.threshold = 0.7f;
-    global_tone_detection.config.gain = 0.4f;
+    global_tone_detection.config.gain = 1.5f;
     global_tone_detection.config.db_threshold = -45;
     global_tone_detection.config.detect_new_tones = 1;
     global_tone_detection.config.new_tone_length_ms = 1000;
