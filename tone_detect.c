@@ -115,10 +115,11 @@ void stop_tone_detection(void) {
 void* tone_detection_thread(void* arg) {
     (void)arg; // Suppress unused parameter warning
     
-    printf("[TONE] Tone detection thread started\n");
+    printf("[TONE] Goertzel-based tone detection thread started\n");
     
     float audio_buffer[SAMPLES_PER_FRAME];
     int samples_processed = 0;
+    int thread_iterations = 0;
     
     while (global_tone_detection.active && !global_interrupted) {
         int samples_to_process = 0;
@@ -140,6 +141,9 @@ void* tone_detection_thread(void* arg) {
             for (int i = 0; i < samples_to_process; i++) {
                 audio_buffer[i] = global_shared_buffer.samples[i];
             }
+            
+            // Mark buffer as processed
+            global_shared_buffer.valid = 0;
         }
         
         pthread_mutex_unlock(&global_shared_buffer.mutex);
@@ -154,10 +158,19 @@ void* tone_detection_thread(void* arg) {
             // Apply audio filters
             apply_audio_filters(audio_buffer, samples_to_process);
             
-            // Process audio samples
+            // Process audio samples with Goertzel algorithm
             process_audio_samples(audio_buffer, samples_to_process);
             
             samples_processed += samples_to_process;
+            thread_iterations++;
+            
+            // Print debug info occasionally
+            if (thread_iterations % 1000 == 0) {
+                printf("[TONE] Thread iteration #%d: processed %d samples, active_filters=%d, active_sequences=%d\n", 
+                       thread_iterations, samples_processed, 
+                       global_tone_detection.active_filter_count,
+                       global_tone_detection.active_sequence_count);
+            }
             
             // Print statistics occasionally
             if (samples_processed % 50000 == 0) {
@@ -172,7 +185,7 @@ void* tone_detection_thread(void* arg) {
         usleep(1000); // 1ms delay
     }
     
-    printf("[TONE] Tone detection thread stopped\n");
+    printf("[TONE] Goertzel-based tone detection thread stopped\n");
     return NULL;
 }
 
@@ -648,6 +661,13 @@ void reset_sequence_detection(void) {
     }
 }
 
+// Start passthrough (compatibility function)
+int start_passthrough(int source_channel, int target_channel, int duration_ms) {
+    printf("[TONE] Starting passthrough: channel %d -> %d (%d ms)\n", 
+           source_channel, target_channel, duration_ms);
+    return 1; // Placeholder - actual implementation would be in audio.c
+}
+
 // Utility functions
 float frequency_to_goertzel_coeff(float frequency, int sample_rate) {
     return 2.0f * cosf(2.0f * M_PI * frequency / sample_rate);
@@ -766,13 +786,17 @@ void trigger_tone_passthrough(void) {
         int target_channel_idx = get_passthrough_target_channel_index();
         if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
             if (channel_has_output_stream(target_channel_idx)) {
-                printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
+                printf("[TONE PASSTHROUGH] Goertzel system detected tone, activating passthrough\n");
                 // Enable passthrough mode; audio.c routes to the configured target from JSON
                 set_passthrough_output_mode(1);
+                
+                // Also trigger the new system's passthrough
+                start_passthrough(0, target_channel_idx, 5000); // 5 second default duration
             } else {
                 printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream\n");
                 printf("[TONE PASSTHROUGH] Using software passthrough instead\n");
                 set_passthrough_output_mode(1);
+                start_passthrough(0, target_channel_idx, 5000);
             }
         } else {
             printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
@@ -816,13 +840,19 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
     old_def->record_length_ms = record_length;
     old_def->valid = 1;
     
-    // Add to new system
+    // Add to new Goertzel system
     int new_index = add_tone_sequence(tone_id, tone_a_freq, tone_a_length, tone_a_range,
                                     tone_b_freq, tone_b_length, tone_b_range,
                                     5000, record_length); // 5 second timeout
     
     if (new_index) {
-        printf("[TONE] Mapped legacy definition to new sequence\n");
+        printf("[TONE] Successfully added Goertzel sequence: %s (A: %.1f Hz, B: %.1f Hz)\n", 
+               tone_id, tone_a_freq, tone_b_freq);
+        printf("[TONE] Active sequences: %d, Active filters: %d\n", 
+               global_tone_detection.active_sequence_count,
+               global_tone_detection.active_filter_count);
+    } else {
+        printf("[TONE] Failed to add Goertzel sequence for %s\n", tone_id);
     }
     
     return 1;
