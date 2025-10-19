@@ -5,10 +5,14 @@
 #include <complex.h>
 #include <fftw3.h>
 
-// Include cJSON library - try different paths
+// Include cJSON library - try different paths (note: actual file is cJSON.h with capital C)
 #ifdef __has_include
-    #if __has_include(<cjson/cjson.h>)
+    #if __has_include(<cjson/cJSON.h>)
+        #include <cjson/cJSON.h>
+    #elif __has_include(<cjson/cjson.h>)
         #include <cjson/cjson.h>
+    #elif __has_include(<cJSON.h>)
+        #include <cJSON.h>
     #elif __has_include(<cjson.h>)
         #include <cjson.h>
     #else
@@ -17,9 +21,9 @@
 #else
     // Try the most common paths
     #ifdef __linux__
-        #include <cjson/cjson.h>
+        #include <cjson/cJSON.h>
     #else
-        #include <cjson.h>
+        #include <cJSON.h>
     #endif
 #endif
 

@@ -176,9 +176,13 @@ elif ldconfig -p | grep -q libcjson; then
     cjson_found=true
 fi
 
-# Check for cJSON headers
+# Check for cJSON headers (note: actual file is cJSON.h with capital C)
 cjson_header_path=""
-if [ -f "/usr/include/cjson/cjson.h" ]; then
+if [ -f "/usr/include/cjson/cJSON.h" ]; then
+    print_success "cJSON header found at /usr/include/cjson/cJSON.h"
+    cjson_header_found=true
+    cjson_header_path="/usr/include/cjson/cJSON.h"
+elif [ -f "/usr/include/cjson/cjson.h" ]; then
     print_success "cJSON header found at /usr/include/cjson/cjson.h"
     cjson_header_found=true
     cjson_header_path="/usr/include/cjson/cjson.h"
@@ -186,6 +190,10 @@ elif [ -f "/usr/include/cjson.h" ]; then
     print_success "cJSON header found at /usr/include/cjson.h"
     cjson_header_found=true
     cjson_header_path="/usr/include/cjson.h"
+elif [ -f "/usr/local/include/cjson/cJSON.h" ]; then
+    print_success "cJSON header found at /usr/local/include/cjson/cJSON.h"
+    cjson_header_found=true
+    cjson_header_path="/usr/local/include/cjson/cJSON.h"
 elif [ -f "/usr/local/include/cjson/cjson.h" ]; then
     print_success "cJSON header found at /usr/local/include/cjson/cjson.h"
     cjson_header_found=true
@@ -195,9 +203,9 @@ elif [ -f "/usr/local/include/cjson.h" ]; then
     cjson_header_found=true
     cjson_header_path="/usr/local/include/cjson.h"
 else
-    # Try to find cJSON headers using find command
+    # Try to find cJSON headers using find command (search for both cases)
     print_status "Searching for cJSON headers in system..."
-    found_headers=$(find /usr/include /usr/local/include -name "cjson.h" -type f 2>/dev/null | head -1)
+    found_headers=$(find /usr/include /usr/local/include -name "*cjson*" -type f 2>/dev/null | grep -E "\.(h|hpp)$" | head -1)
     if [ -n "$found_headers" ]; then
         print_success "cJSON header found at: $found_headers"
         cjson_header_found=true
