@@ -329,7 +329,7 @@ int detect_peaks(double *magnitude_spectrum, int spectrum_size) {
         if (peak_debug_count % 50 == 0) {  // Print every 50 detections
             printf("[TONE_DETECT] Detected %d peaks: ", num_peaks);
             for (int i = 0; i < num_peaks && i < 3; i++) {
-                double freq = bin_to_frequency(global_tone_detection.detected_peaks[i].bin);
+                double freq = global_tone_detection.detected_peaks[i].frequency;
                 double db = magnitude_to_db(global_tone_detection.detected_peaks[i].magnitude);
                 printf("%.1fHz(%.1fdB) ", freq, db);
             }
@@ -685,43 +685,32 @@ static int create_default_tone_config(void) {
         strcpy(config->passthrough_channel, "channel_one");
         
         // Add some default tone definitions
-        config->num_tones = 2;
+        config->num_alert_tones = 1;
         
-        // Tone A: 1000 Hz
-        config->tones[0].valid = 1;
-        config->tones[0].frequency = 1000.0;
-        config->tones[0].tolerance = 50.0;
-        config->tones[0].min_duration = 100.0;
-        strcpy(config->tones[0].name, "Tone_A");
-        
-        // Tone B: 2000 Hz  
-        config->tones[1].valid = 1;
-        config->tones[1].frequency = 2000.0;
-        config->tones[1].tolerance = 50.0;
-        config->tones[1].min_duration = 100.0;
-        strcpy(config->tones[1].name, "Tone_B");
-        
-        // Set up sequence: A -> B
-        config->sequences[0].valid = 1;
-        config->sequences[0].tone_a = 0;  // Index of Tone A
-        config->sequences[0].tone_b = 1;  // Index of Tone B
-        config->sequences[0].timeout_ms = 2000.0;
-        strcpy(config->sequences[0].name, "Sequence_AB");
+        // Default tone definition: 1000Hz -> 2000Hz sequence
+        config->alert_tones[0].valid = 1;
+        config->alert_tones[0].tone_a_freq = 1000.0;
+        config->alert_tones[0].tone_b_freq = 2000.0;
+        config->alert_tones[0].tone_a_length_ms = 100.0;
+        config->alert_tones[0].tone_b_length_ms = 100.0;
+        config->alert_tones[0].tone_a_range_hz = 50.0;
+        config->alert_tones[0].tone_b_range_hz = 50.0;
+        config->alert_tones[0].record_length_ms = 1000.0;
+        strcpy(config->alert_tones[0].tone_id, "Default_Sequence");
         
         // Alert details
-        config->alert_details.valid = 1;
-        config->alert_details.play_audio = 1;
-        config->alert_details.audio_file_path = "/home/will/alert.wav";
-        config->alert_details.volume = 0.8;
-        strcpy(config->alert_details.message, "Tone sequence detected!");
-        
-        config->num_sequences = 1;
+        config->alert_details.threshold = 0.5;
+        config->alert_details.gain = 1.0;
+        config->alert_details.db_threshold = -40.0;
+        config->alert_details.detect_new_tones = 1;
+        config->alert_details.new_tone_length_ms = 100.0;
+        config->alert_details.new_tone_range_hz = 50.0;
         config->num_filters = 0;
     }
     
     printf("[TONE_DETECT] Default configuration created successfully\n");
-    printf("[TONE_DETECT] Configured %d tones per channel (1000Hz, 2000Hz)\n", 2);
-    printf("[TONE_DETECT] Sequence: Tone A (1000Hz) -> Tone B (2000Hz)\n");
+    printf("[TONE_DETECT] Configured tone sequence: 1000Hz -> 2000Hz\n");
+    printf("[TONE_DETECT] Tolerance: ±50Hz, Duration: 100ms each\n");
     return 1;
 }
 
