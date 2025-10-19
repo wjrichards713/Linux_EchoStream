@@ -159,16 +159,12 @@ int main(int argc, char *argv[]) {
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     
-    }
-    
     printf("\n=== SYSTEM BEHAVIOR ===\n");
     printf("Channel Configuration:\n");
     for (int i = 0; i < global_channel_count; i++) {
         printf("  Channel %d (%s):\n", i + 1, global_channel_ids[i]);
         printf("    - Output: ALWAYS plays EchoStream audio\n");
-        
         printf("    - Input: ENABLED (standard EchoStream)\n");
-        }
     }
     // Remove stale example tones output; tones are from JSON only
     

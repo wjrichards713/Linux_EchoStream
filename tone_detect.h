@@ -5,19 +5,8 @@
 #include <complex.h>
 #include <fftw3.h>
 
-// Try different cJSON include paths
-#ifdef __has_include
-    #if __has_include(<cjson/cjson.h>)
-        #include <cjson/cjson.h>
-    #elif __has_include(<cjson.h>)
-        #include <cjson.h>
-    #else
-        #error "cJSON library not found. Please install libcjson-dev"
-    #endif
-#else
-    // Fallback for older compilers
-    #include <cjson.h>
-#endif
+// Include cJSON library
+#include <cjson.h>
 
 // Tone detection configuration constants
 #define MAX_TONE_DEFINITIONS 10
@@ -36,7 +25,7 @@ typedef enum {
     TONE_STATE_DETECTING_B,
     TONE_STATE_RECORDING,
     TONE_STATE_TIMEOUT
-} tone_detection_state_t;
+} tone_state_t;
 
 // Filter types
 typedef enum {
@@ -100,7 +89,7 @@ typedef struct {
 // Tone detection state for a specific tone sequence
 typedef struct {
     tone_definition_t *definition;
-    tone_detection_state_t state;
+    tone_state_t state;
     double tone_a_detected_duration_ms;
     double tone_b_detected_duration_ms;
     double sequence_start_time_ms;

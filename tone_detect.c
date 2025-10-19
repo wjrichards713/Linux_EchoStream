@@ -11,7 +11,7 @@
 // Global tone detection state
 tone_detect_control_t global_tone_detect = {0};
 passthrough_audio_buffer_t global_passthrough_buffer = {0};
-tone_detection_state_t global_tone_detection = {0};
+tone_state_t global_tone_detection = {0};
 int force_passthrough_reevaluation = 0;
 
 // Forward declarations
@@ -38,7 +38,7 @@ int init_tone_detection(void) {
     pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
     
     // Initialize tone detection state
-    memset(&global_tone_detection, 0, sizeof(tone_detection_state_t));
+    memset(&global_tone_detection, 0, sizeof(tone_state_t));
     global_tone_detection.thread_running = 0;
     pthread_mutex_init(&global_tone_detection.state_mutex, NULL);
     pthread_cond_init(&global_tone_detection.data_ready, NULL);
