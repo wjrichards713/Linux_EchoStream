@@ -60,6 +60,14 @@ sudo apt install -y libssl-dev openssl
 print_status "Installing JSON-C library..."
 sudo apt install -y libjson-c-dev libjson-c5
 
+# Install cJSON library (alternative JSON parser)
+print_status "Installing cJSON library..."
+sudo apt install -y libcjson-dev libcjson1
+
+# Install FFTW3 library for tone detection
+print_status "Installing FFTW3 library for FFT operations..."
+sudo apt install -y libfftw3-dev libfftw3-double3 libfftw3-single3
+
 # Install cURL library
 print_status "Installing cURL library..."
 sudo apt install -y libcurl4-openssl-dev curl
@@ -76,6 +84,14 @@ sudo apt install -y libc6-dev
 print_status "Installing GPIO utilities for RPi 5..."
 sudo apt install -y raspi-gpio gpiod libgpiod-dev
 
+# Install additional development libraries
+print_status "Installing additional development libraries..."
+sudo apt install -y libasound2-dev libpulse-dev libsndfile1-dev
+
+# Install math libraries for FFT operations
+print_status "Installing math libraries..."
+sudo apt install -y libblas-dev liblapack-dev
+
 # Check if main.c exists (modular structure)
 if [ ! -f "main.c" ]; then
     print_error "main.c not found in current directory!"
@@ -83,8 +99,8 @@ if [ ! -f "main.c" ]; then
     exit 1
 fi
 
-# Check for all required source files
-required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c")
+# Check for all required source files (including tone detection)
+required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c" "tone_detect.c")
 missing_files=()
 
 for file in "${required_files[@]}"; do
@@ -104,11 +120,27 @@ fi
 
 print_success "All dependencies installed successfully!"
 
+# Verify tone detection dependencies
+print_status "Verifying tone detection dependencies..."
+if pkg-config --exists libfftw3; then
+    print_success "FFTW3 library found"
+else
+    print_error "FFTW3 library not found!"
+    exit 1
+fi
+
+if pkg-config --exists libcjson; then
+    print_success "cJSON library found"
+else
+    print_error "cJSON library not found!"
+    exit 1
+fi
+
 # Compile the application
 print_status "Cleaning previous build..."
 make clean || true
 
-print_status "Compiling EchoStream application..."
+print_status "Compiling EchoStream application with tone detection..."
 make
 
 if [ $? -eq 0 ]; then
@@ -152,8 +184,19 @@ else
     print_warning "Please log out and log back in for GPIO permissions to take effect"
 fi
 
+# Test tone detection if test program exists
+if [ -f "test_tone_detect" ]; then
+    print_status "Testing tone detection system..."
+    ./test_tone_detect
+    if [ $? -eq 0 ]; then
+        print_success "Tone detection test passed!"
+    else
+        print_warning "Tone detection test failed, but continuing..."
+    fi
+fi
+
 # Auto-run EchoStream after installation
-print_status "Starting EchoStream automatically..."
+print_status "Starting EchoStream with tone detection..."
 echo "Press Ctrl+C to stop"
 echo ""
 ./echostream
