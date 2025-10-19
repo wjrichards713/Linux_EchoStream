@@ -10,6 +10,7 @@ struct channel_config {
     int input_low_two;
     int input_high_one;
     int input_high_two;
+    int tone_detect;
     int valid;
 };
 

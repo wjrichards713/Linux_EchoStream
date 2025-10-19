@@ -4,6 +4,7 @@
 #include "crypto.h"
 #include "config.h"
 #include "udp.h"
+#include "tone_detect.h"
 #include <math.h>
 #include <unistd.h>
 

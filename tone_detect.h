@@ -153,10 +153,26 @@ typedef struct {
     struct timespec last_analysis_time;
 } tone_detection_state_t;
 
+// Additional structures for audio passthrough
+typedef struct {
+    int active;
+    int target_channel;
+    pthread_t thread;
+    pthread_mutex_t mutex;
+} audio_passthrough_t;
+
+typedef struct {
+    int enabled;
+    int target_channel;
+    pthread_mutex_t mutex;
+} tone_passthrough_control_t;
+
 // Global variables
 extern tone_detect_control_t global_tone_detect;
 extern passthrough_audio_buffer_t global_passthrough_buffer;
 extern tone_detection_state_t global_tone_detection;
+extern audio_passthrough_t global_passthrough;
+extern tone_passthrough_control_t global_tone_passthrough;
 
 // Function declarations
 
@@ -219,7 +235,21 @@ int get_passthrough_target_channel_index(void);
 int channel_has_output_stream(int channel_index);
 int repair_passthrough_output_stream(int channel_index);
 
+// Audio passthrough functions
+int init_audio_passthrough(void);
+int start_audio_passthrough(int target_channel);
+int stop_audio_passthrough(void);
+void* audio_passthrough_thread(void *arg);
+int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                              const PaStreamCallbackTimeInfo *time_info,
+                              PaStreamCallbackFlags flags, void *user_data);
+
 // Global flag for passthrough re-evaluation
 extern int force_passthrough_reevaluation;
+
+// Missing constants
+#ifndef SAMPLE_RATE
+#define SAMPLE_RATE 48000
+#endif
 
 #endif // TONE_DETECT_H
