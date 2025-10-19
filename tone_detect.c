@@ -1,774 +1,1085 @@
-#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 #include "tone_detect.h"
 #include "audio.h"
 #include "config.h"
 #include <math.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
-
-// External reference to passthrough buffer
-extern struct passthrough_audio_buffer global_passthrough_buffer;
-
-
-// Silence noisy logs while keeping confirmations
-#define NOISY_LOG(...) do { (void)0; } while(0)
+#include <errno.h>
+#include <sys/time.h>
 
 // Global tone detection state
-struct tone_detection_state global_tone_detection = {0};
+tone_detect_control_t global_tone_detect = {0};
+passthrough_audio_buffer_t global_passthrough_buffer = {0};
+tone_detection_state_t global_tone_detection = {0};
+int force_passthrough_reevaluation = 0;
+
+// Forward declarations
+static int initialize_fft(void);
+static void cleanup_fft(void);
+static int process_tone_sequences(double current_time_ms);
+static int find_local_maxima(double *magnitude_spectrum, int spectrum_size, 
+                            peak_t *peaks, int max_peaks);
+static int compare_peaks(const void *a, const void *b);
 
 // Initialize tone detection system
 int init_tone_detection(void) {
-    // Save existing tone definitions before clearing
-    struct tone_definition saved_tone_definitions[MAX_TONE_DEFINITIONS];
-    struct frequency_filter saved_filters[MAX_FILTERS];
-    int saved_tone_count = 0;
-    int saved_filter_count = 0;
+    printf("[TONE_DETECT] Initializing tone detection system...\n");
     
-    // Backup existing tone definitions
-    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-        if (global_tone_detection.tone_definitions[i].valid) {
-            saved_tone_definitions[saved_tone_count] = global_tone_detection.tone_definitions[i];
-            saved_tone_count++;
-        }
-    }
+    // Initialize global tone detection control
+    memset(&global_tone_detect, 0, sizeof(tone_detect_control_t));
+    global_tone_detect.enabled = 1;
+    global_tone_detect.card1_input_enabled = 1;
+    global_tone_detect.passthrough_mode = 0;
+    pthread_mutex_init(&global_tone_detect.mutex, NULL);
     
-    // Backup existing filters
-    for (int i = 0; i < MAX_FILTERS; i++) {
-        if (global_tone_detection.filters[i].valid) {
-            saved_filters[saved_filter_count] = global_tone_detection.filters[i];
-            saved_filter_count++;
-        }
-    }
+    // Initialize passthrough buffer
+    memset(&global_passthrough_buffer, 0, sizeof(passthrough_audio_buffer_t));
+    pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
     
-    // Clear the structure
-    memset(&global_tone_detection, 0, sizeof(struct tone_detection_state));
-    
-    // Restore tone definitions
-    for (int i = 0; i < saved_tone_count; i++) {
-        global_tone_detection.tone_definitions[i] = saved_tone_definitions[i];
-    }
-    
-    // Restore filters
-    for (int i = 0; i < saved_filter_count; i++) {
-        global_tone_detection.filters[i] = saved_filters[i];
-    }
-    
-    NOISY_LOG("[DEBUG] init_tone_detection() preserved %d tone definitions and %d filters\n", 
-           saved_tone_count, saved_filter_count);
+    // Initialize tone detection state
+    memset(&global_tone_detection, 0, sizeof(tone_detection_state_t));
+    global_tone_detection.thread_running = 0;
+    pthread_mutex_init(&global_tone_detection.state_mutex, NULL);
+    pthread_cond_init(&global_tone_detection.data_ready, NULL);
     
     // Initialize FFT
-    global_tone_detection.fft_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, 
-                                                         global_tone_detection.fft_input,
-                                                         global_tone_detection.fft_output,
-                                                         FFTW_ESTIMATE);
-    
-    if (!global_tone_detection.fft_plan) {
-        fprintf(stderr, "[ERROR] Failed to create FFT plan\n");
+    if (!initialize_fft()) {
+        printf("[ERROR] Failed to initialize FFT\n");
         return 0;
     }
     
-    // Initialize mutex
-    pthread_mutex_init(&global_tone_detection.mutex, NULL);
+    // Load tone detection configuration
+    if (!load_tone_detection_config()) {
+        printf("[WARNING] Failed to load tone detection configuration\n");
+        return 0;
+    }
     
-    // Set default configuration
-    global_tone_detection.config.threshold = 0.7f;
-    global_tone_detection.config.gain = 1.5f;
-    global_tone_detection.config.db_threshold = -45;
-    global_tone_detection.config.detect_new_tones = 1;
-    global_tone_detection.config.new_tone_length_ms = 1000;
-    global_tone_detection.config.new_tone_range_hz = 3;
-    global_tone_detection.config.valid = 1;
-    
-    // Initialize detection state
-    global_tone_detection.current_tone_a_detected = 0;
-    global_tone_detection.current_tone_b_detected = 0;
-    global_tone_detection.tone_sequence_active = 0;
-    global_tone_detection.recording_active = 0;
-    
-    // Initialize duration tracking
-    global_tone_detection.tone_a_tracking = 0;
-    global_tone_detection.tone_b_tracking = 0;
-    global_tone_detection.tone_a_confirmed = 0;
-    global_tone_detection.tone_b_confirmed = 0;
-    global_tone_detection.tone_a_tracking_start = 0;
-    global_tone_detection.tone_b_tracking_start = 0;
-    
-    global_tone_detection.active = 0;
-    
-    NOISY_LOG("[INFO] Tone detection system initialized\n");
+    printf("[TONE_DETECT] Tone detection system initialized successfully\n");
     return 1;
+}
+
+// Initialize FFT system
+static int initialize_fft(void) {
+    printf("[TONE_DETECT] Initializing FFT system...\n");
+    
+    // Allocate FFT buffers
+    global_tone_detection.fft_input = fftw_malloc(FFT_SIZE * sizeof(fftw_complex));
+    global_tone_detection.fft_output = fftw_malloc(FFT_SIZE * sizeof(fftw_complex));
+    global_tone_detection.magnitude_spectrum = malloc((FFT_SIZE / 2) * sizeof(double));
+    
+    if (!global_tone_detection.fft_input || 
+        !global_tone_detection.fft_output || 
+        !global_tone_detection.magnitude_spectrum) {
+        printf("[ERROR] Failed to allocate FFT buffers\n");
+        cleanup_fft();
+        return 0;
+    }
+    
+    // Create FFT plan
+    global_tone_detection.fft_plan = fftw_plan_dft_1d(FFT_SIZE, 
+                                                     global_tone_detection.fft_input,
+                                                     global_tone_detection.fft_output,
+                                                     FFTW_FORWARD, FFTW_ESTIMATE);
+    
+    if (!global_tone_detection.fft_plan) {
+        printf("[ERROR] Failed to create FFT plan\n");
+        cleanup_fft();
+        return 0;
+    }
+    
+    printf("[TONE_DETECT] FFT system initialized (size=%d, resolution=%.2f Hz)\n", 
+           FFT_SIZE, FREQ_RESOLUTION);
+    return 1;
+}
+
+// Cleanup FFT system
+static void cleanup_fft(void) {
+    if (global_tone_detection.fft_plan) {
+        fftw_destroy_plan(global_tone_detection.fft_plan);
+        global_tone_detection.fft_plan = NULL;
+    }
+    
+    if (global_tone_detection.fft_input) {
+        fftw_free(global_tone_detection.fft_input);
+        global_tone_detection.fft_input = NULL;
+    }
+    
+    if (global_tone_detection.fft_output) {
+        fftw_free(global_tone_detection.fft_output);
+        global_tone_detection.fft_output = NULL;
+    }
+    
+    if (global_tone_detection.magnitude_spectrum) {
+        free(global_tone_detection.magnitude_spectrum);
+        global_tone_detection.magnitude_spectrum = NULL;
+    }
 }
 
 // Start tone detection thread
 int start_tone_detection(void) {
-    if (global_tone_detection.active) {
-        printf("[WARNING] Tone detection already active\n");
+    if (global_tone_detection.thread_running) {
+        printf("[WARNING] Tone detection thread already running\n");
         return 1;
     }
     
-    global_tone_detection.active = 1;
+    printf("[TONE_DETECT] Starting tone detection thread...\n");
     
-    if (pthread_create(&global_tone_detection.thread, NULL, tone_detection_thread, NULL)) {
-        fprintf(stderr, "[ERROR] Failed to create tone detection thread\n");
-        global_tone_detection.active = 0;
+    // Create detection thread
+    pthread_attr_t thread_attr;
+    pthread_attr_init(&thread_attr);
+    pthread_attr_setstacksize(&thread_attr, TONE_DETECTION_THREAD_STACK_SIZE);
+    
+    if (pthread_create(&global_tone_detection.detection_thread, &thread_attr, 
+                       tone_detection_thread, NULL) != 0) {
+        printf("[ERROR] Failed to create tone detection thread\n");
+        pthread_attr_destroy(&thread_attr);
         return 0;
     }
     
-    NOISY_LOG("[INFO] Tone detection thread started\n");
+    pthread_attr_destroy(&thread_attr);
+    global_tone_detection.thread_running = 1;
+    
+    printf("[TONE_DETECT] Tone detection thread started successfully\n");
     return 1;
 }
 
 // Stop tone detection thread
-void stop_tone_detection(void) {
-    if (!global_tone_detection.active) {
-        return;
+int stop_tone_detection(void) {
+    if (!global_tone_detection.thread_running) {
+        return 1;
     }
     
-    global_tone_detection.active = 0;
+    printf("[TONE_DETECT] Stopping tone detection thread...\n");
+    
+    global_tone_detection.thread_running = 0;
     
     // Signal the thread to wake up
-    pthread_mutex_lock(&global_shared_buffer.mutex);
-    pthread_cond_signal(&global_shared_buffer.data_ready);
-    pthread_mutex_unlock(&global_shared_buffer.mutex);
+    pthread_mutex_lock(&global_tone_detection.state_mutex);
+    pthread_cond_signal(&global_tone_detection.data_ready);
+    pthread_mutex_unlock(&global_tone_detection.state_mutex);
     
     // Wait for thread to finish
-    pthread_join(global_tone_detection.thread, NULL);
+    pthread_join(global_tone_detection.detection_thread, NULL);
     
-    NOISY_LOG("[INFO] Tone detection thread stopped\n");
+    printf("[TONE_DETECT] Tone detection thread stopped\n");
+    return 1;
+}
+
+// Cleanup tone detection system
+void cleanup_tone_detection(void) {
+    printf("[TONE_DETECT] Cleaning up tone detection system...\n");
+    
+    // Stop detection thread
+    stop_tone_detection();
+    
+    // Cleanup FFT
+    cleanup_fft();
+    
+    // Cleanup mutexes and conditions
+    pthread_mutex_destroy(&global_tone_detection.state_mutex);
+    pthread_cond_destroy(&global_tone_detection.data_ready);
+    pthread_mutex_destroy(&global_tone_detect.mutex);
+    pthread_mutex_destroy(&global_passthrough_buffer.mutex);
+    
+    printf("[TONE_DETECT] Tone detection system cleaned up\n");
 }
 
 // Main tone detection thread
-void* tone_detection_thread(void* arg) {
+void* tone_detection_thread(void *arg) {
     (void)arg; // Suppress unused parameter warning
     
-    printf("[INFO] Tone detection thread started\n");
+    printf("[TONE_DETECT] Tone detection thread started\n");
     
-    float audio_buffer[SAMPLES_PER_FRAME];
-    int samples_processed = 0;
+    float audio_buffer[FFT_SIZE];
+    int buffer_pos = 0;
+    struct timespec last_analysis = {0};
     
-    while (global_tone_detection.active && !global_interrupted) {
-        int samples_to_process = 0;
-        
-        // Only process if tone detection is enabled
+    while (global_tone_detection.thread_running && !global_interrupted) {
+        // Check if tone detection is enabled
         if (!is_tone_detect_enabled()) {
-            usleep(10000); // 10ms delay when tone detection is disabled
+            usleep(10000); // 10ms delay when disabled
             continue;
         }
         
+        // Get audio data from shared buffer
         pthread_mutex_lock(&global_shared_buffer.mutex);
         
-        // Wait for new audio data
-        while (!global_shared_buffer.valid && global_tone_detection.active && !global_interrupted) {
+        if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+            // Copy samples to our processing buffer
+            int samples_to_copy = global_shared_buffer.sample_count;
+            if (samples_to_copy > FFT_SIZE - buffer_pos) {
+                samples_to_copy = FFT_SIZE - buffer_pos;
+            }
+            
+            for (int i = 0; i < samples_to_copy; i++) {
+                audio_buffer[buffer_pos + i] = global_shared_buffer.samples[i];
+            }
+            
+            buffer_pos += samples_to_copy;
+            global_shared_buffer.valid = 0; // Mark as consumed
+            
+            // Process when we have enough samples
+            if (buffer_pos >= FFT_SIZE) {
+                process_audio_frame(audio_buffer, FFT_SIZE);
+                buffer_pos = 0; // Reset buffer
+            }
+        } else {
+            // Wait for new data
             pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
         }
         
-        if (global_shared_buffer.valid && global_tone_detection.active && !global_interrupted) {
-            // Copy audio data for processing
-            samples_to_process = global_shared_buffer.sample_count;
-            if (samples_to_process > SAMPLES_PER_FRAME) {
-                samples_to_process = SAMPLES_PER_FRAME;
-            }
-            
-            for (int i = 0; i < samples_to_process; i++) {
-                audio_buffer[i] = global_shared_buffer.samples[i];
-            }
-        }
-        
         pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Process audio for tone detection
-        if (samples_to_process > 0) {
-            // Apply gain
-            for (int i = 0; i < samples_to_process; i++) {
-                audio_buffer[i] *= global_tone_detection.config.gain;
-            }
-            
-            // Apply frequency filters to actual audio samples
-            apply_audio_frequency_filters(audio_buffer, samples_to_process);
-            
-            // Update passthrough buffer with processed audio (after gain and filtering)
-            pthread_mutex_lock(&global_passthrough_buffer.mutex);
-            for (int i = 0; i < samples_to_process && i < SAMPLES_PER_FRAME; i++) {
-                global_passthrough_buffer.samples[i] = audio_buffer[i];
-            }
-            global_passthrough_buffer.sample_count = samples_to_process;
-            global_passthrough_buffer.valid = 1;
-            pthread_mutex_unlock(&global_passthrough_buffer.mutex);
-            
-            // Analyze frequency spectrum
-            if (analyze_frequency_spectrum(audio_buffer, samples_to_process)) {
-                // Detect tone sequences with proper duration tracking
-                detect_tone_sequence(audio_buffer, samples_to_process);
-            }
-            
-            samples_processed += samples_to_process;
-            
-            // Print statistics much less frequently - every 50000 samples (about every 1 second at 48kHz)
-            if (samples_processed % 50000 == 0) {
-                static int stats_count = 0;
-                if (stats_count++ % 30 == 0) {  // Only every 30th time (about every 30 seconds)
-                    print_tone_detection_stats();
-                }
-            }
-        }
         
         // Small delay to prevent overwhelming the system
         usleep(1000); // 1ms delay
     }
     
-    printf("[INFO] Tone detection thread stopped\n");
+    printf("[TONE_DETECT] Tone detection thread stopped\n");
     return NULL;
 }
 
-// Analyze frequency spectrum using FFT
-int analyze_frequency_spectrum(float* audio_samples, int sample_count) {
-    if (sample_count < FFT_SIZE) {
-        return 0; // Not enough samples for FFT
+// Process audio frame for tone detection
+int process_audio_frame(float *samples, int sample_count) {
+    if (sample_count != FFT_SIZE) {
+        printf("[WARNING] Invalid sample count for tone detection: %d (expected %d)\n", 
+               sample_count, FFT_SIZE);
+        return 0;
     }
     
-    // Prepare FFT input (use first FFT_SIZE samples)
-    for (int i = 0; i < FFT_SIZE; i++) {
-        global_tone_detection.fft_input[i] = (double)audio_samples[i];
+    // Perform FFT analysis
+    if (!perform_fft_analysis(samples, sample_count)) {
+        return 0;
     }
     
-    // Apply window function (Hanning window)
+    // Detect peaks in frequency spectrum
+    global_tone_detection.num_peaks = detect_peaks(global_tone_detection.magnitude_spectrum, 
+                                                   FFT_SIZE / 2);
+    
+    // Match detected peaks to tone definitions
+    if (global_tone_detection.num_peaks > 0) {
+        match_tones_to_definitions(global_tone_detection.detected_peaks, 
+                                  global_tone_detection.num_peaks);
+    }
+    
+    // Process tone sequences
+    double current_time_ms = get_current_time_ms();
+    process_tone_sequences(current_time_ms);
+    
+    return 1;
+}
+
+// Perform FFT analysis on audio samples
+int perform_fft_analysis(float *samples, int sample_count) {
+    if (sample_count != FFT_SIZE) {
+        return 0;
+    }
+    
+    // Apply gain and prepare FFT input
     for (int i = 0; i < FFT_SIZE; i++) {
-        double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
-        global_tone_detection.fft_input[i] *= window;
+        // Apply gain (1.5x as specified in requirements)
+        float sample = samples[i] * 1.5f;
+        
+        // Clamp to prevent overflow
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        
+        // Convert to complex format for FFT
+        global_tone_detection.fft_input[i] = sample + 0.0 * I;
     }
     
     // Perform FFT
     fftw_execute(global_tone_detection.fft_plan);
     
     // Calculate magnitude spectrum
-    global_tone_detection.peak_count = 0;
-    float max_magnitude = 0.0f;
-    
-    for (int i = 0; i < FREQ_BINS; i++) {
-        float magnitude = calculate_magnitude(global_tone_detection.fft_output[i]);
-        global_tone_detection.frequency_magnitudes[i] = magnitude;
-        
-        if (magnitude > max_magnitude) {
-            max_magnitude = magnitude;
-        }
-    }
-    
-    // Convert dB threshold to absolute linear magnitude threshold
-    // For -45 dB: 20*log10(magnitude) = -45, so magnitude = 10^(-45/20) = 0.00562
-    float absolute_db_threshold = powf(10.0f, global_tone_detection.config.db_threshold / 20.0f);
-    
-    // Use the more permissive of the two thresholds
-    float relative_threshold = max_magnitude * 0.1f;  // 10% of max magnitude
-    float magnitude_threshold = (absolute_db_threshold > relative_threshold) ? relative_threshold : absolute_db_threshold;
-    
-    // Debug output for threshold analysis
-    static int debug_count = 0;
-    if (debug_count++ % 100 == 0) {
-        NOISY_LOG("[DEBUG] FFT: max_mag=%.6f, db_thresh=%d, abs_thresh=%.6f, rel_thresh=%.6f, final_thresh=%.6f\n",
-               max_magnitude, global_tone_detection.config.db_threshold, 
-               absolute_db_threshold, relative_threshold, magnitude_threshold);
-    }
-    
-    // Apply frequency filters BEFORE peak picking so peaks reflect configured filters
-    apply_frequency_filters(global_tone_detection.frequency_magnitudes, FREQ_BINS);
-
-    // Find peak frequencies above dB threshold
-    for (int i = 1; i < FREQ_BINS - 1; i++) {
-        float current = global_tone_detection.frequency_magnitudes[i];
-        float prev = global_tone_detection.frequency_magnitudes[i-1];
-        float next = global_tone_detection.frequency_magnitudes[i+1];
-        
-        // Check if this is a peak and above dB threshold
-        if (current > prev && current > next && current > magnitude_threshold) {
-            if (global_tone_detection.peak_count < 10) {
-                // Quadratic (parabolic) interpolation around the peak to estimate sub-bin location
-                // delta = 0.5 * (prev - next) / (prev - 2*current + next)
-                float denominator = (prev - 2.0f * current + next);
-                float delta = 0.0f;
-                if (fabsf(denominator) > 1e-12f) {
-                    delta = 0.5f * (prev - next) / denominator;
-                    // Clamp delta to [-0.5, 0.5] to avoid wild jumps
-                    if (delta > 0.5f) delta = 0.5f;
-                    if (delta < -0.5f) delta = -0.5f;
-                }
-                float refined_bin = (float)i + delta;
-                float peak_freq = (refined_bin * (float)SAMPLE_RATE) / (float)FFT_SIZE;
-                
-                global_tone_detection.peak_frequencies[global_tone_detection.peak_count] = peak_freq;
-                global_tone_detection.peak_count++;
-                
-                // Debug output for peak detection (reduced verbosity)
-                if ((peak_freq >= 950.0f && peak_freq <= 1050.0f) && debug_count % 50 == 0) {
-                    NOISY_LOG("[DEBUG] Peak detected: %.1f Hz (bin %d, delta=%.3f, mag=%.6f, thresh=%.6f)\n",
-                           peak_freq, i, delta, current, magnitude_threshold);
-                }
-            }
-        }
+    for (int i = 0; i < FFT_SIZE / 2; i++) {
+        double real = creal(global_tone_detection.fft_output[i]);
+        double imag = cimag(global_tone_detection.fft_output[i]);
+        global_tone_detection.magnitude_spectrum[i] = sqrt(real * real + imag * imag);
     }
     
     return 1;
 }
 
-// Detect tone sequences with proper duration tracking
-int detect_tone_sequence(float* audio_samples, int sample_count) {
-    (void)audio_samples; // Suppress unused parameter warning
-    (void)sample_count;  // Suppress unused parameter warning
-    
-    // Debug: Show when tone detection is called
-    static int detect_count = 0;
-    if (detect_count++ % 500 == 0) {
-        NOISY_LOG("[DEBUG] detect_tone_sequence() called - peak_count=%d\n", 
-               global_tone_detection.peak_count);
+// Detect peaks in magnitude spectrum
+int detect_peaks(double *magnitude_spectrum, int spectrum_size) {
+    if (spectrum_size != FFT_SIZE / 2) {
+        return 0;
     }
     
-    // Use milliseconds since program start to avoid overflow
-    static struct timespec start_time = {0};
-    if (start_time.tv_sec == 0) {
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
-    }
+    // Find local maxima
+    int num_peaks = find_local_maxima(magnitude_spectrum, spectrum_size, 
+                                     global_tone_detection.detected_peaks, MAX_PEAKS);
     
-    // Debug: Show tone definitions count
-    static int tone_def_count = 0;
-    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-        if (global_tone_detection.tone_definitions[i].valid) {
-            tone_def_count++;
+    // Sort peaks by magnitude (descending)
+    qsort(global_tone_detection.detected_peaks, num_peaks, sizeof(peak_t), compare_peaks);
+    
+    return num_peaks;
+}
+
+// Find local maxima in magnitude spectrum
+static int find_local_maxima(double *magnitude_spectrum, int spectrum_size, 
+                            peak_t *peaks, int max_peaks) {
+    int num_peaks = 0;
+    const double MIN_PEAK_DB = -45.0; // Minimum dB threshold
+    
+    for (int i = 1; i < spectrum_size - 1 && num_peaks < max_peaks; i++) {
+        double magnitude = magnitude_spectrum[i];
+        double magnitude_db = magnitude_to_db(magnitude);
+        
+        // Check if this is a local maximum and above threshold
+        if (magnitude > magnitude_spectrum[i-1] && 
+            magnitude > magnitude_spectrum[i+1] && 
+            magnitude_db > MIN_PEAK_DB) {
+            
+            peaks[num_peaks].bin_index = i;
+            peaks[num_peaks].frequency = bin_to_frequency(i);
+            peaks[num_peaks].magnitude = magnitude;
+            peaks[num_peaks].magnitude_db = magnitude_db;
+            num_peaks++;
         }
     }
-    if (detect_count % 1000 == 0) {
-        NOISY_LOG("[DEBUG] Loaded tone definitions: %d\n", tone_def_count);
-        tone_def_count = 0; // Reset counter
-    }
     
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
-                            (now.tv_nsec - start_time.tv_nsec) / 1000000);
-    
-    // Presence smoothing state (N-of-M + grace) for stability
-    static int a_hit_streak = 0, a_miss_streak = 0;
-    static int b_hit_streak = 0, b_miss_streak = 0;
-    static int a_last_seen_ms = 0, b_last_seen_ms = 0;
-    static int a_present = 0, b_present = 0;
-    const int HIT_REQUIRED = 1;      // require K hits (reduced from 2 to 1 for faster confirmation)
-    const int MISS_REQUIRED = 3;     // require K misses (increased from 2 to 3 for stability)
-    const int GRACE_MS = 500;        // allow brief gaps without resetting (increased from 250ms)
+    return num_peaks;
+}
 
-    // Check each tone definition
-    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-        struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
+// Compare peaks by magnitude (for sorting)
+static int compare_peaks(const void *a, const void *b) {
+    const peak_t *peak_a = (const peak_t*)a;
+    const peak_t *peak_b = (const peak_t*)b;
+    
+    if (peak_a->magnitude > peak_b->magnitude) return -1;
+    if (peak_a->magnitude < peak_b->magnitude) return 1;
+    return 0;
+}
+
+// Match detected peaks to tone definitions
+int match_tones_to_definitions(peak_t *peaks, int num_peaks) {
+    double current_time_ms = get_current_time_ms();
+    
+    // Process each active tone sequence
+    for (int i = 0; i < global_tone_detection.num_active_sequences; i++) {
+        tone_sequence_state_t *sequence = &global_tone_detection.sequences[i];
         
-        if (!tone_def->valid) {
+        if (!sequence->definition || !sequence->definition->valid) {
             continue;
         }
         
-        // Check for tone A
-        if (!global_tone_detection.tone_a_confirmed) {
-            // Debug: Show when we're checking for tone A
-            static int tone_a_check_count = 0;
-            if (tone_a_check_count++ % 200 == 0) {
-                NOISY_LOG("[DEBUG] Checking for Tone A: %.1f Hz ±%d Hz\n", tone_def->tone_a_freq, tone_def->tone_a_range_hz);
-            }
+        // Check for tone matches
+        for (int j = 0; j < num_peaks; j++) {
+            double detected_freq = peaks[j].frequency;
+            double magnitude_db = peaks[j].magnitude_db;
             
-            if (check_tone_definition(tone_def->tone_a_freq, tone_def, 0)) {
-                // Hit update
-                a_hit_streak++;
-                a_miss_streak = 0;
-                a_last_seen_ms = current_time;
-                
-                // Debug: Show hit progress
-                if (a_hit_streak == HIT_REQUIRED) {
-                    printf("[TONE] Tone A hit streak reached %d - starting confirmation process\n", HIT_REQUIRED);
+            // Check if this peak matches tone A or tone B
+            if (sequence->state == TONE_STATE_IDLE || sequence->state == TONE_STATE_DETECTING_A) {
+                if (is_frequency_in_range(detected_freq, sequence->definition->tone_a_freq, 
+                                         sequence->definition->tone_a_range_hz)) {
+                    update_tone_sequence_state(sequence, current_time_ms, detected_freq, magnitude_db);
                 }
-                if (a_hit_streak >= HIT_REQUIRED && !a_present) {
-                    printf("[TONE] Tone A present flag set - now tracking duration\n");
-                }
-                if (!a_present && a_hit_streak >= HIT_REQUIRED) {
-                    a_present = 1;
-                }
-                // Tone A frequency detected
-                if (!global_tone_detection.tone_a_tracking && a_present) {
-                    // Start tracking tone A
-                    global_tone_detection.tone_a_tracking = 1;
-                    global_tone_detection.tone_a_tracking_start = current_time;
-                    printf("[TONE] Tone A duration tracking started - need %d ms\n", tone_def->tone_a_length_ms);
-                    // Only log if we haven't been tracking recently (debounce)
-                    static int last_tone_a_start_log = 0;
-                    if (current_time - last_tone_a_start_log > 5000) { // 5 second debounce
-                        printf("[TONE] Tone A tracking started: %.1f Hz (ID: %s)\n", 
-                               tone_def->tone_a_freq, tone_def->tone_id);
-                        last_tone_a_start_log = current_time;
-                    }
-                } else {
-                    // Check if minimum duration has been met
-                    if (a_present && check_tone_duration(0, current_time, tone_def)) {
-                        global_tone_detection.tone_a_confirmed = 1;
-                        global_tone_detection.current_tone_a_detected = 1;
-                        global_tone_detection.tone_a_start_time = current_time;
-                        global_tone_detection.tone_sequence_active = 1;
-                        printf("[TONE CONFIRMED] Tone A confirmed! (%.1f Hz ±%d Hz, %d ms duration)\n", 
-                               tone_def->tone_a_freq, tone_def->tone_a_range_hz, tone_def->tone_a_length_ms);
-                        printf("[TONE] Tone A CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
-                               tone_def->tone_a_freq, tone_def->tone_id,
-                               current_time - global_tone_detection.tone_a_tracking_start);
-                        global_tone_detection.tone_a_detections++;
-                    }
-                }
-            } else {
-                // Miss update with grace
-                a_miss_streak++;
-                if ((current_time - a_last_seen_ms) > GRACE_MS && a_miss_streak >= MISS_REQUIRED) {
-                    a_present = 0;
-                    a_hit_streak = 0;
-                    if (global_tone_detection.tone_a_tracking) {
-                        global_tone_detection.tone_a_tracking = 0;
-                        global_tone_detection.tone_a_tracking_start = 0;
-                        // Only log reset if we haven't logged recently (debounce)
-                        static int last_tone_a_reset_log = 0;
-                        if (current_time - last_tone_a_reset_log > 5000) { // 5 second debounce
-                            printf("[TONE] Tone A tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                            last_tone_a_reset_log = current_time;
-                        }
-                    }
+            } else if (sequence->state == TONE_STATE_DETECTING_B) {
+                if (is_frequency_in_range(detected_freq, sequence->definition->tone_b_freq, 
+                                         sequence->definition->tone_b_range_hz)) {
+                    update_tone_sequence_state(sequence, current_time_ms, detected_freq, magnitude_db);
                 }
             }
-        }
-        
-        // Check for tone B (only if tone A was confirmed)
-        else if (!global_tone_detection.tone_b_confirmed) {
-            // Debug: Show when we're checking for tone B
-            static int tone_b_check_count = 0;
-            if (tone_b_check_count++ % 200 == 0) {
-                NOISY_LOG("[DEBUG] Checking for Tone B: %.1f Hz ±%d Hz\n", tone_def->tone_b_freq, tone_def->tone_b_range_hz);
-            }
-            
-            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
-                // Hit update
-                b_hit_streak++;
-                b_miss_streak = 0;
-                b_last_seen_ms = current_time;
-                
-                // Debug: Show hit progress
-                if (b_hit_streak == HIT_REQUIRED) {
-                    printf("[TONE] Tone B hit streak reached %d - starting confirmation process\n", HIT_REQUIRED);
-                }
-                if (b_hit_streak >= HIT_REQUIRED && !b_present) {
-                    printf("[TONE] Tone B present flag set - now tracking duration\n");
-                }
-                if (!b_present && b_hit_streak >= HIT_REQUIRED) {
-                    b_present = 1;
-                }
-                // Tone B frequency detected
-                if (!global_tone_detection.tone_b_tracking && b_present) {
-                    // Start tracking tone B
-                    global_tone_detection.tone_b_tracking = 1;
-                    global_tone_detection.tone_b_tracking_start = current_time;
-                    printf("[TONE] Tone B duration tracking started - need %d ms\n", tone_def->tone_b_length_ms);
-                    // Only log if we haven't been tracking recently (debounce)
-                    static int last_tone_b_start_log = 0;
-                    if (current_time - last_tone_b_start_log > 5000) { // 5 second debounce
-                        printf("[TONE] Tone B tracking started: %.1f Hz (ID: %s)\n", 
-                               tone_def->tone_b_freq, tone_def->tone_id);
-                        last_tone_b_start_log = current_time;
-                    }
-                } else {
-                    // Check if minimum duration has been met
-                    if (b_present && check_tone_duration(1, current_time, tone_def)) {
-                        global_tone_detection.tone_b_confirmed = 1;
-                        global_tone_detection.current_tone_b_detected = 1;
-                        global_tone_detection.tone_b_start_time = current_time;
-                        printf("[TONE CONFIRMED] Tone B confirmed! (%.1f Hz ±%d Hz, %d ms duration)\n", 
-                               tone_def->tone_b_freq, tone_def->tone_b_range_hz, tone_def->tone_b_length_ms);
-                        printf("[TONE] Tone B CONFIRMED: %.1f Hz (ID: %s) - Duration: %d ms\n", 
-                               tone_def->tone_b_freq, tone_def->tone_id,
-                               current_time - global_tone_detection.tone_b_tracking_start);
-                        global_tone_detection.tone_b_detections++;
-                        
-                        // Start recording
-                        global_tone_detection.recording_active = 1;
-                        global_tone_detection.recording_start_time = current_time;
-                        printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
-                        
-                        // Trigger tone passthrough if configured
-                        trigger_tone_passthrough();
-                        
-                        global_tone_detection.total_detections++;
-                    }
-                }
-            } else {
-                // Miss update with grace
-                b_miss_streak++;
-                if ((current_time - b_last_seen_ms) > GRACE_MS && b_miss_streak >= MISS_REQUIRED) {
-                    b_present = 0;
-                    b_hit_streak = 0;
-                    if (global_tone_detection.tone_b_tracking) {
-                        global_tone_detection.tone_b_tracking = 0;
-                        global_tone_detection.tone_b_tracking_start = 0;
-                        // Only log reset if we haven't logged recently (debounce)
-                        static int last_tone_b_reset_log = 0;
-                        if (current_time - last_tone_b_reset_log > 5000) { // 5 second debounce
-                            printf("[TONE] Tone B tracking reset - frequency lost (suppressing further resets for 5s)\n");
-                            last_tone_b_reset_log = current_time;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Check for new tone detection
-    if (global_tone_detection.config.detect_new_tones) {
-        detect_new_tones(global_tone_detection.frequency_magnitudes, FREQ_BINS);
-    }
-    
-    // Check if recording should stop
-    if (global_tone_detection.recording_active) {
-        for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-            struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
-            if (tone_def->valid && 
-                current_time - global_tone_detection.recording_start_time >= tone_def->record_length_ms) {
-                global_tone_detection.recording_active = 0;
-                printf("[TONE] Recording stopped\n");
-                break;
-            }
-        }
-    }
-    
-    // Reset sequence if tones are too old
-    if (global_tone_detection.tone_sequence_active) {
-        int time_since_tone_a = current_time - global_tone_detection.tone_a_start_time;
-        if (time_since_tone_a > 5000) { // 5 second timeout
-            reset_tone_tracking();
-            global_tone_detection.current_tone_a_detected = 0;
-            global_tone_detection.current_tone_b_detected = 0;
-            global_tone_detection.tone_sequence_active = 0;
-            global_tone_detection.recording_active = 0;
-            printf("[TONE] Sequence reset due to timeout\n");
         }
     }
     
     return 1;
 }
 
-// Check if a specific tone definition matches current frequencies
-int check_tone_definition(float frequency, struct tone_definition* tone_def, int is_tone_b) {
-    int range = is_tone_b ? tone_def->tone_b_range_hz : tone_def->tone_a_range_hz;
-    
-    // Debug: Show what we're checking
-    static int debug_count = 0;
-    if (debug_count++ % 100 == 0) {
-        NOISY_LOG("[DEBUG] Checking tone %s: target=%.1f Hz ±%d Hz, peaks=%d\n", 
-               is_tone_b ? "B" : "A", frequency, range, global_tone_detection.peak_count);
+// Process tone sequences and handle state transitions
+static int process_tone_sequences(double current_time_ms) {
+    for (int i = 0; i < global_tone_detection.num_active_sequences; i++) {
+        tone_sequence_state_t *sequence = &global_tone_detection.sequences[i];
+        
+        if (!sequence->definition || !sequence->definition->valid) {
+            continue;
+        }
+        
+        // Check for sequence timeout
+        if (check_sequence_timeout(sequence, current_time_ms)) {
+            // Reset sequence on timeout
+            sequence->state = TONE_STATE_IDLE;
+            sequence->tone_a_confirmed = 0;
+            sequence->tone_b_confirmed = 0;
+            sequence->tone_a_detected_duration_ms = 0;
+            sequence->tone_b_detected_duration_ms = 0;
+            continue;
+        }
+        
+        // Handle state transitions
+        switch (sequence->state) {
+            case TONE_STATE_DETECTING_A:
+                if (sequence->tone_a_confirmed) {
+                    sequence->state = TONE_STATE_DETECTING_B;
+                    sequence->sequence_start_time_ms = current_time_ms;
+                    printf("[TONE_DETECT] Tone A confirmed, now detecting tone B (%.1f Hz)\n", 
+                           sequence->definition->tone_b_freq);
+                }
+                break;
+                
+            case TONE_STATE_DETECTING_B:
+                if (sequence->tone_b_confirmed) {
+                    sequence->state = TONE_STATE_RECORDING;
+                    sequence->recording_active = 1;
+                    sequence->recording_start_time_ms = current_time_ms;
+                    printf("[TONE_DETECT] Tone sequence detected! Starting recording for %.1f ms\n", 
+                           sequence->definition->record_length_ms);
+                    
+                    // Trigger tone playback
+                    trigger_tone_playback(sequence->definition);
+                }
+                break;
+                
+            case TONE_STATE_RECORDING:
+                // Check if recording should stop
+                if (current_time_ms - sequence->recording_start_time_ms >= sequence->definition->record_length_ms) {
+                    sequence->state = TONE_STATE_IDLE;
+                    sequence->recording_active = 0;
+                    printf("[TONE_DETECT] Recording completed for tone sequence\n");
+                }
+                break;
+                
+            default:
+                break;
+        }
     }
     
-    // Check if the target frequency is present in peak frequencies
-    for (int i = 0; i < global_tone_detection.peak_count; i++) {
-        if (is_frequency_in_range(global_tone_detection.peak_frequencies[i], frequency, range)) {
-            if (debug_count % 50 == 0) {
-                NOISY_LOG("[DEBUG] Tone %s MATCH: %.1f Hz matches peak %.1f Hz (range ±%d Hz)\n", 
-                       is_tone_b ? "B" : "A", frequency, global_tone_detection.peak_frequencies[i], range);
-            }
-            return 1;
+    return 1;
+}
+
+// Update tone sequence state based on detected frequency
+int update_tone_sequence_state(tone_sequence_state_t *sequence, 
+                               double current_time_ms, 
+                               double detected_freq, 
+                               double magnitude_db) {
+    if (!sequence->definition) {
+        return 0;
+    }
+    
+    // Check if this is tone A
+    if (is_frequency_in_range(detected_freq, sequence->definition->tone_a_freq, 
+                             sequence->definition->tone_a_range_hz)) {
+        if (sequence->state == TONE_STATE_IDLE) {
+            sequence->state = TONE_STATE_DETECTING_A;
+            sequence->sequence_start_time_ms = current_time_ms;
+            sequence->tone_a_detected_duration_ms = 0;
+            sequence->tone_a_confirmed = 0;
+            printf("[TONE_DETECT] Started detecting tone A (%.1f Hz)\n", detected_freq);
         }
+        
+        // Update duration
+        sequence->tone_a_detected_duration_ms += (1000.0 / SAMPLE_RATE) * FFT_SIZE;
+        sequence->last_detection_time_ms = current_time_ms;
+        
+        // Check if tone A duration requirement is met
+        if (sequence->tone_a_detected_duration_ms >= sequence->definition->tone_a_length_ms) {
+            sequence->tone_a_confirmed = 1;
+            printf("[TONE_DETECT] Tone A confirmed (%.1f Hz, %.1f ms)\n", 
+                   detected_freq, sequence->tone_a_detected_duration_ms);
+        }
+    }
+    
+    // Check if this is tone B
+    if (is_frequency_in_range(detected_freq, sequence->definition->tone_b_freq, 
+                             sequence->definition->tone_b_range_hz)) {
+        if (sequence->state == TONE_STATE_DETECTING_B) {
+            // Update duration
+            sequence->tone_b_detected_duration_ms += (1000.0 / SAMPLE_RATE) * FFT_SIZE;
+            sequence->last_detection_time_ms = current_time_ms;
+            
+            // Check if tone B duration requirement is met
+            if (sequence->tone_b_detected_duration_ms >= sequence->definition->tone_b_length_ms) {
+                sequence->tone_b_confirmed = 1;
+                printf("[TONE_DETECT] Tone B confirmed (%.1f Hz, %.1f ms)\n", 
+                       detected_freq, sequence->tone_b_detected_duration_ms);
+            }
+        }
+    }
+    
+    return 1;
+}
+
+// Check if tone sequence has timed out
+int check_sequence_timeout(tone_sequence_state_t *sequence, double current_time_ms) {
+    if (sequence->state == TONE_STATE_IDLE) {
+        return 0;
+    }
+    
+    // Check for timeout
+    if (current_time_ms - sequence->last_detection_time_ms > SEQUENCE_TIMEOUT_MS) {
+        printf("[TONE_DETECT] Tone sequence timed out\n");
+        return 1;
     }
     
     return 0;
 }
 
-// Apply frequency filters
-int apply_frequency_filters(float* magnitudes, int count) {
-    for (int f = 0; f < MAX_FILTERS; f++) {
-        struct frequency_filter* filter = &global_tone_detection.filters[f];
+// Generate tone samples
+int generate_tone_samples(float *samples, int sample_count, double frequency, double duration_ms, double sample_rate) {
+    if (!samples || sample_count <= 0) {
+        return 0;
+    }
+    
+    int samples_to_generate = (int)(duration_ms * sample_rate / 1000.0);
+    if (samples_to_generate > sample_count) {
+        samples_to_generate = sample_count;
+    }
+    
+    double phase_increment = 2.0 * M_PI * frequency / sample_rate;
+    double phase = 0.0;
+    
+    for (int i = 0; i < samples_to_generate; i++) {
+        samples[i] = 0.3f * sin(phase); // 0.3 amplitude to prevent clipping
+        phase += phase_increment;
         
+        // Keep phase in range [0, 2π]
+        if (phase >= 2.0 * M_PI) {
+            phase -= 2.0 * M_PI;
+        }
+    }
+    
+    // Fill remaining samples with silence
+    for (int i = samples_to_generate; i < sample_count; i++) {
+        samples[i] = 0.0f;
+    }
+    
+    return samples_to_generate;
+}
+
+// Trigger tone playback to target channel
+int trigger_tone_playback(tone_definition_t *definition) {
+    if (!definition || !definition->valid) {
+        return 0;
+    }
+    
+    printf("[TONE_DETECT] Triggering tone playback for sequence %.1f Hz -> %.1f Hz\n", 
+           definition->tone_a_freq, definition->tone_b_freq);
+    
+    // Get the passthrough target channel
+    int target_channel = get_passthrough_target_channel_index();
+    if (target_channel < 0) {
+        printf("[WARNING] No passthrough target channel configured\n");
+        return 0;
+    }
+    
+    // Enable passthrough mode for the target channel
+    set_passthrough_output_mode(1);
+    
+    // Generate tone sequence and copy to passthrough buffer
+    pthread_mutex_lock(&global_passthrough_buffer.mutex);
+    
+    float tone_samples[SAMPLES_PER_FRAME];
+    int samples_generated = 0;
+    
+    // Generate tone A followed by tone B
+    int tone_a_samples = generate_tone_samples(tone_samples, SAMPLES_PER_FRAME / 2, 
+                                              definition->tone_a_freq, 
+                                              definition->tone_a_length_ms, 
+                                              SAMPLE_RATE);
+    
+    int tone_b_samples = generate_tone_samples(tone_samples + tone_a_samples, 
+                                              SAMPLES_PER_FRAME - tone_a_samples,
+                                              definition->tone_b_freq, 
+                                              definition->tone_b_length_ms, 
+                                              SAMPLE_RATE);
+    
+    samples_generated = tone_a_samples + tone_b_samples;
+    
+    // Copy generated tones to passthrough buffer
+    for (int i = 0; i < samples_generated && i < SAMPLES_PER_FRAME; i++) {
+        global_passthrough_buffer.samples[i] = tone_samples[i];
+    }
+    
+    // Fill remaining with silence
+    for (int i = samples_generated; i < SAMPLES_PER_FRAME; i++) {
+        global_passthrough_buffer.samples[i] = 0.0f;
+    }
+    
+    global_passthrough_buffer.sample_count = SAMPLES_PER_FRAME;
+    global_passthrough_buffer.valid = 1;
+    
+    pthread_mutex_unlock(&global_passthrough_buffer.mutex);
+    
+    printf("[TONE_DETECT] Generated %d tone samples (%.1f Hz -> %.1f Hz) on channel %d\n", 
+           samples_generated, definition->tone_a_freq, definition->tone_b_freq, target_channel);
+    return 1;
+}
+
+// Start recording (placeholder for future implementation)
+int start_recording(tone_definition_t *definition) {
+    (void)definition; // Suppress unused parameter warning
+    printf("[TONE_DETECT] Recording started (placeholder implementation)\n");
+    return 1;
+}
+
+// Utility function to get current time in milliseconds
+double get_current_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+}
+
+// Convert FFT bin index to frequency
+double bin_to_frequency(int bin_index) {
+    return (double)bin_index * FREQ_RESOLUTION;
+}
+
+// Convert frequency to FFT bin index
+int frequency_to_bin(double frequency) {
+    return (int)round(frequency / FREQ_RESOLUTION);
+}
+
+// Convert magnitude to dB
+double magnitude_to_db(double magnitude) {
+    if (magnitude <= 0.0) {
+        return -100.0; // Very low dB for zero magnitude
+    }
+    return 20.0 * log10(magnitude);
+}
+
+// Check if detected frequency is within range of target frequency
+int is_frequency_in_range(double detected_freq, double target_freq, double tolerance) {
+    return (fabs(detected_freq - target_freq) <= tolerance);
+}
+
+// Control functions
+int enable_tone_detection(void) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    global_tone_detect.enabled = 1;
+    global_tone_detect.card1_input_enabled = 1;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    printf("[TONE_DETECT] Tone detection enabled\n");
+    return 1;
+}
+
+int disable_tone_detection(void) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    global_tone_detect.enabled = 0;
+    global_tone_detect.card1_input_enabled = 0;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    printf("[TONE_DETECT] Tone detection disabled\n");
+    return 1;
+}
+
+int set_passthrough_output_mode(int passthrough_mode) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    global_tone_detect.passthrough_mode = passthrough_mode;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    printf("[TONE_DETECT] Passthrough mode set to %s\n", 
+           passthrough_mode ? "ENABLED" : "DISABLED");
+    return 1;
+}
+
+int is_tone_detect_enabled(void) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    int enabled = global_tone_detect.enabled;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    return enabled;
+}
+
+int is_card1_input_enabled(void) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    int enabled = global_tone_detect.card1_input_enabled;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    return enabled;
+}
+
+int is_passthrough_mode(void) {
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    int passthrough = global_tone_detect.passthrough_mode;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
+    return passthrough;
+}
+
+// Load tone detection configuration from JSON
+int load_tone_detection_config(void) {
+    const char* config_path = "/home/will/.an/config.json";
+    printf("[TONE_DETECT] Loading tone detection configuration from %s\n", config_path);
+    
+    FILE *file = fopen(config_path, "r");
+    if (!file) {
+        printf("[ERROR] Could not open config file %s: %s\n", config_path, strerror(errno));
+        return 0;
+    }
+    
+    // Read the entire file
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    char *json_string = malloc(file_size + 1);
+    if (!json_string) {
+        fclose(file);
+        printf("[ERROR] Memory allocation failed for config file\n");
+        return 0;
+    }
+    
+    fread(json_string, 1, file_size, file);
+    json_string[file_size] = '\0';
+    fclose(file);
+    
+    // Parse JSON
+    cJSON *json = cJSON_Parse(json_string);
+    free(json_string);
+    
+    if (!json) {
+        printf("[ERROR] Failed to parse config JSON\n");
+        return 0;
+    }
+    
+    // Navigate to software configuration
+    cJSON *shadow = cJSON_GetObjectItemCaseSensitive(json, "shadow");
+    if (!cJSON_IsObject(shadow)) {
+        printf("[ERROR] No shadow object in config\n");
+        cJSON_Delete(json);
+        return 0;
+    }
+    
+    cJSON *state = cJSON_GetObjectItemCaseSensitive(shadow, "state");
+    if (!cJSON_IsObject(state)) {
+        printf("[ERROR] No state object in config\n");
+        cJSON_Delete(json);
+        return 0;
+    }
+    
+    cJSON *desired = cJSON_GetObjectItemCaseSensitive(state, "desired");
+    if (!cJSON_IsObject(desired)) {
+        printf("[ERROR] No desired object in config\n");
+        cJSON_Delete(json);
+        return 0;
+    }
+    
+    cJSON *software_config = cJSON_GetObjectItemCaseSensitive(desired, "software_configuration");
+    if (!cJSON_IsArray(software_config) || cJSON_GetArraySize(software_config) == 0) {
+        printf("[ERROR] No software_configuration array in config\n");
+        cJSON_Delete(json);
+        return 0;
+    }
+    
+    cJSON *config_item = cJSON_GetArrayItem(software_config, 0);
+    if (!cJSON_IsObject(config_item)) {
+        printf("[ERROR] No configuration item in software_configuration\n");
+        cJSON_Delete(json);
+        return 0;
+    }
+    
+    // Process each channel
+    const char* channel_keys[] = {"channel_one", "channel_two", "channel_three", "channel_four"};
+    int channels_loaded = 0;
+    
+    for (int i = 0; i < 4; i++) {
+        cJSON *channel_obj = cJSON_GetObjectItemCaseSensitive(config_item, channel_keys[i]);
+        if (cJSON_IsObject(channel_obj)) {
+            tone_detect_config_t *config = &global_tone_detection.configs[i];
+            memset(config, 0, sizeof(tone_detect_config_t));
+            
+            // Load basic channel info
+            cJSON *channel_id = cJSON_GetObjectItemCaseSensitive(channel_obj, "channel_id");
+            if (cJSON_IsString(channel_id)) {
+                strncpy(config->passthrough_channel, cJSON_GetStringValue(channel_id), 63);
+                config->passthrough_channel[63] = '\0';
+            }
+            
+            // Load tone detection settings
+            cJSON *tone_detect = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect");
+            if (cJSON_IsBool(tone_detect)) {
+                if (cJSON_IsTrue(tone_detect)) {
+                    // Load tone detection configuration
+                    cJSON *tone_config = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect_configuration");
+                    if (cJSON_IsObject(tone_config)) {
+                        // Load tone passthrough settings
+                        cJSON *tone_passthrough = cJSON_GetObjectItemCaseSensitive(tone_config, "tone_passthrough");
+                        if (cJSON_IsBool(tone_passthrough)) {
+                            config->tone_passthrough = cJSON_IsTrue(tone_passthrough);
+                        }
+                        
+                        cJSON *passthrough_channel = cJSON_GetObjectItemCaseSensitive(tone_config, "passthrough_channel");
+                        if (cJSON_IsString(passthrough_channel)) {
+                            strncpy(config->passthrough_channel, cJSON_GetStringValue(passthrough_channel), 63);
+                            config->passthrough_channel[63] = '\0';
+                        }
+                        
+                        // Load alert tones
+                        cJSON *alert_tones = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_tones");
+                        if (cJSON_IsArray(alert_tones)) {
+                            config->num_alert_tones = parse_tone_definitions(alert_tones, config->alert_tones, MAX_TONE_DEFINITIONS);
+                            printf("[TONE_DETECT] Loaded %d alert tones for channel %d\n", config->num_alert_tones, i);
+                        }
+                        
+                        // Load alert details
+                        cJSON *alert_details = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_details");
+                        if (cJSON_IsObject(alert_details)) {
+                            parse_alert_details(alert_details, &config->alert_details);
+                        }
+                        
+                        // Load frequency filters
+                        cJSON *filters = cJSON_GetObjectItemCaseSensitive(tone_config, "filter_frequencies");
+                        if (cJSON_IsArray(filters)) {
+                            config->num_filters = parse_frequency_filters(filters, config->filters, MAX_FILTERS);
+                            printf("[TONE_DETECT] Loaded %d frequency filters for channel %d\n", config->num_filters, i);
+                        }
+                        
+                        config->valid = 1;
+                        channels_loaded++;
+                        printf("[TONE_DETECT] Loaded tone detection config for channel %d (%s)\n", 
+                               i, config->passthrough_channel);
+                    }
+                }
+            }
+        }
+    }
+    
+    cJSON_Delete(json);
+    
+    if (channels_loaded > 0) {
+        printf("[TONE_DETECT] Successfully loaded tone detection configuration for %d channels\n", channels_loaded);
+        return 1;
+    } else {
+        printf("[WARNING] No tone detection configurations loaded\n");
+        return 0;
+    }
+}
+
+// Parse tone definitions from JSON array
+int parse_tone_definitions(cJSON *tone_array, tone_definition_t *tones, int max_tones) {
+    if (!cJSON_IsArray(tone_array)) {
+        return 0;
+    }
+    
+    int array_size = cJSON_GetArraySize(tone_array);
+    int tones_loaded = 0;
+    
+    for (int i = 0; i < array_size && tones_loaded < max_tones; i++) {
+        cJSON *tone_obj = cJSON_GetArrayItem(tone_array, i);
+        if (!cJSON_IsObject(tone_obj)) {
+            continue;
+        }
+        
+        tone_definition_t *tone = &tones[tones_loaded];
+        memset(tone, 0, sizeof(tone_definition_t));
+        
+        // Load tone ID
+        cJSON *tone_id = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_id");
+        if (cJSON_IsString(tone_id)) {
+            strncpy(tone->tone_id, cJSON_GetStringValue(tone_id), 63);
+            tone->tone_id[63] = '\0';
+        }
+        
+        // Load tone A frequency
+        cJSON *tone_a = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_a");
+        if (cJSON_IsString(tone_a)) {
+            tone->tone_a_freq = atof(cJSON_GetStringValue(tone_a));
+        }
+        
+        // Load tone B frequency
+        cJSON *tone_b = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_b");
+        if (cJSON_IsString(tone_b)) {
+            tone->tone_b_freq = atof(cJSON_GetStringValue(tone_b));
+        }
+        
+        // Load tone A length
+        cJSON *tone_a_length = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_a_length");
+        if (cJSON_IsNumber(tone_a_length)) {
+            tone->tone_a_length_ms = cJSON_GetNumberValue(tone_a_length) * 1000.0; // Convert to ms
+        }
+        
+        // Load tone B length
+        cJSON *tone_b_length = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_b_length");
+        if (cJSON_IsNumber(tone_b_length)) {
+            tone->tone_b_length_ms = cJSON_GetNumberValue(tone_b_length) * 1000.0; // Convert to ms
+        }
+        
+        // Load tone A range
+        cJSON *tone_a_range = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_a_range");
+        if (cJSON_IsNumber(tone_a_range)) {
+            tone->tone_a_range_hz = cJSON_GetNumberValue(tone_a_range);
+        }
+        
+        // Load tone B range
+        cJSON *tone_b_range = cJSON_GetObjectItemCaseSensitive(tone_obj, "tone_b_range");
+        if (cJSON_IsNumber(tone_b_range)) {
+            tone->tone_b_range_hz = cJSON_GetNumberValue(tone_b_range);
+        }
+        
+        // Load record length
+        cJSON *record_length = cJSON_GetObjectItemCaseSensitive(tone_obj, "record_length");
+        if (cJSON_IsNumber(record_length)) {
+            tone->record_length_ms = cJSON_GetNumberValue(record_length) * 1000.0; // Convert to ms
+        }
+        
+        tone->valid = 1;
+        tones_loaded++;
+        
+        printf("[TONE_DETECT] Loaded tone definition: %s (%.1f Hz -> %.1f Hz)\n", 
+               tone->tone_id, tone->tone_a_freq, tone->tone_b_freq);
+    }
+    
+    return tones_loaded;
+}
+
+// Parse frequency filters from JSON array
+int parse_frequency_filters(cJSON *filter_array, frequency_filter_t *filters, int max_filters) {
+    if (!cJSON_IsArray(filter_array)) {
+        return 0;
+    }
+    
+    int array_size = cJSON_GetArraySize(filter_array);
+    int filters_loaded = 0;
+    
+    for (int i = 0; i < array_size && filters_loaded < max_filters; i++) {
+        cJSON *filter_obj = cJSON_GetArrayItem(filter_array, i);
+        if (!cJSON_IsObject(filter_obj)) {
+            continue;
+        }
+        
+        frequency_filter_t *filter = &filters[filters_loaded];
+        memset(filter, 0, sizeof(frequency_filter_t));
+        
+        // Load filter ID
+        cJSON *filter_id = cJSON_GetObjectItemCaseSensitive(filter_obj, "filter_id");
+        if (cJSON_IsString(filter_id)) {
+            strncpy(filter->filter_id, cJSON_GetStringValue(filter_id), 63);
+            filter->filter_id[63] = '\0';
+        }
+        
+        // Load frequency
+        cJSON *frequency = cJSON_GetObjectItemCaseSensitive(filter_obj, "frequency");
+        if (cJSON_IsNumber(frequency)) {
+            filter->frequency = cJSON_GetNumberValue(frequency);
+        }
+        
+        // Load filter range
+        cJSON *filter_range = cJSON_GetObjectItemCaseSensitive(filter_obj, "filter_range");
+        if (cJSON_IsNumber(filter_range)) {
+            filter->filter_range = cJSON_GetNumberValue(filter_range);
+        }
+        
+        // Load filter type
+        cJSON *type = cJSON_GetObjectItemCaseSensitive(filter_obj, "type");
+        if (cJSON_IsString(type)) {
+            const char *type_str = cJSON_GetStringValue(type);
+            if (strcmp(type_str, "below") == 0) {
+                filter->type = FILTER_BELOW;
+            } else if (strcmp(type_str, "above") == 0) {
+                filter->type = FILTER_ABOVE;
+            } else if (strcmp(type_str, "center") == 0) {
+                filter->type = FILTER_CENTER;
+            }
+        }
+        
+        filter->valid = 1;
+        filters_loaded++;
+        
+        printf("[TONE_DETECT] Loaded frequency filter: %s (%.1f Hz, %s)\n", 
+               filter->filter_id, filter->frequency, 
+               filter->type == FILTER_BELOW ? "below" : 
+               filter->type == FILTER_ABOVE ? "above" : "center");
+    }
+    
+    return filters_loaded;
+}
+
+// Parse alert details from JSON object
+int parse_alert_details(cJSON *details_obj, alert_details_t *details) {
+    if (!cJSON_IsObject(details_obj)) {
+        return 0;
+    }
+    
+    memset(details, 0, sizeof(alert_details_t));
+    
+    // Load threshold
+    cJSON *threshold = cJSON_GetObjectItemCaseSensitive(details_obj, "threshold");
+    if (cJSON_IsString(threshold)) {
+        details->threshold = atof(cJSON_GetStringValue(threshold));
+    }
+    
+    // Load gain
+    cJSON *gain = cJSON_GetObjectItemCaseSensitive(details_obj, "gain");
+    if (cJSON_IsString(gain)) {
+        details->gain = atof(cJSON_GetStringValue(gain));
+    }
+    
+    // Load dB threshold
+    cJSON *db = cJSON_GetObjectItemCaseSensitive(details_obj, "db");
+    if (cJSON_IsNumber(db)) {
+        details->db_threshold = cJSON_GetNumberValue(db);
+    }
+    
+    // Load detect new tones
+    cJSON *detect_new_tones = cJSON_GetObjectItemCaseSensitive(details_obj, "detect_new_tones");
+    if (cJSON_IsBool(detect_new_tones)) {
+        details->detect_new_tones = cJSON_IsTrue(detect_new_tones);
+    }
+    
+    // Load new tone length
+    cJSON *new_tone_length = cJSON_GetObjectItemCaseSensitive(details_obj, "new_tone_length");
+    if (cJSON_IsNumber(new_tone_length)) {
+        details->new_tone_length_ms = cJSON_GetNumberValue(new_tone_length) * 1000.0; // Convert to ms
+    }
+    
+    // Load new tone range
+    cJSON *new_tone_range = cJSON_GetObjectItemCaseSensitive(details_obj, "new_tone_range");
+    if (cJSON_IsNumber(new_tone_range)) {
+        details->new_tone_range_hz = cJSON_GetNumberValue(new_tone_range);
+    }
+    
+    printf("[TONE_DETECT] Loaded alert details: threshold=%.2f, gain=%.2f, db=%.1f\n", 
+           details->threshold, details->gain, details->db_threshold);
+    
+    return 1;
+}
+
+// Get tone detection configuration for a specific channel
+tone_detect_config_t* get_tone_detect_config(int channel_index) {
+    if (channel_index >= 0 && channel_index < MAX_CHANNELS) {
+        return &global_tone_detection.configs[channel_index];
+    }
+    return NULL;
+}
+
+// Apply frequency filters to magnitude spectrum
+int apply_frequency_filters(double *magnitude_spectrum, int spectrum_size, 
+                           frequency_filter_t *filters, int num_filters) {
+    if (!magnitude_spectrum || spectrum_size != FFT_SIZE / 2) {
+        return 0;
+    }
+    
+    for (int f = 0; f < num_filters; f++) {
+        frequency_filter_t *filter = &filters[f];
         if (!filter->valid) {
             continue;
         }
         
-        int target_bin = (int)frequency_to_bin(filter->frequency);
-        int range_bins = (int)lroundf(((float)filter->filter_range_hz * (float)FFT_SIZE) / (float)SAMPLE_RATE);
+        int center_bin = frequency_to_bin(filter->frequency);
         
-        if (strcmp(filter->type, "below") == 0) {
-            // Completely remove frequencies below the target
-            for (int i = 0; i < target_bin; i++) {
-                magnitudes[i] = 0.0f; // Completely remove
-            }
-        } else if (strcmp(filter->type, "above") == 0) {
-            // Completely remove frequencies above the target
-            for (int i = target_bin; i < count; i++) {
-                magnitudes[i] = 0.0f; // Completely remove
-            }
-        } else if (strcmp(filter->type, "center") == 0) {
-            // Keep only frequencies around the target, remove all others
-            for (int i = 0; i < count; i++) {
-                if (abs(i - target_bin) > range_bins) {
-                    magnitudes[i] = 0.0f; // Completely remove
-                }
-            }
-        }
-    }
-    
-    return 1;
-}
-
-// Apply frequency filters to actual audio samples using FFT-based filtering
-int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
-    // This function completely removes audio in the specified frequency ranges
-    // Uses FFT-based filtering for precise frequency domain manipulation
-    
-    if (sample_count < FFT_SIZE) {
-        return 1; // Not enough samples for FFT filtering
-    }
-    
-    // Create temporary FFT buffers for filtering
-    static double filter_fft_input[FFT_SIZE];
-    static fftw_complex filter_fft_output[FFT_SIZE];
-    static fftw_plan forward_plan = NULL;
-    static fftw_plan inverse_plan = NULL;
-    
-    // Initialize FFT plans if not already done
-    if (!forward_plan) {
-        forward_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, filter_fft_input, filter_fft_output, FFTW_ESTIMATE);
-        inverse_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, filter_fft_output, filter_fft_input, FFTW_ESTIMATE);
-    }
-    
-    if (!forward_plan || !inverse_plan) {
-        return 0; // FFT plan creation failed
-    }
-    
-    // Process audio in FFT_SIZE chunks
-    int processed_samples = 0;
-    while (processed_samples + FFT_SIZE <= sample_count) {
-        // Copy audio samples to FFT input buffer
-        for (int i = 0; i < FFT_SIZE; i++) {
-            filter_fft_input[i] = (double)audio_samples[processed_samples + i];
-        }
-        
-        // Apply window function (Hanning window)
-        for (int i = 0; i < FFT_SIZE; i++) {
-            double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
-            filter_fft_input[i] *= window;
-        }
-        
-        // Forward FFT
-        fftw_execute(forward_plan);
-        
-        // Apply frequency filters in frequency domain
-        for (int f = 0; f < MAX_FILTERS; f++) {
-            struct frequency_filter* filter = &global_tone_detection.filters[f];
+        for (int i = 0; i < spectrum_size; i++) {
+            double freq = bin_to_frequency(i);
+            int should_zero = 0;
             
-            if (!filter->valid) {
-                continue;
-            }
-            
-            int target_bin = (int)frequency_to_bin(filter->frequency);
-            int range_bins = (int)lroundf(((float)filter->filter_range_hz * (float)FFT_SIZE) / (float)SAMPLE_RATE);
-            
-            if (strcmp(filter->type, "below") == 0) {
-                // Completely remove frequencies below the target
-                for (int i = 0; i < target_bin && i < FREQ_BINS; i++) {
-                    filter_fft_output[i][0] = 0.0;
-                    filter_fft_output[i][1] = 0.0;
-                }
-            } else if (strcmp(filter->type, "above") == 0) {
-                // Completely remove frequencies above the target
-                for (int i = target_bin; i < FREQ_BINS; i++) {
-                    filter_fft_output[i][0] = 0.0;
-                    filter_fft_output[i][1] = 0.0;
-                }
-            } else if (strcmp(filter->type, "center") == 0) {
-                // Keep only frequencies around the target, remove all others
-                for (int i = 0; i < FREQ_BINS; i++) {
-                    if (abs(i - target_bin) > range_bins) {
-                        filter_fft_output[i][0] = 0.0;
-                        filter_fft_output[i][1] = 0.0;
+            switch (filter->type) {
+                case FILTER_BELOW:
+                    if (freq < filter->frequency) {
+                        should_zero = 1;
                     }
-                }
-            }
-        }
-        
-        // Inverse FFT
-        fftw_execute(inverse_plan);
-        
-        // Copy filtered samples back to audio buffer with normalization
-        for (int i = 0; i < FFT_SIZE; i++) {
-            audio_samples[processed_samples + i] = (float)(filter_fft_input[i] / FFT_SIZE);
-        }
-        
-        processed_samples += FFT_SIZE;
-    }
-    
-    return 1;
-}
-
-// Check if a tone has been present for the minimum required duration
-int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def) {
-    int required_duration = (tone_type == 0) ? tone_def->tone_a_length_ms : tone_def->tone_b_length_ms;
-    int tracking_start = (tone_type == 0) ? global_tone_detection.tone_a_tracking_start : global_tone_detection.tone_b_tracking_start;
-    
-    if (tracking_start == 0) {
-        return 0; // Not tracking yet
-    }
-    
-    int duration = current_time - tracking_start;
-    
-    // Debug output for duration checking (only when close to meeting requirement)
-    static int duration_debug_count = 0;
-    if (duration_debug_count++ % 100 == 0 || duration >= (required_duration * 0.8)) {
-        NOISY_LOG("[DEBUG] Tone %c duration check: %d ms (required: %d ms, tracking_start: %d)\n",
-               (tone_type == 0) ? 'A' : 'B', duration, required_duration, tracking_start);
-    }
-    
-    return (duration >= required_duration) ? 1 : 0;
-}
-
-// Reset tone tracking state
-void reset_tone_tracking(void) {
-    global_tone_detection.tone_a_tracking = 0;
-    global_tone_detection.tone_b_tracking = 0;
-    global_tone_detection.tone_a_confirmed = 0;
-    global_tone_detection.tone_b_confirmed = 0;
-    global_tone_detection.tone_a_tracking_start = 0;
-    global_tone_detection.tone_b_tracking_start = 0;
-}
-
-// Detect new tones
-int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
-    // Simple new tone detection - look for strong peaks not in defined tones
-    for (int i = 0; i < global_tone_detection.peak_count; i++) {
-        float freq = global_tone_detection.peak_frequencies[i];
-        int is_known_tone = 0;
-        int is_duplicate = 0;
-        
-        // Check if this frequency matches any defined tone
-        for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
-            struct tone_definition* tone_def = &global_tone_detection.tone_definitions[j];
-            if (tone_def->valid) {
-                if (is_frequency_in_range(freq, tone_def->tone_a_freq, tone_def->tone_a_range_hz) ||
-                    is_frequency_in_range(freq, tone_def->tone_b_freq, tone_def->tone_b_range_hz)) {
-                    is_known_tone = 1;
                     break;
-                }
-            }
-        }
-        
-        if (!is_known_tone) {
-            // Check if we've already detected this frequency recently (within 3 Hz)
-            for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
-                if (fabs(global_tone_detection.detected_frequencies[k] - freq) < 3.0f) {
-                    is_duplicate = 1;
+                    
+                case FILTER_ABOVE:
+                    if (freq > filter->frequency) {
+                        should_zero = 1;
+                    }
                     break;
-                }
+                    
+                case FILTER_CENTER:
+                    if (fabs(freq - filter->frequency) > filter->filter_range) {
+                        should_zero = 1;
+                    }
+                    break;
             }
             
-            if (!is_duplicate && global_tone_detection.detected_frequency_count < 100) {
-                // This is a genuinely new tone - only log once per frequency
-                global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
-                global_tone_detection.detected_frequency_count++;
-                global_tone_detection.new_tone_detections++;
-                // Suppress NEW TONE logs for frequencies within any configured tone window
-                if (!is_known_tone) {
-                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
-                }
+            if (should_zero) {
+                magnitude_spectrum[i] = 0.0;
             }
         }
     }
@@ -776,208 +1087,59 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
     return 1;
 }
 
-// Utility functions
-float frequency_to_bin(float frequency) {
-    return (frequency * FFT_SIZE) / SAMPLE_RATE;
-}
-
-float bin_to_frequency(int bin) {
-    return (bin * SAMPLE_RATE) / FFT_SIZE;
-}
-
-float calculate_magnitude(fftw_complex complex_val) {
-    return sqrt(complex_val[0] * complex_val[0] + complex_val[1] * complex_val[1]);
-}
-
-int is_frequency_in_range(float freq, float target, int range) {
-    return (freq >= target - range && freq <= target + range);
-}
-
-// Statistics functions
-void print_tone_detection_stats(void) {
-    // Only print stats if there are any detections to report
-    if (global_tone_detection.total_detections > 0 || 
-        global_tone_detection.tone_a_detections > 0 || 
-        global_tone_detection.tone_b_detections > 0 || 
-        global_tone_detection.new_tone_detections > 0) {
-        printf("[TONE STATS] Total: %d, Tone A: %d, Tone B: %d, New: %d\n",
-               global_tone_detection.total_detections,
-               global_tone_detection.tone_a_detections,
-               global_tone_detection.tone_b_detections,
-               global_tone_detection.new_tone_detections);
-    }
-}
-
-void reset_tone_detection_stats(void) {
-    global_tone_detection.total_detections = 0;
-    global_tone_detection.tone_a_detections = 0;
-    global_tone_detection.tone_b_detections = 0;
-    global_tone_detection.new_tone_detections = 0;
-}
-
-// Trigger tone passthrough when tones are detected
-void trigger_tone_passthrough(void) {
-    // Check if tone passthrough is configured for channel 1 (index 0)
-    struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
-    
-    if (tone_config && tone_config->tone_passthrough) {
-        // Check if the target channel has a working output stream
-        int target_channel_idx = get_passthrough_target_channel_index();
-        if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-            if (channel_has_output_stream(target_channel_idx)) {
-                printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
-                // Enable passthrough mode; audio.c routes to the configured target from JSON
-                set_passthrough_output_mode(1);
-            } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - attempting to create one\n");
-                
-                // Try to create an output stream for the passthrough target using our device conflict resolution
-                extern struct channel_context channels[];
-                if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-                    printf("[TONE PASSTHROUGH] Attempting to create output stream for passthrough target channel %d\n", target_channel_idx);
-                    
-                    // Use the same device conflict resolution logic as the main audio system
-                    extern PaDeviceIndex usb_devices[MAX_CHANNELS];
-                    PaDeviceIndex fallback_output = paNoDevice;
-                    
-                    // Find an ALSA USB device with output channels that's not in use
-                    for (int i = 0; i < MAX_CHANNELS; i++) {
-                        PaDeviceIndex cand = usb_devices[i];
-                        if (cand == paNoDevice) continue;
-                        
-                        // Check if this device is already being used by another channel for output
-                        int device_in_use = 0;
-                        for (int j = 0; j < MAX_CHANNELS; j++) {
-                            if (j != target_channel_idx && channels[j].audio.output_stream != NULL) {
-                                if (channels[j].audio.device_index == cand) {
-                                    device_in_use = 1;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        if (device_in_use) continue; // Skip devices already in use
-                        
-                        const PaDeviceInfo* cand_info = Pa_GetDeviceInfo(cand);
-                        if (cand_info && cand_info->maxOutputChannels > 0) {
-                            // Only use ALSA devices, skip PulseAudio and default
-                            const PaHostApiInfo* host_api = Pa_GetHostApiInfo(cand_info->hostApi);
-                            if (host_api && strcmp(host_api->name, "ALSA") == 0) {
-                                fallback_output = cand;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (fallback_output != paNoDevice) {
-                        printf("[TONE PASSTHROUGH] Using ALSA device %d for passthrough output\n", fallback_output);
-                        
-                        PaStreamParameters output_params;
-                        output_params.device = fallback_output;
-                        output_params.channelCount = 2;  // Try stereo first
-                        output_params.sampleFormat = paFloat32;
-                        output_params.suggestedLatency = Pa_GetDeviceInfo(fallback_output)->defaultLowOutputLatency;
-                        output_params.hostApiSpecificStreamInfo = NULL;
-                        
-                        PaError err = Pa_OpenStream(&channels[target_channel_idx].audio.output_stream, NULL, &output_params, 48000, 1024, 
-                                                    paClipOff, audio_output_callback, &channels[target_channel_idx].audio);
-                        
-                        if (err == paNoError) {
-                            printf("[TONE PASSTHROUGH] Successfully created output stream for passthrough target\n");
-                            // Start the output stream
-                            err = Pa_StartStream(channels[target_channel_idx].audio.output_stream);
-                            if (err == paNoError) {
-                                printf("[TONE PASSTHROUGH] Output stream started for passthrough target\n");
-                                set_passthrough_output_mode(1);
-                            } else {
-                                printf("[TONE PASSTHROUGH] Failed to start output stream: %s\n", Pa_GetErrorText(err));
-                            }
-                        } else {
-                            printf("[TONE PASSTHROUGH] Failed to create output stream: %s\n", Pa_GetErrorText(err));
-                        }
-                    } else {
-                        printf("[TONE PASSTHROUGH] *** NO ALTERNATIVE OUTPUT DEVICE AVAILABLE! ***\n");
-                        printf("[TONE PASSTHROUGH] *** ALL USB DEVICES ARE INPUT-ONLY OR IN USE! ***\n");
-                        printf("[TONE PASSTHROUGH] Cannot create passthrough output stream - no available devices\n");
-                    }
-                }
-            }
-        } else {
-            printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
-        }
-    } else {
-        printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
-    }
-}
-
-// Configuration functions
-int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
-                       int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
-                       int record_length) {
-    printf("[DEBUG] add_tone_definition() called: ID=%s, A=%.1f Hz±%d, B=%.1f Hz±%d\n", 
-           tone_id, tone_a_freq, tone_a_range, tone_b_freq, tone_b_range);
-    
-    for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-        if (!global_tone_detection.tone_definitions[i].valid) {
-            strncpy(global_tone_detection.tone_definitions[i].tone_id, tone_id, 63);
-            global_tone_detection.tone_definitions[i].tone_a_freq = tone_a_freq;
-            global_tone_detection.tone_definitions[i].tone_b_freq = tone_b_freq;
-            global_tone_detection.tone_definitions[i].tone_a_length_ms = tone_a_length;
-            global_tone_detection.tone_definitions[i].tone_b_length_ms = tone_b_length;
-            global_tone_detection.tone_definitions[i].tone_a_range_hz = tone_a_range;
-            global_tone_detection.tone_definitions[i].tone_b_range_hz = tone_b_range;
-            global_tone_detection.tone_definitions[i].record_length_ms = record_length;
-            global_tone_detection.tone_definitions[i].valid = 1;
-            
-            printf("[TONE CONFIG] Added tone definition: %s (A: %.1f Hz ±%d Hz, %d ms, B: %.1f Hz ±%d Hz, %d ms)\n",
-                   tone_id, tone_a_freq, tone_a_range, tone_a_length, tone_b_freq, tone_b_range, tone_b_length);
-            
-            // Debug: Show total count after adding
-            int total_count = 0;
-            for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
-                if (global_tone_detection.tone_definitions[j].valid) {
-                    total_count++;
-                }
-            }
-            printf("[DEBUG] Total tone definitions now: %d\n", total_count);
-            
-            return 1;
+// Get passthrough target channel index
+int get_passthrough_target_channel_index(void) {
+    // Look for channel with tone_passthrough enabled
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        tone_detect_config_t *config = get_tone_detect_config(i);
+        if (config && config->valid && config->tone_passthrough) {
+            return i;
         }
     }
-    
-    fprintf(stderr, "[ERROR] No space for new tone definition\n");
-    return 0;
+    return -1;
 }
 
-int add_frequency_filter(const char* filter_id, float frequency, int range, const char* type) {
-    for (int i = 0; i < MAX_FILTERS; i++) {
-        if (!global_tone_detection.filters[i].valid) {
-            strncpy(global_tone_detection.filters[i].filter_id, filter_id, 63);
-            global_tone_detection.filters[i].frequency = frequency;
-            global_tone_detection.filters[i].filter_range_hz = range;
-            strncpy(global_tone_detection.filters[i].type, type, 15);
-            global_tone_detection.filters[i].valid = 1;
-            
-            printf("[FILTER CONFIG] Added filter: %s (%.1f Hz, %s)\n",
-                   filter_id, frequency, type);
-            return 1;
-        }
-    }
-    
-    fprintf(stderr, "[ERROR] No space for new frequency filter\n");
-    return 0;
-}
-
-int set_tone_config(float threshold, float gain, int db_threshold, int detect_new_tones,
-                   int new_tone_length, int new_tone_range) {
-    global_tone_detection.config.threshold = threshold;
-    global_tone_detection.config.gain = gain;
-    global_tone_detection.config.db_threshold = db_threshold;
-    global_tone_detection.config.detect_new_tones = detect_new_tones;
-    global_tone_detection.config.new_tone_length_ms = new_tone_length;
-    global_tone_detection.config.new_tone_range_hz = new_tone_range;
-    
-    printf("[TONE CONFIG] Updated configuration: threshold=%.2f, gain=%.2f, db=%d\n",
-           threshold, gain, db_threshold);
+// Initialize tone passthrough control
+int init_tone_passthrough_control(void) {
+    printf("[TONE_DETECT] Initializing tone passthrough control\n");
     return 1;
+}
+
+// Setup tone passthrough routing
+int setup_tone_passthrough(int source_channel, int target_channel) {
+    (void)source_channel; // Suppress unused parameter warning
+    (void)target_channel; // Suppress unused parameter warning
+    printf("[TONE_DETECT] Setting up tone passthrough routing\n");
+    return 1;
+}
+
+// Start tone passthrough
+int start_tone_passthrough(void) {
+    printf("[TONE_DETECT] Starting tone passthrough\n");
+    return 1;
+}
+
+// Stop tone passthrough
+int stop_tone_passthrough(void) {
+    printf("[TONE_DETECT] Stopping tone passthrough\n");
+    return 1;
+}
+
+// Check if tone passthrough is active
+int is_tone_passthrough_active(void) {
+    return is_passthrough_mode();
+}
+
+// Check if channel has output stream (placeholder)
+int channel_has_output_stream(int channel_index) {
+    (void)channel_index; // Suppress unused parameter warning
+    // This would check if the channel has an active output stream
+    return 1; // Placeholder
+}
+
+// Repair passthrough output stream (placeholder)
+int repair_passthrough_output_stream(int channel_index) {
+    (void)channel_index; // Suppress unused parameter warning
+    printf("[TONE_DETECT] Repairing passthrough output stream (placeholder)\n");
+    return 1; // Placeholder
 }

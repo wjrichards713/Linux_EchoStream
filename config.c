@@ -86,7 +86,7 @@ int load_channel_config(char channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN]) {
     return channels_loaded;
 }
 
-// Load complete configuration including tone detection settings
+// Load complete configuration
 int load_complete_config(void) {
     const char* config_path = "/home/will/.an/config.json";
     printf("[CONFIG] Attempting to load configuration from: %s\n", config_path);
@@ -174,171 +174,23 @@ int load_complete_config(void) {
                 channel_config->input_high_two = json_object_get_boolean(input_high_two_obj);
             }
             
-            // Load tone detection settings
-            struct json_object *tone_detect_obj;
-            if (json_object_object_get_ex(channel_obj, "tone_detect", &tone_detect_obj)) {
-                channel_config->tone_detect = json_object_get_boolean(tone_detect_obj);
-                
-                if (channel_config->tone_detect) {
-                    // Load tone detection configuration
-                    struct json_object *tone_detect_config_obj;
-                    if (json_object_object_get_ex(channel_obj, "tone_detect_configuration", &tone_detect_config_obj)) {
-                        struct tone_detect_config *tone_config = &channel_config->tone_config;
-                        
-                        // Load tone passthrough settings
-                        struct json_object *tone_passthrough_obj, *passthrough_channel_obj;
-                        if (json_object_object_get_ex(tone_detect_config_obj, "tone_passthrough", &tone_passthrough_obj)) {
-                            tone_config->tone_passthrough = json_object_get_boolean(tone_passthrough_obj);
-                        }
-                        if (json_object_object_get_ex(tone_detect_config_obj, "passthrough_channel", &passthrough_channel_obj)) {
-                            const char* passthrough_channel = json_object_get_string(passthrough_channel_obj);
-                            if (passthrough_channel && strlen(passthrough_channel) < 32) {
-                                strncpy(tone_config->passthrough_channel, passthrough_channel, 31);
-                                tone_config->passthrough_channel[31] = '\0';
-                            }
-                        }
-                        
-                        // Load alert details
-                        struct json_object *alert_details_obj;
-                        if (json_object_object_get_ex(tone_detect_config_obj, "alert_details", &alert_details_obj)) {
-                            struct json_object *threshold_obj, *gain_obj, *db_obj, *detect_new_tones_obj, *new_tone_length_obj, *new_tone_range_obj;
-                            
-                            if (json_object_object_get_ex(alert_details_obj, "threshold", &threshold_obj)) {
-                                tone_config->threshold = atof(json_object_get_string(threshold_obj));
-                            }
-                            if (json_object_object_get_ex(alert_details_obj, "gain", &gain_obj)) {
-                                tone_config->gain = atof(json_object_get_string(gain_obj));
-                            }
-                            if (json_object_object_get_ex(alert_details_obj, "db", &db_obj)) {
-                                tone_config->db_threshold = json_object_get_int(db_obj);
-                            }
-                            if (json_object_object_get_ex(alert_details_obj, "detect_new_tones", &detect_new_tones_obj)) {
-                                tone_config->detect_new_tones = json_object_get_boolean(detect_new_tones_obj);
-                            }
-                            if (json_object_object_get_ex(alert_details_obj, "new_tone_length", &new_tone_length_obj)) {
-                                tone_config->new_tone_length_ms = json_object_get_int(new_tone_length_obj);
-                            }
-                            if (json_object_object_get_ex(alert_details_obj, "new_tone_range", &new_tone_range_obj)) {
-                                tone_config->new_tone_range_hz = json_object_get_int(new_tone_range_obj);
-                            }
-                        }
-                        
-                        // Load alert tones
-                        struct json_object *alert_tones_obj;
-                        if (json_object_object_get_ex(tone_detect_config_obj, "alert_tones", &alert_tones_obj)) {
-                            int num_tones = json_object_array_length(alert_tones_obj);
-                            for (int j = 0; j < num_tones && j < MAX_TONE_DEFINITIONS; j++) {
-                                struct json_object *tone_obj = json_object_array_get_idx(alert_tones_obj, j);
-                                struct json_object *tone_id_obj, *tone_a_obj, *tone_b_obj, *tone_a_length_obj, *tone_b_length_obj, *tone_a_range_obj, *tone_b_range_obj, *record_length_obj;
-                                
-                                char tone_id[64] = {0};
-                                float tone_a = 0.0f, tone_b = 0.0f;
-                                int tone_a_length = 0, tone_b_length = 0, tone_a_range = 0, tone_b_range = 0, record_length = 0;
-                                
-                                if (json_object_object_get_ex(tone_obj, "tone_id", &tone_id_obj)) {
-                                    const char* id = json_object_get_string(tone_id_obj);
-                                    if (id) strncpy(tone_id, id, 63);
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_a", &tone_a_obj)) {
-                                    tone_a = atof(json_object_get_string(tone_a_obj));
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_b", &tone_b_obj)) {
-                                    tone_b = atof(json_object_get_string(tone_b_obj));
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_a_length", &tone_a_length_obj)) {
-                                    // Convert seconds to milliseconds
-                                    tone_a_length = (int)(json_object_get_double(tone_a_length_obj) * 1000);
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_b_length", &tone_b_length_obj)) {
-                                    // Convert seconds to milliseconds  
-                                    tone_b_length = (int)(json_object_get_double(tone_b_length_obj) * 1000);
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_a_range", &tone_a_range_obj)) {
-                                    tone_a_range = json_object_get_int(tone_a_range_obj);
-                                }
-                                if (json_object_object_get_ex(tone_obj, "tone_b_range", &tone_b_range_obj)) {
-                                    tone_b_range = json_object_get_int(tone_b_range_obj);
-                                }
-                                if (json_object_object_get_ex(tone_obj, "record_length", &record_length_obj)) {
-                                    // Convert seconds to milliseconds
-                                    record_length = json_object_get_int(record_length_obj) * 1000;
-                                }
-                                
-                                // Add tone definition
-                                printf("[CONFIG] Loading tone from JSON: ID=%s, A=%.1f Hz±%d (dur:%dms), B=%.1f Hz±%d (dur:%dms), rec:%dms\n",
-                                       tone_id, tone_a, tone_a_range, tone_a_length, tone_b, tone_b_range, tone_b_length, record_length);
-                                add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length);
-                            }
-                        }
-                        
-                        // Load filter frequencies
-                        struct json_object *filter_frequencies_obj;
-                        if (json_object_object_get_ex(tone_detect_config_obj, "filter_frequencies", &filter_frequencies_obj)) {
-                            int num_filters = json_object_array_length(filter_frequencies_obj);
-                            for (int j = 0; j < num_filters && j < MAX_FILTERS; j++) {
-                                struct json_object *filter_obj = json_object_array_get_idx(filter_frequencies_obj, j);
-                                struct json_object *filter_id_obj, *frequency_obj, *filter_range_obj, *type_obj;
-                                
-                                char filter_id[64] = {0};
-                                float frequency = 0.0f;
-                                int filter_range = 0;
-                                char type[16] = {0};
-                                
-                                if (json_object_object_get_ex(filter_obj, "filter_id", &filter_id_obj)) {
-                                    const char* id = json_object_get_string(filter_id_obj);
-                                    if (id) strncpy(filter_id, id, 63);
-                                }
-                                if (json_object_object_get_ex(filter_obj, "frequency", &frequency_obj)) {
-                                    frequency = json_object_get_double(frequency_obj);
-                                }
-                                if (json_object_object_get_ex(filter_obj, "filter_range", &filter_range_obj)) {
-                                    filter_range = json_object_get_int(filter_range_obj);
-                                }
-                                if (json_object_object_get_ex(filter_obj, "type", &type_obj)) {
-                                    const char* t = json_object_get_string(type_obj);
-                                    if (t) strncpy(type, t, 15);
-                                }
-                                
-                                // Add frequency filter
-                                printf("[CONFIG] Loading filter from JSON: ID=%s, freq=%.1f Hz, range=%d, type=%s\n",
-                                       filter_id, frequency, filter_range, type);
-                                add_frequency_filter(filter_id, frequency, filter_range, type);
-                            }
-                        }
-                        
-                        tone_config->valid = 1;
-                        
-                        // Apply tone configuration to the detection system
-                        set_tone_config(tone_config->threshold, tone_config->gain, 
-                                      tone_config->db_threshold, tone_config->detect_new_tones,
-                                      tone_config->new_tone_length_ms, tone_config->new_tone_range_hz);
-                        
-                        printf("Loaded tone detection config for channel %d: passthrough=%d, channel=%s\n", 
-                               i+1, tone_config->tone_passthrough, tone_config->passthrough_channel);
-                        printf("Applied tone config: threshold=%.2f, gain=%.2f, db=%d, detect_new=%d\n",
-                               tone_config->threshold, tone_config->gain, tone_config->db_threshold, 
-                               tone_config->detect_new_tones);
-                    }
-                }
-            }
             
             channel_config->valid = 1;
             channels_loaded++;
-            printf("Loaded channel %d config: ID=%s, tone_detect=%d\n", 
-                   i+1, channel_config->channel_id, channel_config->tone_detect);
+            printf("Loaded channel %d config: ID=%s\n", 
+                   i+1, channel_config->channel_id);
         } else {
             // Provide default configuration for missing channels
             struct channel_config *channel_config = &global_app_config.channels[i];
             snprintf(channel_config->channel_id, 64, "channel_%d", i + 1);
-            channel_config->tone_detect = 0;  // Default: no tone detection
             channel_config->input_low_one = 0;
             channel_config->input_low_two = 0;
             channel_config->input_high_one = 0;
             channel_config->input_high_two = 0;
             channel_config->valid = 1;
             channels_loaded++;
-            printf("Loaded channel %d config: ID=%s, tone_detect=%d (default - missing from config)\n", 
-                   i+1, channel_config->channel_id, channel_config->tone_detect);
+            printf("Loaded channel %d config: ID=%s (default - missing from config)\n", 
+                   i+1, channel_config->channel_id);
         }
     }
     
@@ -362,16 +214,3 @@ struct channel_config* get_channel_config(int channel_index) {
     return NULL;
 }
 
-// Get tone detection configuration by channel index
-struct tone_detect_config* get_tone_detect_config(int channel_index) {
-    struct channel_config* channel_config = get_channel_config(channel_index);
-    if (channel_config && channel_config->tone_detect && channel_config->tone_config.valid) {
-        return &channel_config->tone_config;
-    }
-    
-    // No hardcoded defaults - configuration must come from config.json
-    printf("[CONFIG] No valid tone detection configuration found for channel %d\n", channel_index);
-    printf("[CONFIG] Please ensure config.json contains proper tone_detect_configuration for this channel\n");
-    
-    return NULL;
-}

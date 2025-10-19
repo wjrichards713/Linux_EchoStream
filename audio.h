@@ -2,7 +2,6 @@
 #define AUDIO_H
 
 #include "echostream.h"
-#include "tone_detect.h"
 
 // Audio structures
 struct audio_frame {
@@ -51,60 +50,15 @@ struct shared_audio_buffer {
     pthread_cond_t data_ready;
 };
 
-// Dedicated passthrough buffer for synchronized output
-struct passthrough_audio_buffer {
-    float samples[SAMPLES_PER_FRAME];
-    int sample_count;
-    int valid;
-    pthread_mutex_t mutex;
-};
-
-// Audio passthrough context
-struct audio_passthrough {
-    struct shared_audio_buffer *shared_buffer;
-    PaStream *output_stream;
-    PaDeviceIndex output_device;
-    int active;
-    pthread_t thread;
-};
-
-// Tone detection control
-struct tone_detect_control {
-    int enabled;                    // 1 = enabled, 0 = disabled
-    int card1_input_enabled;       // 1 = Card 1 input active, 0 = disabled
-    int passthrough_mode;          // 1 = passthrough, 0 = echostream
-    pthread_mutex_t mutex;
-};
-
-// Tone passthrough control
-struct tone_passthrough_control {
-    int active;                     // 1 = passthrough active, 0 = disabled
-    int source_channel;             // Source channel index (0-3)
-    int target_channel;             // Target channel index (0-3)
-    PaStream *passthrough_stream;   // Direct audio passthrough stream
-    pthread_mutex_t mutex;
-};
 
 // Global audio state
 extern struct channel_context channels[MAX_CHANNELS];
 extern PaDeviceIndex usb_devices[MAX_CHANNELS];
 extern int device_assigned;
 
-// Global shared audio buffer and passthrough
+// Global shared audio buffer
 extern struct shared_audio_buffer global_shared_buffer;
-extern struct audio_passthrough global_passthrough;
 
-// Global tone detection control
-extern struct tone_detect_control global_tone_detect;
-
-// Global tone passthrough control
-extern struct tone_passthrough_control global_tone_passthrough;
-
-// Global flag to force passthrough target re-evaluation
-extern int force_passthrough_reevaluation;
-
-// Function to create delayed output stream for configured passthrough target
-int create_delayed_passthrough_output_stream(void);
 
 // Debug function to list all audio devices
 void list_all_audio_devices(void);
@@ -117,18 +71,20 @@ void auto_assign_usb_devices(void);
 PaDeviceIndex get_device_for_channel(const char* channel);
 int setup_channel(struct channel_context *ctx, const char *channel_id);
 
-// Audio passthrough functions
+// Audio buffer functions
 int init_shared_audio_buffer(void);
-int init_audio_passthrough(void);
-void* audio_passthrough_thread(void* arg);
-int start_audio_passthrough(void);
-void stop_audio_passthrough(void);
 
 // Audio device initialization and cleanup
 int initialize_audio_devices(void);
 int cleanup_audio_devices(void);
 
-// Tone detection control functions
+
+// Audio callback functions
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo* time_info,
+                         PaStreamCallbackFlags flags, void *user_data);
+
+// Tone detection integration functions
 int init_tone_detect_control(void);
 int enable_tone_detection(void);
 int disable_tone_detection(void);
@@ -136,25 +92,9 @@ int set_passthrough_output_mode(int passthrough_mode);
 int is_tone_detect_enabled(void);
 int is_card1_input_enabled(void);
 int is_passthrough_mode(void);
-
-// Tone passthrough control functions
-int init_tone_passthrough_control(void);
-int setup_tone_passthrough(int source_channel, int target_channel);
-int start_tone_passthrough(void);
-int stop_tone_passthrough(void);
 int get_passthrough_target_channel_index(void);
 int channel_has_output_stream(int channel_index);
-int is_tone_passthrough_active(void);
-int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
-                              const PaStreamCallbackTimeInfo* time_info,
-                              PaStreamCallbackFlags flags, void *user_data);
+int repair_passthrough_output_stream(int channel_index);
 
-// Audio callback functions
-int audio_output_callback(const void *input, void *output, unsigned long frames,
-                         const PaStreamCallbackTimeInfo* time_info,
-                         PaStreamCallbackFlags flags, void *user_data);
-
-// Tone detection integration
-void feed_audio_to_tone_detection(const float* samples, int sample_count);
 
 #endif // AUDIO_H

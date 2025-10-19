@@ -5,6 +5,7 @@
 #include "udp.h"
 #include "config.h"
 #include "crypto.h"
+#include "tone_detect.h"
 
 // Global state
 volatile int global_interrupted = 0;
@@ -48,11 +49,6 @@ static void handle_interrupt(int sig) {
         global_udp_socket = -1;
     }
     
-    // Stop audio passthrough
-    stop_audio_passthrough();
-    
-    // Stop tone detection
-    stop_tone_detection();
 }
 
 int main(int argc, char *argv[]) {
@@ -75,7 +71,7 @@ int main(int argc, char *argv[]) {
         global_channel_count = 4;
     }
     
-    // Load complete configuration including tone detection settings
+    // Load complete configuration
     printf("[MAIN] Loading complete configuration from /home/will/.an/config.json...\n");
     if (load_complete_config()) {
         printf("[MAIN] Complete configuration loaded successfully\n");
@@ -83,6 +79,21 @@ int main(int argc, char *argv[]) {
         printf("[MAIN] ERROR: Failed to load JSON config - NO TONE DETECTION AVAILABLE\n");
         printf("[MAIN] Please check /home/will/.an/config.json file exists and is readable\n");
         return 1;  // Exit if config cannot be loaded
+    }
+    
+    // Initialize tone detection system
+    printf("[MAIN] Initializing tone detection system...\n");
+    if (init_tone_detection()) {
+        printf("[MAIN] Tone detection system initialized successfully\n");
+        
+        // Start tone detection thread
+        if (start_tone_detection()) {
+            printf("[MAIN] Tone detection thread started successfully\n");
+        } else {
+            printf("[MAIN] WARNING: Failed to start tone detection thread\n");
+        }
+    } else {
+        printf("[MAIN] WARNING: Failed to initialize tone detection system\n");
     }
     
     if (!initialize_portaudio()) {
@@ -96,25 +107,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Initialize tone detection control
-    if (!init_tone_detect_control()) {
-        fprintf(stderr, "Failed to initialize tone detection control\n");
-        return 1;
-    }
-    
-    // Initialize tone passthrough control
-    if (!init_tone_passthrough_control()) {
-        fprintf(stderr, "Failed to initialize tone passthrough control\n");
-        return 1;
-    }
-    
-    // Initialize tone detection system
-    if (!init_tone_detection()) {
-        fprintf(stderr, "Failed to initialize tone detection system\n");
-        return 1;
-    }
-    
-    // Initialize shared audio buffer and passthrough
+    // Initialize shared audio buffer
     if (!init_shared_audio_buffer()) {
         fprintf(stderr, "Failed to initialize shared audio buffer\n");
         return 1;
@@ -145,12 +138,6 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Initialize audio passthrough (but don't start yet - need devices assigned first)
-    if (!init_audio_passthrough()) {
-        fprintf(stderr, "Failed to initialize audio passthrough\n");
-        curl_global_cleanup();
-        return 1;
-    }
     
     // Connect global WebSocket for all channels
     if (!connect_global_websocket()) {
@@ -159,19 +146,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Start audio passthrough after WebSocket is connected and channels are set up
-    if (!start_audio_passthrough()) {
-        fprintf(stderr, "Failed to start audio passthrough\n");
-        curl_global_cleanup();
-        return 1;
-    }
-    
-    // Start tone detection system
-    if (!start_tone_detection()) {
-        fprintf(stderr, "Failed to start tone detection\n");
-        curl_global_cleanup();
-        return 1;
-    }
     
     pthread_t ws_thread;
     if (pthread_create(&ws_thread, NULL, global_websocket_thread, NULL)) {
@@ -185,58 +159,26 @@ int main(int argc, char *argv[]) {
     
     printf("All %d channels running with single WebSocket. Press Ctrl+C to stop.\n", global_channel_count);
     
-    // Create delayed output stream for configured passthrough target channel
-    printf("\n=== CREATING DELAYED OUTPUT STREAM FOR PASSTHROUGH TARGET ===\n");
-    printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - RETRYING UNTIL SUCCESS ***\n");
-    if (create_delayed_passthrough_output_stream()) {
-        printf("[SUCCESS] Passthrough target output stream created successfully!\n");
-    } else {
-        printf("[CRITICAL] *** THIS SHOULD NEVER HAPPEN - PASSTHROUGH TARGET MUST WORK ***\n");
     }
     
     printf("\n=== SYSTEM BEHAVIOR ===\n");
     printf("Channel Configuration:\n");
     for (int i = 0; i < global_channel_count; i++) {
         printf("  Channel %d (%s):\n", i + 1, global_channel_ids[i]);
-        printf("    - Output: ALWAYS plays EchoStream audio (unaffected by tone detection)\n");
+        printf("    - Output: ALWAYS plays EchoStream audio\n");
         
-        // Check if this channel has tone detection enabled
-        int has_tone_detect = 0;
-        for (int j = 0; j < MAX_CHANNELS; j++) {
-            struct channel_config* channel_config = get_channel_config(j);
-            if (channel_config && channel_config->valid && 
-                strcmp(channel_config->channel_id, global_channel_ids[i]) == 0) {
-                has_tone_detect = channel_config->tone_detect;
-                break;
-            }
-        }
-        
-        if (has_tone_detect) {
-            printf("    - Input: %s (for tone detection and passthrough)\n", 
-                   is_card1_input_enabled() ? "ENABLED" : "DISABLED");
-        } else {
-            printf("    - Input: ENABLED (no tone detection)\n");
+        printf("    - Input: ENABLED (standard EchoStream)\n");
         }
     }
-    // Reflect configured passthrough channel from JSON
-    struct tone_detect_config* __tdcfg = get_tone_detect_config(0);
-    if (__tdcfg && __tdcfg->tone_passthrough) {
-        const char* pt = __tdcfg->passthrough_channel;
-        printf("Passthrough output target: %s\n", pt);
-    }
-    printf("\nTone detection control available:\n");
-    printf("  - Call enable_tone_detection() to enable tone detect mode\n");
-    printf("  - Call disable_tone_detection() to disable tone detect mode\n");
-    printf("  - Current mode: %s\n", is_tone_detect_enabled() ? "ENABLED" : "DISABLED");
     // Remove stale example tones output; tones are from JSON only
     
     // Wait for the WebSocket thread to complete
     pthread_join(ws_thread, NULL);
     
     // Cleanup
-    stop_tone_detection();
-    stop_tone_passthrough();
-    stop_audio_passthrough();
+    printf("[MAIN] Cleaning up tone detection system...\n");
+    cleanup_tone_detection();
+    
     cleanup_audio_devices();  // Restore audio devices to normal state
     curl_global_cleanup();
     Pa_Terminate();
