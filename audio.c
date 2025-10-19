@@ -1929,3 +1929,10 @@ int tone_passthrough_callback(const void *input, void *output, unsigned long fra
 
     return paContinue;
 }
+
+// Repair passthrough output stream (placeholder implementation)
+int repair_passthrough_output_stream(int channel_index) {
+    (void)channel_index; // Suppress unused parameter warning
+    printf("[AUDIO] Repairing passthrough output stream for channel %d (placeholder)\n", channel_index);
+    return 1; // Placeholder - always return success
+}
