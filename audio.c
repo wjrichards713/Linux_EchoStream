@@ -168,7 +168,7 @@ int channel_has_output_stream(int channel_index)
 }
 
 // Global flag to force passthrough target re-evaluation
-int force_passthrough_reevaluation = 0;
+// force_passthrough_reevaluation is defined in tone_detect.c
 
 // Periodic repair attempt for passthrough target channels
 static void periodic_passthrough_repair(void)

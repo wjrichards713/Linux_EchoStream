@@ -12,6 +12,8 @@
 tone_detect_control_t global_tone_detect = {0};
 passthrough_audio_buffer_t global_passthrough_buffer = {0};
 tone_detection_state_t global_tone_detection = {0};
+audio_passthrough_t global_passthrough = {0};
+tone_passthrough_control_t global_tone_passthrough = {0};
 int force_passthrough_reevaluation = 0;
 
 // Forward declarations
@@ -646,54 +648,7 @@ int is_frequency_in_range(double detected_freq, double target_freq, double toler
     return (fabs(detected_freq - target_freq) <= tolerance);
 }
 
-// Control functions
-int enable_tone_detection(void) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    global_tone_detect.enabled = 1;
-    global_tone_detect.card1_input_enabled = 1;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[TONE_DETECT] Tone detection enabled\n");
-    return 1;
-}
-
-int disable_tone_detection(void) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    global_tone_detect.enabled = 0;
-    global_tone_detect.card1_input_enabled = 0;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[TONE_DETECT] Tone detection disabled\n");
-    return 1;
-}
-
-int set_passthrough_output_mode(int passthrough_mode) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    global_tone_detect.passthrough_mode = passthrough_mode;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    printf("[TONE_DETECT] Passthrough mode set to %s\n", 
-           passthrough_mode ? "ENABLED" : "DISABLED");
-    return 1;
-}
-
-int is_tone_detect_enabled(void) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    int enabled = global_tone_detect.enabled;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    return enabled;
-}
-
-int is_card1_input_enabled(void) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    int enabled = global_tone_detect.card1_input_enabled;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    return enabled;
-}
-
-int is_passthrough_mode(void) {
-    pthread_mutex_lock(&global_tone_detect.mutex);
-    int passthrough = global_tone_detect.passthrough_mode;
-    pthread_mutex_unlock(&global_tone_detect.mutex);
-    return passthrough;
-}
+// Control functions are defined in audio.c to avoid multiple definitions
 
 // Load tone detection configuration from JSON
 int load_tone_detection_config(void) {
@@ -1102,47 +1057,4 @@ int get_passthrough_target_channel_index(void) {
     return -1;
 }
 
-// Initialize tone passthrough control
-int init_tone_passthrough_control(void) {
-    printf("[TONE_DETECT] Initializing tone passthrough control\n");
-    return 1;
-}
-
-// Setup tone passthrough routing
-int setup_tone_passthrough(int source_channel, int target_channel) {
-    (void)source_channel; // Suppress unused parameter warning
-    (void)target_channel; // Suppress unused parameter warning
-    printf("[TONE_DETECT] Setting up tone passthrough routing\n");
-    return 1;
-}
-
-// Start tone passthrough
-int start_tone_passthrough(void) {
-    printf("[TONE_DETECT] Starting tone passthrough\n");
-    return 1;
-}
-
-// Stop tone passthrough
-int stop_tone_passthrough(void) {
-    printf("[TONE_DETECT] Stopping tone passthrough\n");
-    return 1;
-}
-
-// Check if tone passthrough is active
-int is_tone_passthrough_active(void) {
-    return is_passthrough_mode();
-}
-
-// Check if channel has output stream (placeholder)
-int channel_has_output_stream(int channel_index) {
-    (void)channel_index; // Suppress unused parameter warning
-    // This would check if the channel has an active output stream
-    return 1; // Placeholder
-}
-
-// Repair passthrough output stream (placeholder)
-int repair_passthrough_output_stream(int channel_index) {
-    (void)channel_index; // Suppress unused parameter warning
-    printf("[TONE_DETECT] Repairing passthrough output stream (placeholder)\n");
-    return 1; // Placeholder
-}
+// Passthrough functions are defined in audio.c to avoid multiple definitions
