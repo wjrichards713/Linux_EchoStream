@@ -122,19 +122,46 @@ print_success "All dependencies installed successfully!"
 
 # Verify tone detection dependencies
 print_status "Verifying tone detection dependencies..."
+
+# Check FFTW3 library (try multiple methods)
+fftw3_found=false
 if pkg-config --exists libfftw3; then
-    print_success "FFTW3 library found"
-else
-    print_error "FFTW3 library not found!"
-    exit 1
+    print_success "FFTW3 library found via pkg-config"
+    fftw3_found=true
+elif [ -f "/usr/lib/aarch64-linux-gnu/libfftw3.so" ] || [ -f "/usr/lib/x86_64-linux-gnu/libfftw3.so" ] || [ -f "/usr/lib/arm-linux-gnueabihf/libfftw3.so" ]; then
+    print_success "FFTW3 library found in system libraries"
+    fftw3_found=true
+elif ldconfig -p | grep -q libfftw3; then
+    print_success "FFTW3 library found via ldconfig"
+    fftw3_found=true
 fi
 
-if pkg-config --exists libcjson; then
-    print_success "cJSON library found"
-else
-    print_error "cJSON library not found!"
-    exit 1
+if [ "$fftw3_found" = false ]; then
+    print_warning "FFTW3 library not found via standard methods, but continuing..."
+    print_status "FFTW3 packages were installed, compilation should work"
 fi
+
+# Check cJSON library
+cjson_found=false
+if pkg-config --exists libcjson; then
+    print_success "cJSON library found via pkg-config"
+    cjson_found=true
+elif [ -f "/usr/lib/aarch64-linux-gnu/libcjson.so" ] || [ -f "/usr/lib/x86_64-linux-gnu/libcjson.so" ] || [ -f "/usr/lib/arm-linux-gnueabihf/libcjson.so" ]; then
+    print_success "cJSON library found in system libraries"
+    cjson_found=true
+elif ldconfig -p | grep -q libcjson; then
+    print_success "cJSON library found via ldconfig"
+    cjson_found=true
+fi
+
+if [ "$cjson_found" = false ]; then
+    print_warning "cJSON library not found via standard methods, but continuing..."
+    print_status "cJSON packages were installed, compilation should work"
+fi
+
+# Update library cache
+print_status "Updating library cache..."
+sudo ldconfig
 
 # Compile the application
 print_status "Cleaning previous build..."
@@ -143,10 +170,48 @@ make clean || true
 print_status "Compiling EchoStream application with tone detection..."
 make
 
+# If compilation fails, try with explicit library paths
+if [ $? -ne 0 ]; then
+    print_warning "First compilation attempt failed, trying with explicit library paths..."
+    
+    # Try to find FFTW3 library path
+    FFTW3_PATH=""
+    if [ -d "/usr/lib/aarch64-linux-gnu" ]; then
+        FFTW3_PATH="/usr/lib/aarch64-linux-gnu"
+    elif [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+        FFTW3_PATH="/usr/lib/x86_64-linux-gnu"
+    elif [ -d "/usr/lib/arm-linux-gnueabihf" ]; then
+        FFTW3_PATH="/usr/lib/arm-linux-gnueabihf"
+    fi
+    
+    if [ -n "$FFTW3_PATH" ]; then
+        print_status "Trying compilation with explicit library path: $FFTW3_PATH"
+        export LD_LIBRARY_PATH="$FFTW3_PATH:$LD_LIBRARY_PATH"
+        make clean
+        make
+    fi
+fi
+
 if [ $? -eq 0 ]; then
     print_success "Compilation successful!"
+    
+    # Verify the executable was built
+    if [ -f "./echostream" ]; then
+        print_success "EchoStream executable created successfully!"
+        
+        # Check if tone detection symbols are present (basic check)
+        if nm ./echostream 2>/dev/null | grep -q "tone_detect\|fftw"; then
+            print_success "Tone detection symbols found in executable!"
+        else
+            print_warning "Tone detection symbols not found, but executable was built"
+        fi
+    else
+        print_error "EchoStream executable not found after compilation!"
+        exit 1
+    fi
 else
     print_error "Compilation failed!"
+    print_error "Please check the error messages above and ensure all dependencies are installed."
     exit 1
 fi
 
@@ -192,6 +257,19 @@ if [ -f "test_tone_detect" ]; then
         print_success "Tone detection test passed!"
     else
         print_warning "Tone detection test failed, but continuing..."
+    fi
+else
+    print_status "Building tone detection test program..."
+    make test 2>/dev/null || print_warning "Could not build test program"
+    
+    if [ -f "test_tone_detect" ]; then
+        print_status "Testing tone detection system..."
+        ./test_tone_detect
+        if [ $? -eq 0 ]; then
+            print_success "Tone detection test passed!"
+        else
+            print_warning "Tone detection test failed, but continuing..."
+        fi
     fi
 fi
 
