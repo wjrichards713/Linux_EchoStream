@@ -66,13 +66,13 @@ sudo apt install -y libcjson-dev libcjson1
 
 # Verify cJSON installation
 print_status "Verifying cJSON installation..."
-if dpkg -l | grep -q libcjson-dev; then
+if dpkg -l | grep -q "^ii.*libcjson-dev"; then
     print_success "libcjson-dev package is installed"
 else
     print_error "libcjson-dev package is NOT installed"
 fi
 
-if dpkg -l | grep -q libcjson1; then
+if dpkg -l | grep -q "^ii.*libcjson1"; then
     print_success "libcjson1 package is installed"
 else
     print_error "libcjson1 package is NOT installed"
@@ -177,18 +177,32 @@ elif ldconfig -p | grep -q libcjson; then
 fi
 
 # Check for cJSON headers
+cjson_header_path=""
 if [ -f "/usr/include/cjson/cjson.h" ]; then
     print_success "cJSON header found at /usr/include/cjson/cjson.h"
     cjson_header_found=true
+    cjson_header_path="/usr/include/cjson/cjson.h"
 elif [ -f "/usr/include/cjson.h" ]; then
     print_success "cJSON header found at /usr/include/cjson.h"
     cjson_header_found=true
+    cjson_header_path="/usr/include/cjson.h"
 elif [ -f "/usr/local/include/cjson/cjson.h" ]; then
     print_success "cJSON header found at /usr/local/include/cjson/cjson.h"
     cjson_header_found=true
+    cjson_header_path="/usr/local/include/cjson/cjson.h"
 elif [ -f "/usr/local/include/cjson.h" ]; then
     print_success "cJSON header found at /usr/local/include/cjson.h"
     cjson_header_found=true
+    cjson_header_path="/usr/local/include/cjson.h"
+else
+    # Try to find cJSON headers using find command
+    print_status "Searching for cJSON headers in system..."
+    found_headers=$(find /usr/include /usr/local/include -name "cjson.h" -type f 2>/dev/null | head -1)
+    if [ -n "$found_headers" ]; then
+        print_success "cJSON header found at: $found_headers"
+        cjson_header_found=true
+        cjson_header_path="$found_headers"
+    fi
 fi
 
 if [ "$cjson_found" = false ]; then
@@ -196,11 +210,33 @@ if [ "$cjson_found" = false ]; then
 fi
 
 if [ "$cjson_header_found" = false ]; then
-    print_error "cJSON header not found! Trying to reinstall..."
-    print_status "Reinstalling cJSON development package..."
+    print_error "cJSON header not found! Debugging..."
+    
+    # Show what packages are actually installed
+    print_status "Checking installed cJSON packages:"
+    dpkg -l | grep cjson
+    
+    # Show what files are in the cjson-dev package
+    print_status "Files in libcjson-dev package:"
+    dpkg -L libcjson-dev 2>/dev/null | grep -E "\.(h|hpp)$" | head -10
+    
+    # Try to find any cjson files
+    print_status "Searching for any cjson files:"
+    find /usr -name "*cjson*" -type f 2>/dev/null | head -10
+    
+    print_status "Trying to reinstall cJSON development package..."
     sudo apt install --reinstall -y libcjson-dev
-    print_status "Please run the script again after cJSON reinstallation"
-    exit 1
+    
+    # Check again after reinstall
+    print_status "Checking again after reinstall..."
+    if find /usr/include /usr/local/include -name "cjson.h" -type f 2>/dev/null | head -1; then
+        print_success "cJSON header found after reinstall!"
+        cjson_header_found=true
+    else
+        print_error "cJSON header still not found after reinstall"
+        print_status "Please run the script again after cJSON reinstallation"
+        exit 1
+    fi
 fi
 
 # Update library cache
