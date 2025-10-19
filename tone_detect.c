@@ -11,7 +11,7 @@
 // Global tone detection state
 tone_detect_control_t global_tone_detect = {0};
 passthrough_audio_buffer_t global_passthrough_buffer = {0};
-tone_state_t global_tone_detection = {0};
+tone_detection_state_t global_tone_detection = {0};
 int force_passthrough_reevaluation = 0;
 
 // Forward declarations
@@ -194,6 +194,7 @@ void* tone_detection_thread(void *arg) {
     float audio_buffer[FFT_SIZE];
     int buffer_pos = 0;
     struct timespec last_analysis = {0};
+    (void)last_analysis; // Suppress unused variable warning
     
     while (global_tone_detection.thread_running && !global_interrupted) {
         // Check if tone detection is enabled
@@ -454,6 +455,7 @@ int update_tone_sequence_state(tone_sequence_state_t *sequence,
                                double current_time_ms, 
                                double detected_freq, 
                                double magnitude_db) {
+    (void)magnitude_db; // Suppress unused parameter warning
     if (!sequence->definition) {
         return 0;
     }
@@ -1053,6 +1055,7 @@ int apply_frequency_filters(double *magnitude_spectrum, int spectrum_size,
         }
         
         int center_bin = frequency_to_bin(filter->frequency);
+        (void)center_bin; // Suppress unused variable warning
         
         for (int i = 0; i < spectrum_size; i++) {
             double freq = bin_to_frequency(i);
