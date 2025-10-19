@@ -157,13 +157,20 @@ typedef struct {
 typedef struct {
     int active;
     int target_channel;
+    int source_channel;
+    PaStream *output_stream;
+    PaStream *passthrough_stream;
+    struct shared_audio_buffer *shared_buffer;
     pthread_t thread;
     pthread_mutex_t mutex;
 } audio_passthrough_t;
 
 typedef struct {
     int enabled;
+    int active;
     int target_channel;
+    int source_channel;
+    PaStream *passthrough_stream;
     pthread_mutex_t mutex;
 } tone_passthrough_control_t;
 

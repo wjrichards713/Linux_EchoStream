@@ -207,7 +207,7 @@ static void periodic_passthrough_repair(void)
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char *channel_id)
 {
-    struct tone_detect_config *tone_cfg = get_tone_detect_config(0);
+    tone_detect_config_t *tone_cfg = get_tone_detect_config(0);
     if (!tone_cfg || !tone_cfg->tone_passthrough)
     {
         static int debug_count = 0;
@@ -257,7 +257,7 @@ int init_tone_detect_control(void)
 {
     memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
     // Initialize based on shadow config
-    struct tone_detect_config *tone_cfg = get_tone_detect_config(0);
+    tone_detect_config_t *tone_cfg = get_tone_detect_config(0);
     global_tone_detect.enabled = 1;             // Start enabled by default
     global_tone_detect.card1_input_enabled = 1; // Channel 1 input enabled by default
     global_tone_detect.passthrough_mode = (tone_cfg && tone_cfg->tone_passthrough) ? 1 : 0;
@@ -916,7 +916,7 @@ int init_audio_passthrough(void)
 }
 
 // Start audio passthrough
-int start_audio_passthrough(void)
+int start_audio_passthrough(int target_channel)
 {
     // Callback-based passthrough: nothing to start, output callback will handle routing
     printf("[INFO] Audio passthrough enabled (callback-based)\n");
@@ -924,11 +924,11 @@ int start_audio_passthrough(void)
 }
 
 // Stop audio passthrough
-void stop_audio_passthrough(void)
+int stop_audio_passthrough(void)
 {
     if (!global_passthrough.active)
     {
-        return;
+        return 0;
     }
 
     global_passthrough.active = 0;
@@ -950,6 +950,7 @@ void stop_audio_passthrough(void)
     }
 
     printf("[INFO] Audio passthrough stopped\n");
+    return 1;
 }
 
 int setup_audio_for_channel(struct audio_stream *audio_stream)
