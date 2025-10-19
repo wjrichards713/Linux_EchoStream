@@ -255,7 +255,7 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
 // Initialize tone detection control
 int init_tone_detect_control(void)
 {
-    memset(&global_tone_detect, 0, sizeof(struct tone_detect_control));
+    memset(&global_tone_detect, 0, sizeof(tone_detect_control_t));
     // Initialize based on shadow config
     tone_detect_config_t *tone_cfg = get_tone_detect_config(0);
     global_tone_detect.enabled = 1;             // Start enabled by default
@@ -877,7 +877,7 @@ int init_shared_audio_buffer(void)
     printf("[INFO] Shared audio buffer initialized\n");
 
     // Initialize dedicated passthrough buffer
-    memset(&global_passthrough_buffer, 0, sizeof(struct passthrough_audio_buffer));
+    memset(&global_passthrough_buffer, 0, sizeof(passthrough_audio_buffer_t));
     pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
     printf("[INFO] Passthrough audio buffer initialized\n");
 
@@ -887,7 +887,7 @@ int init_shared_audio_buffer(void)
 // Initialize audio passthrough
 int init_audio_passthrough(void)
 {
-    memset(&global_passthrough, 0, sizeof(struct audio_passthrough));
+    memset(&global_passthrough, 0, sizeof(audio_passthrough_t));
     global_passthrough.shared_buffer = &global_shared_buffer;
 
     // Debug: Print all available devices
@@ -918,6 +918,9 @@ int init_audio_passthrough(void)
 // Start audio passthrough
 int start_audio_passthrough(int target_channel)
 {
+    // Suppress unused parameter warning
+    (void)target_channel;
+    
     // Callback-based passthrough: nothing to start, output callback will handle routing
     printf("[INFO] Audio passthrough enabled (callback-based)\n");
     return 1;
@@ -1761,7 +1764,7 @@ int setup_channel(struct channel_context *ctx, const char *channel_id)
 // Initialize tone passthrough control
 int init_tone_passthrough_control(void)
 {
-    memset(&global_tone_passthrough, 0, sizeof(struct tone_passthrough_control));
+    memset(&global_tone_passthrough, 0, sizeof(tone_passthrough_control_t));
     global_tone_passthrough.active = 0;
     global_tone_passthrough.source_channel = -1;
     global_tone_passthrough.target_channel = -1;
