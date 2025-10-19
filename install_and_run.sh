@@ -64,6 +64,25 @@ sudo apt install -y libjson-c-dev libjson-c5
 print_status "Installing cJSON library..."
 sudo apt install -y libcjson-dev libcjson1
 
+# Verify cJSON installation
+print_status "Verifying cJSON installation..."
+if dpkg -l | grep -q libcjson-dev; then
+    print_success "libcjson-dev package is installed"
+else
+    print_error "libcjson-dev package is NOT installed"
+fi
+
+if dpkg -l | grep -q libcjson1; then
+    print_success "libcjson1 package is installed"
+else
+    print_error "libcjson1 package is NOT installed"
+fi
+
+# Show cJSON header locations
+print_status "Searching for cJSON headers..."
+find /usr/include -name "*cjson*" -type f 2>/dev/null | head -5
+find /usr/local/include -name "*cjson*" -type f 2>/dev/null | head -5
+
 # Install FFTW3 library for tone detection
 print_status "Installing FFTW3 library for FFT operations..."
 sudo apt install -y libfftw3-dev libfftw3-double3 libfftw3-single3
@@ -141,8 +160,11 @@ if [ "$fftw3_found" = false ]; then
     print_status "FFTW3 packages were installed, compilation should work"
 fi
 
-# Check cJSON library
+# Check cJSON library and headers
 cjson_found=false
+cjson_header_found=false
+
+# Check for cJSON library
 if pkg-config --exists libcjson; then
     print_success "cJSON library found via pkg-config"
     cjson_found=true
@@ -154,9 +176,31 @@ elif ldconfig -p | grep -q libcjson; then
     cjson_found=true
 fi
 
+# Check for cJSON headers
+if [ -f "/usr/include/cjson/cjson.h" ]; then
+    print_success "cJSON header found at /usr/include/cjson/cjson.h"
+    cjson_header_found=true
+elif [ -f "/usr/include/cjson.h" ]; then
+    print_success "cJSON header found at /usr/include/cjson.h"
+    cjson_header_found=true
+elif [ -f "/usr/local/include/cjson/cjson.h" ]; then
+    print_success "cJSON header found at /usr/local/include/cjson/cjson.h"
+    cjson_header_found=true
+elif [ -f "/usr/local/include/cjson.h" ]; then
+    print_success "cJSON header found at /usr/local/include/cjson.h"
+    cjson_header_found=true
+fi
+
 if [ "$cjson_found" = false ]; then
-    print_warning "cJSON library not found via standard methods, but continuing..."
-    print_status "cJSON packages were installed, compilation should work"
+    print_warning "cJSON library not found via standard methods"
+fi
+
+if [ "$cjson_header_found" = false ]; then
+    print_error "cJSON header not found! Trying to reinstall..."
+    print_status "Reinstalling cJSON development package..."
+    sudo apt install --reinstall -y libcjson-dev
+    print_status "Please run the script again after cJSON reinstallation"
+    exit 1
 fi
 
 # Update library cache

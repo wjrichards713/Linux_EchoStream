@@ -5,8 +5,23 @@
 #include <complex.h>
 #include <fftw3.h>
 
-// Include cJSON library
-#include <cjson.h>
+// Include cJSON library - try different paths
+#ifdef __has_include
+    #if __has_include(<cjson/cjson.h>)
+        #include <cjson/cjson.h>
+    #elif __has_include(<cjson.h>)
+        #include <cjson.h>
+    #else
+        #error "cJSON library not found. Please install libcjson-dev"
+    #endif
+#else
+    // Try the most common paths
+    #ifdef __linux__
+        #include <cjson/cjson.h>
+    #else
+        #include <cjson.h>
+    #endif
+#endif
 
 // Tone detection configuration constants
 #define MAX_TONE_DEFINITIONS 10
