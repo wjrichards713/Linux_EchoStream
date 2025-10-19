@@ -224,6 +224,11 @@ void* tone_detection_thread(void *arg) {
             
             // Process when we have enough samples
             if (buffer_pos >= FFT_SIZE) {
+                static int frame_count = 0;
+                frame_count++;
+                if (frame_count % 100 == 0) {  // Print every 100 frames (about every 2 seconds)
+                    printf("[TONE_DETECT] Processing audio frame #%d (FFT analysis)\n", frame_count);
+                }
                 process_audio_frame(audio_buffer, FFT_SIZE);
                 buffer_pos = 0; // Reset buffer
             }
@@ -316,6 +321,21 @@ int detect_peaks(double *magnitude_spectrum, int spectrum_size) {
     
     // Sort peaks by magnitude (descending)
     qsort(global_tone_detection.detected_peaks, num_peaks, sizeof(peak_t), compare_peaks);
+    
+    // Debug: Show detected peaks
+    if (num_peaks > 0) {
+        static int peak_debug_count = 0;
+        peak_debug_count++;
+        if (peak_debug_count % 50 == 0) {  // Print every 50 detections
+            printf("[TONE_DETECT] Detected %d peaks: ", num_peaks);
+            for (int i = 0; i < num_peaks && i < 3; i++) {
+                double freq = bin_to_frequency(global_tone_detection.detected_peaks[i].bin);
+                double db = magnitude_to_db(global_tone_detection.detected_peaks[i].magnitude);
+                printf("%.1fHz(%.1fdB) ", freq, db);
+            }
+            printf("\n");
+        }
+    }
     
     return num_peaks;
 }
@@ -650,6 +670,61 @@ int is_frequency_in_range(double detected_freq, double target_freq, double toler
 
 // Control functions are defined in audio.c to avoid multiple definitions
 
+// Create default tone detection configuration
+static int create_default_tone_config(void) {
+    printf("[TONE_DETECT] Creating default tone detection configuration\n");
+    
+    // Initialize default configuration for all channels
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        tone_detect_config_t *config = &global_tone_detection.configs[i];
+        memset(config, 0, sizeof(tone_detect_config_t));
+        
+        // Set default values
+        config->valid = 1;
+        config->tone_passthrough = 0;  // Disabled by default
+        strcpy(config->passthrough_channel, "channel_one");
+        
+        // Add some default tone definitions
+        config->num_tones = 2;
+        
+        // Tone A: 1000 Hz
+        config->tones[0].valid = 1;
+        config->tones[0].frequency = 1000.0;
+        config->tones[0].tolerance = 50.0;
+        config->tones[0].min_duration = 100.0;
+        strcpy(config->tones[0].name, "Tone_A");
+        
+        // Tone B: 2000 Hz  
+        config->tones[1].valid = 1;
+        config->tones[1].frequency = 2000.0;
+        config->tones[1].tolerance = 50.0;
+        config->tones[1].min_duration = 100.0;
+        strcpy(config->tones[1].name, "Tone_B");
+        
+        // Set up sequence: A -> B
+        config->sequences[0].valid = 1;
+        config->sequences[0].tone_a = 0;  // Index of Tone A
+        config->sequences[0].tone_b = 1;  // Index of Tone B
+        config->sequences[0].timeout_ms = 2000.0;
+        strcpy(config->sequences[0].name, "Sequence_AB");
+        
+        // Alert details
+        config->alert_details.valid = 1;
+        config->alert_details.play_audio = 1;
+        config->alert_details.audio_file_path = "/home/will/alert.wav";
+        config->alert_details.volume = 0.8;
+        strcpy(config->alert_details.message, "Tone sequence detected!");
+        
+        config->num_sequences = 1;
+        config->num_filters = 0;
+    }
+    
+    printf("[TONE_DETECT] Default configuration created successfully\n");
+    printf("[TONE_DETECT] Configured %d tones per channel (1000Hz, 2000Hz)\n", 2);
+    printf("[TONE_DETECT] Sequence: Tone A (1000Hz) -> Tone B (2000Hz)\n");
+    return 1;
+}
+
 // Load tone detection configuration from JSON
 int load_tone_detection_config(void) {
     const char* config_path = "/home/will/.an/config.json";
@@ -682,23 +757,23 @@ int load_tone_detection_config(void) {
     free(json_string);
     
     if (!json) {
-        printf("[ERROR] Failed to parse config JSON\n");
-        return 0;
+        printf("[WARNING] Failed to parse config JSON, using default tone detection configuration\n");
+        return create_default_tone_config();
     }
     
-    // Navigate to software configuration
+    // Try to navigate to software configuration, but provide fallback
     cJSON *shadow = cJSON_GetObjectItemCaseSensitive(json, "shadow");
-    if (!cJSON_IsObject(shadow)) {
-        printf("[ERROR] No shadow object in config\n");
-        cJSON_Delete(json);
-        return 0;
+    cJSON *state = NULL;
+    
+    if (cJSON_IsObject(shadow)) {
+        state = cJSON_GetObjectItemCaseSensitive(shadow, "state");
     }
     
-    cJSON *state = cJSON_GetObjectItemCaseSensitive(shadow, "state");
     if (!cJSON_IsObject(state)) {
-        printf("[ERROR] No state object in config\n");
+        printf("[WARNING] No shadow.state object in config, using default tone detection configuration\n");
+        // Create a default configuration
         cJSON_Delete(json);
-        return 0;
+        return create_default_tone_config();
     }
     
     cJSON *desired = cJSON_GetObjectItemCaseSensitive(state, "desired");
