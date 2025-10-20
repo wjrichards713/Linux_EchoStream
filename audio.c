@@ -218,7 +218,10 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
         {
             if (strcmp(channel_id, global_channel_ids[target_channel_index]) == 0)
             {
-                printf("[DEBUG] Channel %s identified as passthrough target (global passthrough mode active)\n", channel_id);
+                static int debug_count = 0;
+                if (debug_count++ % 1000 == 0) {  // Only print every 1000th time
+                    printf("[DEBUG] Channel %s identified as passthrough target (global passthrough mode active)\n", channel_id);
+                }
                 return 1;
             }
         }
@@ -677,8 +680,11 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             passthrough_mode = is_configured_target ? global_passthrough : 0;
             
             if (is_configured_target) {
-                printf("[DEBUG] Channel %s is configured target: is_configured=%d, global_passthrough=%d, final_passthrough=%d\n",
-                       audio_stream->channel_id, is_configured_target, global_passthrough, passthrough_mode);
+                static int target_debug_count = 0;
+                if (target_debug_count++ % 1000 == 0) {  // Only print every 1000th time
+                    printf("[DEBUG] Channel %s is configured target: is_configured=%d, global_passthrough=%d, final_passthrough=%d\n",
+                           audio_stream->channel_id, is_configured_target, global_passthrough, passthrough_mode);
+                }
             }
         }
     }
@@ -689,8 +695,11 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0)
         {
-            printf("[AUDIO] Playing passthrough audio: valid=%d, sample_count=%lu, frames=%lu\n", 
-                   global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, frames);
+            static int play_count = 0;
+            if (play_count++ % 10 == 0) { // Only print every 10th time to reduce spam
+                printf("[AUDIO] Playing passthrough audio: valid=%d, sample_count=%lu, frames=%lu\n", 
+                       global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, frames);
+            }
             // Apply minimal gain since audio is already processed by tone detection
             const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // No additional gain since tone detection already applied gain
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;

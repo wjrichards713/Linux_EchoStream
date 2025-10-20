@@ -780,6 +780,7 @@ int trigger_tone_playback(tone_definition_t *definition) {
     pthread_mutex_unlock(&global_tone_detect.mutex);
     
     // Generate tone sequence and copy to passthrough buffer
+    printf("[TONE_DETECT] About to generate tones and copy to passthrough buffer\n");
     pthread_mutex_lock(&global_passthrough_buffer.mutex);
     
     float tone_samples[SAMPLES_PER_FRAME];
@@ -819,6 +820,7 @@ int trigger_tone_playback(tone_definition_t *definition) {
     
     printf("[TONE_DETECT] Buffer updated: valid=%d, sample_count=%lu, to_copy=%d\n", 
            global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, to_copy);
+    printf("[TONE_DETECT] Generated %d tone samples, wrote %d samples to buffer\n", samples_generated, to_copy);
     
     pthread_mutex_unlock(&global_passthrough_buffer.mutex);
     
@@ -1323,7 +1325,10 @@ int get_passthrough_target_channel_index(void) {
     // Look for the channel that matches the configured passthrough_channel
     for (int i = 0; i < MAX_CHANNELS; i++) {
         if (strcmp(config->passthrough_channel, global_channel_ids[i]) == 0) {
-            printf("[TONE_DETECT] Found passthrough target: %s at index %d\n", config->passthrough_channel, i);
+            static int found_count = 0;
+            if (found_count++ % 1000 == 0) {  // Only print every 1000th time
+                printf("[TONE_DETECT] Found passthrough target: %s at index %d\n", config->passthrough_channel, i);
+            }
             return i;
         }
     }
