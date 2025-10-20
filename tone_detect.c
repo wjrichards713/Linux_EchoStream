@@ -132,15 +132,22 @@ int start_tone_detection(void) {
     pthread_attr_init(&thread_attr);
     pthread_attr_setstacksize(&thread_attr, TONE_DETECTION_THREAD_STACK_SIZE);
     
-    if (pthread_create(&global_tone_detection.detection_thread, &thread_attr, 
-                       tone_detection_thread, NULL) != 0) {
-        printf("[ERROR] Failed to create tone detection thread\n");
+    int result = pthread_create(&global_tone_detection.detection_thread, &thread_attr, 
+                               tone_detection_thread, NULL);
+    if (result != 0) {
+        printf("[ERROR] Failed to create tone detection thread (error %d: %s)\n", 
+               result, strerror(result));
         pthread_attr_destroy(&thread_attr);
         return 0;
     }
     
+    printf("[TONE_DETECT] Thread creation successful, waiting for thread to start...\n");
+    
     pthread_attr_destroy(&thread_attr);
     global_tone_detection.thread_running = 1;
+    
+    // Give the thread a moment to start
+    usleep(100000); // 100ms delay
     
     printf("[TONE_DETECT] Tone detection thread started successfully\n");
     return 1;
