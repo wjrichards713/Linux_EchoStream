@@ -945,12 +945,18 @@ int load_tone_detection_config(void) {
     
     // Parse JSON
     cJSON *json = cJSON_Parse(json_string);
-    free(json_string);
-    
     if (!json) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr) {
+            printf("[ERROR] JSON parsing error at: %s\n", error_ptr);
+        } else {
+            printf("[ERROR] JSON parsing failed - unknown error\n");
+        }
+        free(json_string);
         printf("[WARNING] Failed to parse config JSON, using default tone detection configuration\n");
         return create_default_tone_config();
     }
+    free(json_string);
     
     // Try to navigate to software configuration, but provide fallback
     cJSON *shadow = cJSON_GetObjectItemCaseSensitive(json, "shadow");

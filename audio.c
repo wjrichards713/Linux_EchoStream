@@ -1292,6 +1292,14 @@ int start_transmission_for_channel(struct audio_stream *audio_stream)
             printf("WARNING: Output device %d failed for channel %s, trying different parameters\n",
                    output_params.device, audio_stream->channel_id);
             fflush(stdout);
+            
+            // For critical errors, don't continue with broken streams
+            if (err == paUnanticipatedHostError) {
+                printf("[ERROR] Critical host error for channel %s - skipping output stream creation\n", 
+                       audio_stream->channel_id);
+                audio_stream->output_stream = NULL;
+                err = paNoError; // Continue without output stream
+            }
 
             // Try different parameters for output - prioritize 48000 for consistency
             int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
@@ -1544,29 +1552,10 @@ int start_transmission_for_channel(struct audio_stream *audio_stream)
                 printf("WARNING: All output devices failed for channel %s, trying input-only mode\n",
                        audio_stream->channel_id);
 
-                // Try input-only mode as fallback
-                Pa_CloseStream(audio_stream->input_stream);
-                audio_stream->input_stream = NULL;
-
-                // Reopen input stream
-                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024,
-                                    paClipOff, audio_input_callback, audio_stream);
-
-                if (err != paNoError)
-                {
-                    fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
-                    return 0;
-                }
-
-                // Start input stream only
-                err = Pa_StartStream(audio_stream->input_stream);
-                if (err != paNoError)
-                {
-                    fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-                    Pa_CloseStream(audio_stream->input_stream);
-                    return 0;
-                }
-
+                // Don't close and reopen input stream - just continue without output
+                audio_stream->output_stream = NULL;
+                err = paNoError; // Continue without output stream
+                
                 printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
 
                 // Special debug for the last channel
