@@ -211,8 +211,13 @@ void* tone_detection_thread(void *arg) {
     while (global_tone_detection.thread_running && !global_interrupted) {
         static int main_loop_count = 0;
         main_loop_count++;
-        if (main_loop_count % 1000 == 0) {  // Print every 1000 loops
+        if (main_loop_count % 100 == 0) {  // Print every 100 loops (more frequent)
             printf("[TONE_DETECT] Main loop iteration #%d\n", main_loop_count);
+        }
+        
+        // Debug: Print first few iterations
+        if (main_loop_count <= 5) {
+            printf("[TONE_DETECT] Main loop iteration #%d (first few)\n", main_loop_count);
         }
         
         // Check if tone detection is enabled
