@@ -29,6 +29,7 @@
 
 // Tone detection configuration constants
 #define MAX_TONE_DEFINITIONS 10
+#define MAX_TONE_SEQUENCES 10
 #define MAX_FILTERS 5
 #define FFT_SIZE 1024
 #define SAMPLE_RATE 48000
@@ -138,7 +139,7 @@ typedef struct {
 // Global tone detection state
 typedef struct {
     tone_detect_config_t configs[MAX_CHANNELS];
-    tone_sequence_state_t sequences[MAX_TONE_DEFINITIONS];
+    tone_sequence_state_t sequences[MAX_TONE_SEQUENCES];
     int num_active_sequences;
     fftw_plan fft_plan;
     fftw_complex *fft_input;
