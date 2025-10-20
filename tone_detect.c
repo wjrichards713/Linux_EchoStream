@@ -302,11 +302,24 @@ void* tone_detection_thread(void *arg) {
                 printf("[TONE_DETECT] About to wait on condition variable... (wait #%d)\n", wait_count);
             }
             
-            pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
+            // Use timed wait instead of infinite wait to avoid race conditions
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            timeout.tv_sec += 1; // 1 second timeout
             
-            // Debug: Print first few wake-ups
-            if (wait_count <= 5) {
-                printf("[TONE_DETECT] Woke up from condition variable wait (wait #%d)\n", wait_count);
+            int wait_result = pthread_cond_timedwait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex, &timeout);
+            
+            if (wait_result == ETIMEDOUT) {
+                // Debug: Print timeout messages
+                if (wait_count <= 5) {
+                    printf("[TONE_DETECT] Condition variable wait timed out (wait #%d)\n", wait_count);
+                }
+                // Continue the loop to check for data again
+            } else {
+                // Debug: Print first few wake-ups
+                if (wait_count <= 5) {
+                    printf("[TONE_DETECT] Woke up from condition variable wait (wait #%d)\n", wait_count);
+                }
             }
             
             if (wait_count % 100 == 0) {  // Print every 100 waits
