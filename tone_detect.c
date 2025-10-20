@@ -1010,56 +1010,57 @@ int load_tone_detection_config(void) {
                 strncpy(config->passthrough_channel, cJSON_GetStringValue(channel_id), 63);
                 config->passthrough_channel[63] = '\0';
             } else {
-                // If no channel_id provided, use the channel name as default
-                strncpy(config->passthrough_channel, channel_keys[i], 63);
-                config->passthrough_channel[63] = '\0';
+                // If no channel_id provided, skip this channel (like channel_four)
+                printf("[TONE_DETECT] Channel %s has no channel_id, skipping\n", channel_keys[i]);
+                continue;
             }
             
             // Load tone detection settings
             cJSON *tone_detect = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect");
-            if (cJSON_IsBool(tone_detect)) {
-                if (cJSON_IsTrue(tone_detect)) {
-                    // Load tone detection configuration
-                    cJSON *tone_config = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect_configuration");
-                    if (cJSON_IsObject(tone_config)) {
-                        // Load tone passthrough settings
-                        cJSON *tone_passthrough = cJSON_GetObjectItemCaseSensitive(tone_config, "tone_passthrough");
-                        if (cJSON_IsBool(tone_passthrough)) {
-                            config->tone_passthrough = cJSON_IsTrue(tone_passthrough);
-                        }
-                        
-                        cJSON *passthrough_channel = cJSON_GetObjectItemCaseSensitive(tone_config, "passthrough_channel");
-                        if (cJSON_IsString(passthrough_channel)) {
-                            strncpy(config->passthrough_channel, cJSON_GetStringValue(passthrough_channel), 63);
-                            config->passthrough_channel[63] = '\0';
-                        }
-                        
-                        // Load alert tones
-                        cJSON *alert_tones = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_tones");
-                        if (cJSON_IsArray(alert_tones)) {
-                            config->num_alert_tones = parse_tone_definitions(alert_tones, config->alert_tones, MAX_TONE_DEFINITIONS);
-                            printf("[TONE_DETECT] Loaded %d alert tones for channel %d\n", config->num_alert_tones, i);
-                        }
-                        
-                        // Load alert details
-                        cJSON *alert_details = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_details");
-                        if (cJSON_IsObject(alert_details)) {
-                            parse_alert_details(alert_details, &config->alert_details);
-                        }
-                        
-                        // Load frequency filters
-                        cJSON *filters = cJSON_GetObjectItemCaseSensitive(tone_config, "filter_frequencies");
-                        if (cJSON_IsArray(filters)) {
-                            config->num_filters = parse_frequency_filters(filters, config->filters, MAX_FILTERS);
-                            printf("[TONE_DETECT] Loaded %d frequency filters for channel %d\n", config->num_filters, i);
-                        }
-                        
-                        config->valid = 1;
-                        channels_loaded++;
-                        printf("[TONE_DETECT] Loaded tone detection config for channel %d (%s)\n", 
-                               i, config->passthrough_channel);
+            if (cJSON_IsBool(tone_detect) && cJSON_IsTrue(tone_detect)) {
+                // Load tone detection configuration
+                cJSON *tone_config = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect_configuration");
+                if (cJSON_IsObject(tone_config)) {
+                    // Load tone passthrough settings
+                    cJSON *tone_passthrough = cJSON_GetObjectItemCaseSensitive(tone_config, "tone_passthrough");
+                    if (cJSON_IsBool(tone_passthrough)) {
+                        config->tone_passthrough = cJSON_IsTrue(tone_passthrough);
                     }
+                    
+                    cJSON *passthrough_channel = cJSON_GetObjectItemCaseSensitive(tone_config, "passthrough_channel");
+                    if (cJSON_IsString(passthrough_channel)) {
+                        strncpy(config->passthrough_channel, cJSON_GetStringValue(passthrough_channel), 63);
+                        config->passthrough_channel[63] = '\0';
+                    }
+                    
+                    // Load alert tones
+                    cJSON *alert_tones = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_tones");
+                    if (cJSON_IsArray(alert_tones)) {
+                        config->num_alert_tones = parse_tone_definitions(alert_tones, config->alert_tones, MAX_TONE_DEFINITIONS);
+                        printf("[TONE_DETECT] Loaded %d alert tones for channel %d\n", config->num_alert_tones, i);
+                    }
+                    
+                    // Load alert details
+                    cJSON *alert_details = cJSON_GetObjectItemCaseSensitive(tone_config, "alert_details");
+                    if (cJSON_IsObject(alert_details)) {
+                        parse_alert_details(alert_details, &config->alert_details);
+                    }
+                    
+                    // Load frequency filters
+                    cJSON *filters = cJSON_GetObjectItemCaseSensitive(tone_config, "filter_frequencies");
+                    if (cJSON_IsArray(filters)) {
+                        config->num_filters = parse_frequency_filters(filters, config->filters, MAX_FILTERS);
+                        printf("[TONE_DETECT] Loaded %d frequency filters for channel %d\n", config->num_filters, i);
+                    }
+                    
+                    config->valid = 1;
+                    channels_loaded++;
+                    printf("[TONE_DETECT] Loaded tone detection config for channel %d (%s)\n", 
+                           i, config->passthrough_channel);
                 }
+            } else {
+                printf("[TONE_DETECT] Channel %s has tone_detect=%s, skipping\n", 
+                       channel_keys[i], cJSON_IsBool(tone_detect) ? (cJSON_IsTrue(tone_detect) ? "true" : "false") : "not set");
             }
         }
     }
