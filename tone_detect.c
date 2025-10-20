@@ -250,10 +250,16 @@ void* tone_detection_thread(void *arg) {
             // Wait for new data
             static int wait_count = 0;
             wait_count++;
-            if (wait_count % 1000 == 0) {  // Print every 1000 waits (about every 10 seconds)
+            if (wait_count % 100 == 0) {  // Print every 100 waits (about every 1 second)
                 printf("[TONE_DETECT] Waiting for audio data... (wait #%d)\n", wait_count);
             }
+            if (wait_count % 100 == 0) {  // Print every 100 waits
+                printf("[TONE_DETECT] About to wait on condition variable...\n");
+            }
             pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
+            if (wait_count % 100 == 0) {  // Print every 100 waits
+                printf("[TONE_DETECT] Woke up from condition variable wait\n");
+            }
         }
         
         pthread_mutex_unlock(&global_shared_buffer.mutex);

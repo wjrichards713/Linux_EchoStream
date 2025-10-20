@@ -534,6 +534,10 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         global_shared_buffer.valid = 1;
         pthread_cond_signal(&global_shared_buffer.data_ready);
         pthread_mutex_unlock(&global_shared_buffer.mutex);
+        
+        if (shared_buffer_count % 100 == 0) {  // Print every 100 updates
+            printf("[AUDIO] Signaled condition variable for tone detection\n");
+        }
 
         // Note: passthrough buffer is now updated by tone detection thread with processed audio
         // Debug logging for shared buffer only
