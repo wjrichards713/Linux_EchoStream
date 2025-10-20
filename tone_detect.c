@@ -258,7 +258,7 @@ void* tone_detection_thread(void *arg) {
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
             static int buffer_count = 0;
             buffer_count++;
-            if (buffer_count % 50 == 0) {  // Print every 50 buffer updates
+            if (buffer_count % 10 == 0) {  // Print every 10 buffer updates (more frequent)
                 printf("[TONE_DETECT] Received audio buffer #%d (samples=%d, buffer_pos=%d)\n", 
                        buffer_count, global_shared_buffer.sample_count, buffer_pos);
             }
@@ -276,16 +276,16 @@ void* tone_detection_thread(void *arg) {
             buffer_pos += samples_to_copy;
             global_shared_buffer.valid = 0; // Mark as consumed
             
-            // Process when we have enough samples
-            if (buffer_pos >= FFT_SIZE) {
-                static int frame_count = 0;
-                frame_count++;
-                if (frame_count % 100 == 0) {  // Print every 100 frames (about every 2 seconds)
-                    printf("[TONE_DETECT] Processing audio frame #%d (FFT analysis)\n", frame_count);
+                // Process when we have enough samples
+                if (buffer_pos >= FFT_SIZE) {
+                    static int frame_count = 0;
+                    frame_count++;
+                    if (frame_count % 10 == 0) {  // Print every 10 frames (more frequent)
+                        printf("[TONE_DETECT] Processing audio frame #%d (FFT analysis)\n", frame_count);
+                    }
+                    process_audio_frame(audio_buffer, FFT_SIZE);
+                    buffer_pos = 0; // Reset buffer
                 }
-                process_audio_frame(audio_buffer, FFT_SIZE);
-                buffer_pos = 0; // Reset buffer
-            }
         } else {
             // Wait for new data
             static int wait_count = 0;
