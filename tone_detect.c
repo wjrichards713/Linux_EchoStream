@@ -227,6 +227,13 @@ void* tone_detection_thread(void *arg) {
             continue;
         }
         
+        // Debug: Show that we're processing enabled tone detection
+        static int enabled_count = 0;
+        enabled_count++;
+        if (enabled_count % 1000 == 0) {  // Print every 1000 checks
+            printf("[TONE_DETECT] Tone detection enabled (check #%d, enabled=%d)\n", enabled_count, tone_enabled);
+        }
+        
         // Get audio data from shared buffer
         pthread_mutex_lock(&global_shared_buffer.mutex);
         
