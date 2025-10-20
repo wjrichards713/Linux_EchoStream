@@ -793,18 +793,22 @@ int trigger_tone_playback(tone_definition_t *definition) {
     
     samples_generated = tone_a_samples + tone_b_samples;
     
-    // Copy generated tones to passthrough buffer
-    for (int i = 0; i < samples_generated && i < SAMPLES_PER_FRAME; i++) {
-        global_passthrough_buffer.samples[i] = tone_samples[i];
+    // Append generated tones to end of passthrough buffer so callback can drain progressively
+    int write_offset = 0;
+    if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
+        write_offset = (int)global_passthrough_buffer.sample_count;
+        if (write_offset > (int)SAMPLES_PER_FRAME) {
+            write_offset = (int)SAMPLES_PER_FRAME;
+        }
     }
-    
-    // Fill remaining with silence
-    for (int i = samples_generated; i < SAMPLES_PER_FRAME; i++) {
-        global_passthrough_buffer.samples[i] = 0.0f;
+
+    int space_remaining = (int)SAMPLES_PER_FRAME - write_offset;
+    int to_copy = samples_generated < space_remaining ? samples_generated : space_remaining;
+    for (int i = 0; i < to_copy; i++) {
+        global_passthrough_buffer.samples[write_offset + i] = tone_samples[i];
     }
-    
-    global_passthrough_buffer.sample_count = samples_generated;
-    global_passthrough_buffer.valid = 1;
+    global_passthrough_buffer.sample_count = (unsigned long)(write_offset + to_copy);
+    global_passthrough_buffer.valid = (global_passthrough_buffer.sample_count > 0) ? 1 : 0;
     
     pthread_mutex_unlock(&global_passthrough_buffer.mutex);
     

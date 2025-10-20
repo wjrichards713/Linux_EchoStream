@@ -687,7 +687,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 out[i] = sample; // Mono output
             }
 
-            // Fill any remainder with silence (mono)
+            // Shift remaining samples down in the passthrough buffer
+            int remaining = (int)global_passthrough_buffer.sample_count - (int)samples_to_process;
+            if (remaining > 0)
+            {
+                memmove(&global_passthrough_buffer.samples[0],
+                        &global_passthrough_buffer.samples[samples_to_process],
+                        (size_t)remaining * sizeof(float));
+            }
+            global_passthrough_buffer.sample_count = remaining > 0 ? (unsigned long)remaining : 0;
+            global_passthrough_buffer.valid = (global_passthrough_buffer.sample_count > 0) ? 1 : 0;
+
+            // Fill any output remainder with silence (mono)
             for (unsigned long i = samples_to_process; i < frames; i++)
             {
                 out[i] = 0.0f;
