@@ -206,12 +206,19 @@ void* tone_detection_thread(void *arg) {
     (void)last_analysis; // Suppress unused variable warning
     
     while (global_tone_detection.thread_running && !global_interrupted) {
+        static int main_loop_count = 0;
+        main_loop_count++;
+        if (main_loop_count % 1000 == 0) {  // Print every 1000 loops
+            printf("[TONE_DETECT] Main loop iteration #%d\n", main_loop_count);
+        }
+        
         // Check if tone detection is enabled
-        if (!is_tone_detect_enabled()) {
+        int tone_enabled = is_tone_detect_enabled();
+        if (!tone_enabled) {
             static int disabled_count = 0;
             disabled_count++;
             if (disabled_count % 1000 == 0) {  // Print every 1000 checks
-                printf("[TONE_DETECT] Tone detection disabled (check #%d)\n", disabled_count);
+                printf("[TONE_DETECT] Tone detection disabled (check #%d, enabled=%d)\n", disabled_count, tone_enabled);
             }
             usleep(10000); // 10ms delay when disabled
             continue;
