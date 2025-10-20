@@ -745,8 +745,29 @@ int trigger_tone_playback(tone_definition_t *definition) {
     // Get the passthrough target channel
     int target_channel = get_passthrough_target_channel_index();
     if (target_channel < 0) {
-        printf("[WARNING] No passthrough target channel configured\n");
-        return 0;
+        // Fallback: choose any channel that currently has an active output stream
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            if (channel_has_output_stream(i)) {
+                target_channel = i;
+                break;
+            }
+        }
+        // Try to repair a default output stream if none active
+        if (target_channel < 0) {
+            if (repair_passthrough_output_stream(0)) {
+                target_channel = 0;
+            }
+        }
+        if (target_channel < 0) {
+            printf("[ERROR] No active output stream available for playback\n");
+            return 0;
+        }
+
+        // Programmatically set passthrough routing to the selected channel
+        pthread_mutex_lock(&global_tone_passthrough.mutex);
+        global_tone_passthrough.enabled = 1;
+        global_tone_passthrough.target_channel = target_channel;
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
     }
     
     // Enable passthrough mode for the target channel
