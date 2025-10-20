@@ -667,6 +667,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         pthread_mutex_lock(&global_passthrough_buffer.mutex);
         if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0)
         {
+            printf("[AUDIO] Playing passthrough audio: valid=%d, sample_count=%lu, frames=%lu\n", 
+                   global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, frames);
             // Apply minimal gain since audio is already processed by tone detection
             const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // No additional gain since tone detection already applied gain
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
@@ -698,15 +700,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             global_passthrough_buffer.sample_count = remaining > 0 ? (unsigned long)remaining : 0;
             global_passthrough_buffer.valid = (global_passthrough_buffer.sample_count > 0) ? 1 : 0;
 
+
             // Fill any output remainder with silence (mono)
             for (unsigned long i = samples_to_process; i < frames; i++)
             {
                 out[i] = 0.0f;
             }
 
-            // Mark buffer as consumed so future generated tones can take effect
-            global_passthrough_buffer.valid = 0;
-            global_passthrough_buffer.sample_count = 0;
+            // Buffer has been consumed, but don't clear it here - let the progressive consumption handle it
         }
         else
         {

@@ -804,11 +804,15 @@ int trigger_tone_playback(tone_definition_t *definition) {
 
     int space_remaining = (int)SAMPLES_PER_FRAME - write_offset;
     int to_copy = samples_generated < space_remaining ? samples_generated : space_remaining;
+    
     for (int i = 0; i < to_copy; i++) {
         global_passthrough_buffer.samples[write_offset + i] = tone_samples[i];
     }
     global_passthrough_buffer.sample_count = (unsigned long)(write_offset + to_copy);
     global_passthrough_buffer.valid = (global_passthrough_buffer.sample_count > 0) ? 1 : 0;
+    
+    printf("[TONE_DETECT] Buffer updated: valid=%d, sample_count=%lu, to_copy=%d\n", 
+           global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, to_copy);
     
     pthread_mutex_unlock(&global_passthrough_buffer.mutex);
     
