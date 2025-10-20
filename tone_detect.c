@@ -232,10 +232,10 @@ void* tone_detection_thread(void *arg) {
             continue;
         }
         
-        // Debug: Show that we're processing enabled tone detection
+        // Debug: Print first few enabled checks
         static int enabled_count = 0;
         enabled_count++;
-        if (enabled_count % 1000 == 0) {  // Print every 1000 checks
+        if (enabled_count <= 5) {
             printf("[TONE_DETECT] Tone detection enabled (check #%d, enabled=%d)\n", enabled_count, tone_enabled);
         }
         
@@ -245,6 +245,12 @@ void* tone_detection_thread(void *arg) {
         static int loop_count = 0;
         loop_count++;
         if (loop_count % 1000 == 0) {  // Print every 1000 loops
+            printf("[TONE_DETECT] Loop #%d: checking shared buffer (valid=%d, samples=%d)\n", 
+                   loop_count, global_shared_buffer.valid, global_shared_buffer.sample_count);
+        }
+        
+        // Debug: Print first few buffer checks
+        if (loop_count <= 5) {
             printf("[TONE_DETECT] Loop #%d: checking shared buffer (valid=%d, samples=%d)\n", 
                    loop_count, global_shared_buffer.valid, global_shared_buffer.sample_count);
         }
@@ -290,7 +296,19 @@ void* tone_detection_thread(void *arg) {
             if (wait_count % 100 == 0) {  // Print every 100 waits
                 printf("[TONE_DETECT] About to wait on condition variable...\n");
             }
+            
+            // Debug: Print first few waits
+            if (wait_count <= 5) {
+                printf("[TONE_DETECT] About to wait on condition variable... (wait #%d)\n", wait_count);
+            }
+            
             pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
+            
+            // Debug: Print first few wake-ups
+            if (wait_count <= 5) {
+                printf("[TONE_DETECT] Woke up from condition variable wait (wait #%d)\n", wait_count);
+            }
+            
             if (wait_count % 100 == 0) {  // Print every 100 waits
                 printf("[TONE_DETECT] Woke up from condition variable wait\n");
             }
