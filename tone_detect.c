@@ -208,12 +208,24 @@ void* tone_detection_thread(void *arg) {
     while (global_tone_detection.thread_running && !global_interrupted) {
         // Check if tone detection is enabled
         if (!is_tone_detect_enabled()) {
+            static int disabled_count = 0;
+            disabled_count++;
+            if (disabled_count % 1000 == 0) {  // Print every 1000 checks
+                printf("[TONE_DETECT] Tone detection disabled (check #%d)\n", disabled_count);
+            }
             usleep(10000); // 10ms delay when disabled
             continue;
         }
         
         // Get audio data from shared buffer
         pthread_mutex_lock(&global_shared_buffer.mutex);
+        
+        static int loop_count = 0;
+        loop_count++;
+        if (loop_count % 1000 == 0) {  // Print every 1000 loops
+            printf("[TONE_DETECT] Loop #%d: checking shared buffer (valid=%d, samples=%d)\n", 
+                   loop_count, global_shared_buffer.valid, global_shared_buffer.sample_count);
+        }
         
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
             static int buffer_count = 0;
