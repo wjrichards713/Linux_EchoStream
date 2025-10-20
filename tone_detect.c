@@ -652,15 +652,17 @@ int update_tone_sequence_state(tone_sequence_state_t *sequence,
             printf("[TONE_DETECT] Started detecting tone A (%.1f Hz)\n", detected_freq);
         }
         
-        // Update duration
-        sequence->tone_a_detected_duration_ms += (1000.0 / SAMPLE_RATE) * FFT_SIZE;
-        sequence->last_detection_time_ms = current_time_ms;
-        
-        // Check if tone A duration requirement is met
-        if (sequence->tone_a_detected_duration_ms >= sequence->definition->tone_a_length_ms) {
-            sequence->tone_a_confirmed = 1;
-            printf("[TONE_DETECT] Tone A confirmed (%.1f Hz, %.1f ms)\n", 
-                   detected_freq, sequence->tone_a_detected_duration_ms);
+        // Update duration using time-based tracking
+        if (sequence->state == TONE_STATE_DETECTING_A) {
+            sequence->tone_a_detected_duration_ms = current_time_ms - sequence->sequence_start_time_ms;
+            sequence->last_detection_time_ms = current_time_ms;
+            
+            // Check if tone A duration requirement is met
+            if (sequence->tone_a_detected_duration_ms >= sequence->definition->tone_a_length_ms) {
+                sequence->tone_a_confirmed = 1;
+                printf("[TONE_DETECT] Tone A confirmed (%.1f Hz, %.1f ms)\n", 
+                       detected_freq, sequence->tone_a_detected_duration_ms);
+            }
         }
     }
     
@@ -668,8 +670,8 @@ int update_tone_sequence_state(tone_sequence_state_t *sequence,
     if (is_frequency_in_range(detected_freq, sequence->definition->tone_b_freq, 
                              sequence->definition->tone_b_range_hz)) {
         if (sequence->state == TONE_STATE_DETECTING_B) {
-            // Update duration
-            sequence->tone_b_detected_duration_ms += (1000.0 / SAMPLE_RATE) * FFT_SIZE;
+            // Update duration using time-based tracking
+            sequence->tone_b_detected_duration_ms = current_time_ms - sequence->sequence_start_time_ms;
             sequence->last_detection_time_ms = current_time_ms;
             
             // Check if tone B duration requirement is met
