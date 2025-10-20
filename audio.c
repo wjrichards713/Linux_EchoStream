@@ -222,10 +222,11 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
     // Run periodic repair attempts
     periodic_passthrough_repair();
 
-    // SIMPLIFIED: Directly check if this is Channel 4 (the configured passthrough target)
-    // Channel 4 is always index 3 and has ID "channel_4"
-    if (strcmp(channel_id, "channel_4") == 0)
+    // SIMPLIFIED: Directly check if this is Channel 3 (the configured passthrough target)
+    // Channel 3 is always index 2 and has ID "308e2478-072c-4d8b-ffff24d-51854e06711a"
+    if (strcmp(channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0)
     {
+        printf("[DEBUG] Channel 3 identified as passthrough target\n");
         return 1;
     }
 

@@ -742,8 +742,10 @@ int trigger_tone_playback(tone_definition_t *definition) {
     printf("[TONE_DETECT] Triggering tone playback for sequence %.1f Hz -> %.1f Hz\n", 
            definition->tone_a_freq, definition->tone_b_freq);
     
-    // Get the passthrough target channel
-    int target_channel = get_passthrough_target_channel_index();
+    // Get the passthrough target channel - use channel 3 (index 2) as the passthrough target
+    // Channel 4 had output stream issues, so use Channel 3 which is working
+    int target_channel = 2; // Channel 3 as the passthrough target
+    printf("[TONE_DETECT] Using channel %d (Channel 3) as passthrough target\n", target_channel);
     if (target_channel < 0) {
         // Fallback: choose any channel that currently has an active output stream
         for (int i = 0; i < MAX_CHANNELS; i++) {
@@ -772,6 +774,11 @@ int trigger_tone_playback(tone_definition_t *definition) {
     
     // Enable passthrough mode for the target channel
     set_passthrough_output_mode(1);
+    
+    // Enable global passthrough mode
+    pthread_mutex_lock(&global_tone_detect.mutex);
+    global_tone_detect.passthrough_mode = 1;
+    pthread_mutex_unlock(&global_tone_detect.mutex);
     
     // Generate tone sequence and copy to passthrough buffer
     pthread_mutex_lock(&global_passthrough_buffer.mutex);
