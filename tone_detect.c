@@ -478,6 +478,16 @@ int match_tones_to_definitions(peak_t *peaks, int num_peaks) {
             continue;
         }
         
+        // Debug: Show what we're looking for
+        static int debug_count = 0;
+        debug_count++;
+        if (debug_count % 100 == 0) {  // Print every 100 frames
+            printf("[TONE_DETECT] Looking for sequence: %.1fHz±%.1fHz -> %.1fHz±%.1fHz (State: %d)\n", 
+                   sequence->definition->tone_a_freq, sequence->definition->tone_a_range_hz,
+                   sequence->definition->tone_b_freq, sequence->definition->tone_b_range_hz,
+                   sequence->state);
+        }
+        
         // Check for tone matches
         for (int j = 0; j < num_peaks; j++) {
             double detected_freq = peaks[j].frequency;
@@ -487,11 +497,15 @@ int match_tones_to_definitions(peak_t *peaks, int num_peaks) {
             if (sequence->state == TONE_STATE_IDLE || sequence->state == TONE_STATE_DETECTING_A) {
                 if (is_frequency_in_range(detected_freq, sequence->definition->tone_a_freq, 
                                          sequence->definition->tone_a_range_hz)) {
+                    printf("[TONE_DETECT] 🎵 TONE A DETECTED: %.1fHz (looking for %.1fHz±%.1fHz)\n", 
+                           detected_freq, sequence->definition->tone_a_freq, sequence->definition->tone_a_range_hz);
                     update_tone_sequence_state(sequence, current_time_ms, detected_freq, magnitude_db);
                 }
             } else if (sequence->state == TONE_STATE_DETECTING_B) {
                 if (is_frequency_in_range(detected_freq, sequence->definition->tone_b_freq, 
                                          sequence->definition->tone_b_range_hz)) {
+                    printf("[TONE_DETECT] 🎵 TONE B DETECTED: %.1fHz (looking for %.1fHz±%.1fHz)\n", 
+                           detected_freq, sequence->definition->tone_b_freq, sequence->definition->tone_b_range_hz);
                     update_tone_sequence_state(sequence, current_time_ms, detected_freq, magnitude_db);
                 }
             }
@@ -537,7 +551,11 @@ static int process_tone_sequences(double current_time_ms) {
                     sequence->state = TONE_STATE_RECORDING;
                     sequence->recording_active = 1;
                     sequence->recording_start_time_ms = current_time_ms;
-                    printf("[TONE_DETECT] Tone sequence detected! Starting recording for %.1f ms\n", 
+                    printf("[TONE_DETECT] 🎉🎵 COMPLETE TONE SEQUENCE DETECTED! 🎵🎉\n");
+                    printf("[TONE_DETECT] Sequence: %.1fHz -> %.1fHz (ID: %s)\n", 
+                           sequence->definition->tone_a_freq, sequence->definition->tone_b_freq, 
+                           sequence->definition->tone_id);
+                    printf("[TONE_DETECT] Starting recording for %.1f ms\n", 
                            sequence->definition->record_length_ms);
                     
                     // Trigger tone playback
