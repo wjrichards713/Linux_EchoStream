@@ -716,7 +716,7 @@ int generate_tone_samples(float *samples, int sample_count, double frequency, do
     double phase = 0.0;
     
     for (int i = 0; i < samples_to_generate; i++) {
-        samples[i] = 0.8f * sin(phase); // Increased amplitude for audibility
+        samples[i] = 0.9f * sin(phase); // Maximum amplitude for better audibility
         phase += phase_increment;
         
         // Keep phase in range [0, 2π]
@@ -786,37 +786,35 @@ int trigger_tone_playback(tone_definition_t *definition) {
     float tone_samples[SAMPLES_PER_FRAME];
     int samples_generated = 0;
     
-    // Generate tone A followed by tone B
+    // Generate tone A followed by tone B with longer duration for better audibility
     int tone_a_samples = generate_tone_samples(tone_samples, SAMPLES_PER_FRAME / 2, 
                                               definition->tone_a_freq, 
-                                              definition->tone_a_length_ms, 
+                                              500.0, // 500ms duration for better audibility
                                               SAMPLE_RATE);
     
     int tone_b_samples = generate_tone_samples(tone_samples + tone_a_samples, 
                                               SAMPLES_PER_FRAME - tone_a_samples,
                                               definition->tone_b_freq, 
-                                              definition->tone_b_length_ms, 
+                                              500.0, // 500ms duration for better audibility
                                               SAMPLE_RATE);
     
     samples_generated = tone_a_samples + tone_b_samples;
     
-    // Append generated tones to end of passthrough buffer so callback can drain progressively
-    int write_offset = 0;
-    if (global_passthrough_buffer.valid && global_passthrough_buffer.sample_count > 0) {
-        write_offset = (int)global_passthrough_buffer.sample_count;
-        if (write_offset > (int)SAMPLES_PER_FRAME) {
-            write_offset = (int)SAMPLES_PER_FRAME;
-        }
+    // Clear the buffer first to ensure clean playback
+    global_passthrough_buffer.sample_count = 0;
+    global_passthrough_buffer.valid = 0;
+    
+    // Copy all generated samples to the buffer
+    int to_copy = samples_generated;
+    if (to_copy > (int)SAMPLES_PER_FRAME) {
+        to_copy = (int)SAMPLES_PER_FRAME;
     }
-
-    int space_remaining = (int)SAMPLES_PER_FRAME - write_offset;
-    int to_copy = samples_generated < space_remaining ? samples_generated : space_remaining;
     
     for (int i = 0; i < to_copy; i++) {
-        global_passthrough_buffer.samples[write_offset + i] = tone_samples[i];
+        global_passthrough_buffer.samples[i] = tone_samples[i];
     }
-    global_passthrough_buffer.sample_count = (unsigned long)(write_offset + to_copy);
-    global_passthrough_buffer.valid = (global_passthrough_buffer.sample_count > 0) ? 1 : 0;
+    global_passthrough_buffer.sample_count = (unsigned long)to_copy;
+    global_passthrough_buffer.valid = 1;
     
     printf("[TONE_DETECT] Buffer updated: valid=%d, sample_count=%lu, to_copy=%d\n", 
            global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, to_copy);
@@ -881,11 +879,11 @@ static int create_default_tone_config(void) {
         config->valid = 1;
         config->tone_passthrough = 0;  // Disabled by default
         // Set default passthrough channel to the first available channel
-        if (i == 0 && global_channel_ids[0] != NULL) {
+        if (global_channel_ids[0] != NULL) {
             strncpy(config->passthrough_channel, global_channel_ids[0], 63);
             config->passthrough_channel[63] = '\0';
         } else {
-            strcpy(config->passthrough_channel, "channel_4");  // Fallback default
+            strcpy(config->passthrough_channel, "channel_1");  // Fallback default
         }
         
         // Add some default tone definitions
@@ -1004,6 +1002,10 @@ int load_tone_detection_config(void) {
             cJSON *channel_id = cJSON_GetObjectItemCaseSensitive(channel_obj, "channel_id");
             if (cJSON_IsString(channel_id)) {
                 strncpy(config->passthrough_channel, cJSON_GetStringValue(channel_id), 63);
+                config->passthrough_channel[63] = '\0';
+            } else {
+                // If no channel_id provided, use the channel name as default
+                strncpy(config->passthrough_channel, channel_keys[i], 63);
                 config->passthrough_channel[63] = '\0';
             }
             
@@ -1315,25 +1317,47 @@ int apply_frequency_filters(double *magnitude_spectrum, int spectrum_size,
 
 // Get passthrough target channel index
 int get_passthrough_target_channel_index(void) {
-    // Get the tone detection configuration to find the passthrough target
-    tone_detect_config_t *config = get_tone_detect_config(0);
-    if (!config || !config->valid) {
-        printf("[TONE_DETECT] No valid tone detection configuration found\n");
-        return -1;
-    }
-    
-    // Look for the channel that matches the configured passthrough_channel
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (strcmp(config->passthrough_channel, global_channel_ids[i]) == 0) {
-            static int found_count = 0;
-            if (found_count++ % 1000 == 0) {  // Only print every 1000th time
-                printf("[TONE_DETECT] Found passthrough target: %s at index %d\n", config->passthrough_channel, i);
-            }
-            return i;
+    // Look through ALL channel configurations to find which one has tone_passthrough enabled
+    for (int config_idx = 0; config_idx < MAX_CHANNELS; config_idx++) {
+        tone_detect_config_t *config = get_tone_detect_config(config_idx);
+        if (!config || !config->valid || !config->tone_passthrough) {
+            continue; // Skip invalid configs or channels without tone passthrough enabled
         }
+        
+        printf("[TONE_DETECT] Found channel %d with tone_passthrough enabled, target: %s\n", 
+               config_idx, config->passthrough_channel);
+        
+        // Look for the channel that matches the configured passthrough_channel
+        // The passthrough_channel can be either a channel name (channel_one, channel_two, etc.) 
+        // or a channel_id (555, 666, etc.)
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            // First try to match by channel_id
+            if (strcmp(config->passthrough_channel, global_channel_ids[i]) == 0) {
+                static int found_count = 0;
+                if (found_count++ % 1000 == 0) {  // Only print every 1000th time
+                    printf("[TONE_DETECT] Found passthrough target by channel_id: %s at index %d (from config %d)\n", 
+                           config->passthrough_channel, i, config_idx);
+                }
+                return i;
+            }
+            
+            // Then try to match by channel name (channel_one, channel_two, etc.)
+            const char* channel_names[] = {"channel_one", "channel_two", "channel_three", "channel_four"};
+            if (i < 4 && strcmp(config->passthrough_channel, channel_names[i]) == 0) {
+                static int found_count = 0;
+                if (found_count++ % 1000 == 0) {  // Only print every 1000th time
+                    printf("[TONE_DETECT] Found passthrough target by channel name: %s at index %d (from config %d)\n", 
+                           config->passthrough_channel, i, config_idx);
+                }
+                return i;
+            }
+        }
+        
+        printf("[TONE_DETECT] Passthrough target channel '%s' from config %d not found in available channels\n", 
+               config->passthrough_channel, config_idx);
     }
     
-    printf("[TONE_DETECT] Passthrough target channel '%s' not found in available channels\n", config->passthrough_channel);
+    printf("[TONE_DETECT] No channel with tone_passthrough enabled found\n");
     return -1;
 }
 

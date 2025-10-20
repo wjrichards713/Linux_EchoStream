@@ -123,8 +123,8 @@ int find_best_passthrough_channel(void)
         }
     }
 
-    // CRITICAL: Channel 4 MUST be the passthrough target - no alternatives allowed
-    return configured_target; // Return the configured target even if it's not working
+    // Return the configured target even if it's not working (will be retried later)
+    return configured_target;
 }
 
 // Check if a channel has a working output stream
@@ -207,8 +207,6 @@ static void periodic_passthrough_repair(void)
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char *channel_id)
 {
-    tone_detect_config_t *tone_cfg = get_tone_detect_config(0);
-    
     // Check if global passthrough mode is active (set when tones are detected)
     if (is_passthrough_mode())
     {
@@ -227,48 +225,48 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
         }
     }
     
-    if (!tone_cfg || !tone_cfg->tone_passthrough)
-    {
-        static int debug_count = 0;
-        if (debug_count++ % 10000 == 0)
-        {
-            printf("[DEBUG] is_configured_passthrough_channel_id: tone_cfg=%p, tone_passthrough=%d\n",
-                   tone_cfg, tone_cfg ? tone_cfg->tone_passthrough : -1);
+    // Look through ALL channel configurations to find which one has tone_passthrough enabled
+    for (int config_idx = 0; config_idx < MAX_CHANNELS; config_idx++) {
+        tone_detect_config_t *tone_cfg = get_tone_detect_config(config_idx);
+        if (!tone_cfg || !tone_cfg->valid || !tone_cfg->tone_passthrough) {
+            continue; // Skip invalid configs or channels without tone passthrough enabled
         }
-        return 0;
+        
+        // Run periodic repair attempts
+        periodic_passthrough_repair();
+
+        // Check if this channel matches the configured passthrough target
+        // The passthrough_channel can be either a channel name (channel_one, channel_two, etc.) 
+        // or a channel_id (555, 666, etc.)
+        
+        // First try to match by channel_id
+        if (strcmp(channel_id, tone_cfg->passthrough_channel) == 0)
+        {
+            printf("[DEBUG] Channel %s identified as configured passthrough target by channel_id (from config %d)\n", channel_id, config_idx);
+            return 1;
+        }
+        
+        // Then try to match by channel name (channel_one, channel_two, etc.)
+        const char* channel_names[] = {"channel_one", "channel_two", "channel_three", "channel_four"};
+        for (int i = 0; i < 4; i++) {
+            if (strcmp(tone_cfg->passthrough_channel, channel_names[i]) == 0) {
+                // Check if this channel_id corresponds to the channel name
+                if (strcmp(channel_id, global_channel_ids[i]) == 0) {
+                    printf("[DEBUG] Channel %s identified as configured passthrough target by channel name %s (from config %d)\n", 
+                           channel_id, channel_names[i], config_idx);
+                    return 1;
+                }
+            }
+        }
     }
-
-    // Run periodic repair attempts
-    periodic_passthrough_repair();
-
-    // Check if this channel matches the configured passthrough target
-    if (strcmp(channel_id, tone_cfg->passthrough_channel) == 0)
-    {
-        printf("[DEBUG] Channel %s identified as configured passthrough target\n", channel_id);
-        return 1;
-    }
-
-    // Fallback to original logic
-    int idx = -1;
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0)
-        idx = 3;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0)
-        idx = 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0)
-        idx = 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0)
-        idx = 0;
-
+    
     static int debug_count = 0;
     if (debug_count++ % 10000 == 0)
     {
-        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, passthrough_channel=%s, idx=%d\n",
-               channel_id, tone_cfg->passthrough_channel, idx);
+        printf("[DEBUG] is_configured_passthrough_channel_id: channel_id=%s, no matching passthrough config found\n", channel_id);
     }
-
-    if (idx < 0)
-        return 0;
-    return (strcmp(channel_id, global_channel_ids[idx]) == 0) ? 1 : 0;
+    
+    return 0;
 }
 
 // Initialize tone detection control
@@ -526,12 +524,19 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 
     const float *samples = (const float *)input;
 
-    // Update shared buffer strictly from the source input (channel_one) for passthrough
+    // Update shared buffer from channels that have tone detection enabled
     int should_update_shared_buffer = 0;
     extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    if (is_tone_detect_enabled() && strcmp(audio_stream->channel_id, global_channel_ids[0]) == 0)
-    {
-        should_update_shared_buffer = 1;
+    
+    // Check if this channel has tone detection enabled
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        struct channel_config *channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid &&
+            strcmp(channel_config->channel_id, audio_stream->channel_id) == 0 &&
+            channel_config->tone_detect) {
+            should_update_shared_buffer = 1;
+            break;
+        }
     }
 
     if (should_update_shared_buffer)
@@ -700,8 +705,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 printf("[AUDIO] Playing passthrough audio: valid=%d, sample_count=%lu, frames=%lu\n", 
                        global_passthrough_buffer.valid, global_passthrough_buffer.sample_count, frames);
             }
-            // Apply minimal gain since audio is already processed by tone detection
-            const float PASSTHROUGH_OUTPUT_GAIN = 1.0f; // No additional gain since tone detection already applied gain
+            // Apply gain for better audibility
+            const float PASSTHROUGH_OUTPUT_GAIN = 2.0f; // Increased gain for better audibility
             unsigned long samples_to_process = global_passthrough_buffer.sample_count;
             if (samples_to_process > frames)
                 samples_to_process = frames;
@@ -720,12 +725,22 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 out[i] = sample; // Mono output
             }
 
-            // Shift remaining samples down in the passthrough buffer
-            int remaining = (int)global_passthrough_buffer.sample_count - (int)samples_to_process;
+            // Only consume a portion of the buffer to allow for sustained playback
+            // This prevents the buffer from being drained too quickly
+            int consume_amount = (int)frames;
+            if (consume_amount > (int)global_passthrough_buffer.sample_count) {
+                consume_amount = (int)global_passthrough_buffer.sample_count;
+            }
+            
+            // Only consume half the requested amount to sustain playback longer
+            consume_amount = consume_amount / 2;
+            if (consume_amount < 1) consume_amount = 1;
+            
+            int remaining = (int)global_passthrough_buffer.sample_count - consume_amount;
             if (remaining > 0)
             {
                 memmove(&global_passthrough_buffer.samples[0],
-                        &global_passthrough_buffer.samples[samples_to_process],
+                        &global_passthrough_buffer.samples[consume_amount],
                         (size_t)remaining * sizeof(float));
             }
             global_passthrough_buffer.sample_count = remaining > 0 ? (unsigned long)remaining : 0;
