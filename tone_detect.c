@@ -716,7 +716,7 @@ int generate_tone_samples(float *samples, int sample_count, double frequency, do
     double phase = 0.0;
     
     for (int i = 0; i < samples_to_generate; i++) {
-        samples[i] = 0.3f * sin(phase); // 0.3 amplitude to prevent clipping
+        samples[i] = 0.8f * sin(phase); // Increased amplitude for audibility
         phase += phase_increment;
         
         // Keep phase in range [0, 2π]
@@ -803,7 +803,7 @@ int trigger_tone_playback(tone_definition_t *definition) {
         global_passthrough_buffer.samples[i] = 0.0f;
     }
     
-    global_passthrough_buffer.sample_count = SAMPLES_PER_FRAME;
+    global_passthrough_buffer.sample_count = samples_generated;
     global_passthrough_buffer.valid = 1;
     
     pthread_mutex_unlock(&global_passthrough_buffer.mutex);

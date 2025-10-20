@@ -631,9 +631,35 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                audio_stream->channel_id, frames, jitter->frame_count);
     }
 
-    // Check if this channel is the configured passthrough target
-    int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-    int passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+    // Determine passthrough mode dynamically:
+    // Prefer explicit runtime target from global_tone_passthrough if enabled,
+    // otherwise fall back to JSON-configured passthrough logic.
+    int passthrough_mode = 0;
+    {
+        int runtime_enabled;
+        int runtime_target_idx;
+        pthread_mutex_lock(&global_tone_passthrough.mutex);
+        runtime_enabled = global_tone_passthrough.enabled;
+        runtime_target_idx = global_tone_passthrough.target_channel;
+        pthread_mutex_unlock(&global_tone_passthrough.mutex);
+
+        if (runtime_enabled && runtime_target_idx >= 0)
+        {
+            extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+            extern int global_channel_count;
+            if (runtime_target_idx < global_channel_count &&
+                strcmp(audio_stream->channel_id, global_channel_ids[runtime_target_idx]) == 0)
+            {
+                passthrough_mode = is_passthrough_mode();
+            }
+        }
+
+        if (!passthrough_mode)
+        {
+            int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+            passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+        }
+    }
 
     if (passthrough_mode)
     {
@@ -688,8 +714,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 }
             }
 
-            // Keep buffer valid - it will be overwritten by new audio data
-            // Don't invalidate to prevent choppy on/off pattern
+            // Mark buffer as consumed so future generated tones can take effect
+            global_passthrough_buffer.valid = 0;
+            global_passthrough_buffer.sample_count = 0;
         }
         else
         {
