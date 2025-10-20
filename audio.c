@@ -673,11 +673,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             if (samples_to_process > frames)
                 samples_to_process = frames;
 
-            // Get device info to determine output channel count
-            const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-            int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
-
-            // Process mono input and duplicate to stereo output
+            // Always write mono samples because stream was opened with 1 output channel
             for (unsigned long i = 0; i < samples_to_process; i++)
             {
                 float sample = global_passthrough_buffer.samples[i] * PASSTHROUGH_OUTPUT_GAIN;
@@ -688,30 +684,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                 else if (sample < -1.0f)
                     sample = -1.0f;
 
-                // Duplicate mono to both stereo channels
-                if (output_channels >= 2)
-                {
-                    out[i * 2] = sample;     // Left channel
-                    out[i * 2 + 1] = sample; // Right channel
-                }
-                else
-                {
-                    out[i] = sample; // Mono output
-                }
+                out[i] = sample; // Mono output
             }
 
-            // Fill any remainder with silence
+            // Fill any remainder with silence (mono)
             for (unsigned long i = samples_to_process; i < frames; i++)
             {
-                if (output_channels >= 2)
-                {
-                    out[i * 2] = 0.0f;     // Left channel
-                    out[i * 2 + 1] = 0.0f; // Right channel
-                }
-                else
-                {
-                    out[i] = 0.0f; // Mono output
-                }
+                out[i] = 0.0f;
             }
 
             // Mark buffer as consumed so future generated tones can take effect
@@ -720,21 +699,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         else
         {
-            // No audio data - fill with silence
-            const PaDeviceInfo *device_info = Pa_GetDeviceInfo(audio_stream->device_index);
-            int output_channels = (device_info && device_info->maxOutputChannels >= 2) ? 2 : 1;
-
+            // No audio data - fill with silence (mono)
             for (unsigned long i = 0; i < frames; i++)
             {
-                if (output_channels >= 2)
-                {
-                    out[i * 2] = 0.0f;     // Left channel
-                    out[i * 2 + 1] = 0.0f; // Right channel
-                }
-                else
-                {
-                    out[i] = 0.0f; // Mono output
-                }
+                out[i] = 0.0f;
             }
 
             // Debug: no audio data in passthrough buffer
