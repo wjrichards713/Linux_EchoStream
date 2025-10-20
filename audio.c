@@ -208,6 +208,22 @@ static void periodic_passthrough_repair(void)
 static int is_configured_passthrough_channel_id(const char *channel_id)
 {
     tone_detect_config_t *tone_cfg = get_tone_detect_config(0);
+    
+    // Check if global passthrough mode is active (set when tones are detected)
+    if (is_passthrough_mode())
+    {
+        // When passthrough mode is active, check if this channel matches the configured passthrough target
+        int target_channel_index = get_passthrough_target_channel_index();
+        if (target_channel_index >= 0 && target_channel_index < MAX_CHANNELS)
+        {
+            if (strcmp(channel_id, global_channel_ids[target_channel_index]) == 0)
+            {
+                printf("[DEBUG] Channel %s identified as passthrough target (global passthrough mode active)\n", channel_id);
+                return 1;
+            }
+        }
+    }
+    
     if (!tone_cfg || !tone_cfg->tone_passthrough)
     {
         static int debug_count = 0;
@@ -222,11 +238,10 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
     // Run periodic repair attempts
     periodic_passthrough_repair();
 
-    // SIMPLIFIED: Directly check if this is Channel 3 (the configured passthrough target)
-    // Channel 3 is always index 2 and has ID "308e2478-072c-4d8b-ffff24d-51854e06711a"
-    if (strcmp(channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0)
+    // Check if this channel matches the configured passthrough target
+    if (strcmp(channel_id, tone_cfg->passthrough_channel) == 0)
     {
-        printf("[DEBUG] Channel 3 identified as passthrough target\n");
+        printf("[DEBUG] Channel %s identified as configured passthrough target\n", channel_id);
         return 1;
     }
 
@@ -658,7 +673,13 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         if (!passthrough_mode)
         {
             int is_configured_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
-            passthrough_mode = is_configured_target ? is_passthrough_mode() : 0;
+            int global_passthrough = is_passthrough_mode();
+            passthrough_mode = is_configured_target ? global_passthrough : 0;
+            
+            if (is_configured_target) {
+                printf("[DEBUG] Channel %s is configured target: is_configured=%d, global_passthrough=%d, final_passthrough=%d\n",
+                       audio_stream->channel_id, is_configured_target, global_passthrough, passthrough_mode);
+            }
         }
     }
 

@@ -742,10 +742,9 @@ int trigger_tone_playback(tone_definition_t *definition) {
     printf("[TONE_DETECT] Triggering tone playback for sequence %.1f Hz -> %.1f Hz\n", 
            definition->tone_a_freq, definition->tone_b_freq);
     
-    // Get the passthrough target channel - use channel 3 (index 2) as the passthrough target
-    // Channel 4 had output stream issues, so use Channel 3 which is working
-    int target_channel = 2; // Channel 3 as the passthrough target
-    printf("[TONE_DETECT] Using channel %d (Channel 3) as passthrough target\n", target_channel);
+    // Get the passthrough target channel from configuration
+    int target_channel = get_passthrough_target_channel_index();
+    printf("[TONE_DETECT] Using channel %d as passthrough target\n", target_channel);
     if (target_channel < 0) {
         // Fallback: choose any channel that currently has an active output stream
         for (int i = 0; i < MAX_CHANNELS; i++) {
@@ -879,7 +878,13 @@ static int create_default_tone_config(void) {
         // Set default values
         config->valid = 1;
         config->tone_passthrough = 0;  // Disabled by default
-        strcpy(config->passthrough_channel, "channel_one");
+        // Set default passthrough channel to the first available channel
+        if (i == 0 && global_channel_ids[0] != NULL) {
+            strncpy(config->passthrough_channel, global_channel_ids[0], 63);
+            config->passthrough_channel[63] = '\0';
+        } else {
+            strcpy(config->passthrough_channel, "channel_4");  // Fallback default
+        }
         
         // Add some default tone definitions
         config->num_alert_tones = 1;
@@ -1308,13 +1313,22 @@ int apply_frequency_filters(double *magnitude_spectrum, int spectrum_size,
 
 // Get passthrough target channel index
 int get_passthrough_target_channel_index(void) {
-    // Look for channel with tone_passthrough enabled
+    // Get the tone detection configuration to find the passthrough target
+    tone_detect_config_t *config = get_tone_detect_config(0);
+    if (!config || !config->valid) {
+        printf("[TONE_DETECT] No valid tone detection configuration found\n");
+        return -1;
+    }
+    
+    // Look for the channel that matches the configured passthrough_channel
     for (int i = 0; i < MAX_CHANNELS; i++) {
-        tone_detect_config_t *config = get_tone_detect_config(i);
-        if (config && config->valid && config->tone_passthrough) {
+        if (strcmp(config->passthrough_channel, global_channel_ids[i]) == 0) {
+            printf("[TONE_DETECT] Found passthrough target: %s at index %d\n", config->passthrough_channel, i);
             return i;
         }
     }
+    
+    printf("[TONE_DETECT] Passthrough target channel '%s' not found in available channels\n", config->passthrough_channel);
     return -1;
 }
 
