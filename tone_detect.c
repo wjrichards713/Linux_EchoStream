@@ -209,6 +209,13 @@ void* tone_detection_thread(void *arg) {
         pthread_mutex_lock(&global_shared_buffer.mutex);
         
         if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+            static int buffer_count = 0;
+            buffer_count++;
+            if (buffer_count % 50 == 0) {  // Print every 50 buffer updates
+                printf("[TONE_DETECT] Received audio buffer #%d (samples=%d, buffer_pos=%d)\n", 
+                       buffer_count, global_shared_buffer.sample_count, buffer_pos);
+            }
+            
             // Copy samples to our processing buffer
             int samples_to_copy = global_shared_buffer.sample_count;
             if (samples_to_copy > FFT_SIZE - buffer_pos) {
@@ -234,6 +241,11 @@ void* tone_detection_thread(void *arg) {
             }
         } else {
             // Wait for new data
+            static int wait_count = 0;
+            wait_count++;
+            if (wait_count % 1000 == 0) {  // Print every 1000 waits (about every 10 seconds)
+                printf("[TONE_DETECT] Waiting for audio data... (wait #%d)\n", wait_count);
+            }
             pthread_cond_wait(&global_shared_buffer.data_ready, &global_shared_buffer.mutex);
         }
         

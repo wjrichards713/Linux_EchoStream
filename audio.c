@@ -517,6 +517,13 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 
     if (should_update_shared_buffer)
     {
+        static int shared_buffer_count = 0;
+        shared_buffer_count++;
+        if (shared_buffer_count % 100 == 0) {  // Print every 100 updates
+            printf("[AUDIO] Updating shared buffer #%d for tone detection (samples=%lu)\n", 
+                   shared_buffer_count, frames);
+        }
+        
         // Use raw audio samples for tone detection processing
         pthread_mutex_lock(&global_shared_buffer.mutex);
         for (unsigned long i = 0; i < frames && i < SAMPLES_PER_FRAME; i++)
