@@ -205,6 +205,9 @@ void* tone_detection_thread(void *arg) {
     struct timespec last_analysis = {0};
     (void)last_analysis; // Suppress unused variable warning
     
+    printf("[TONE_DETECT] Entering main loop (thread_running=%d, global_interrupted=%d)\n", 
+           global_tone_detection.thread_running, global_interrupted);
+    
     while (global_tone_detection.thread_running && !global_interrupted) {
         static int main_loop_count = 0;
         main_loop_count++;
