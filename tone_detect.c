@@ -23,6 +23,7 @@ static int process_tone_sequences(double current_time_ms);
 static int find_local_maxima(double *magnitude_spectrum, int spectrum_size, 
                             peak_t *peaks, int max_peaks);
 static int compare_peaks(const void *a, const void *b);
+static void initialize_tone_sequences(void);
 
 // Initialize tone detection system
 int init_tone_detection(void) {
@@ -57,8 +58,58 @@ int init_tone_detection(void) {
         return 0;
     }
     
+    // Initialize tone sequences from configuration
+    initialize_tone_sequences();
+    
     printf("[TONE_DETECT] Tone detection system initialized successfully\n");
     return 1;
+}
+
+// Initialize tone sequences from configuration
+static void initialize_tone_sequences(void) {
+    printf("[TONE_DETECT] Initializing tone sequences...\n");
+    
+    global_tone_detection.num_active_sequences = 0;
+    
+    // Initialize sequences for each channel
+    for (int channel = 0; channel < MAX_CHANNELS; channel++) {
+        tone_detect_config_t *config = &global_tone_detection.configs[channel];
+        
+        if (!config->valid) {
+            continue;
+        }
+        
+        // Create sequences for each alert tone in this channel
+        for (int i = 0; i < config->num_alert_tones && global_tone_detection.num_active_sequences < MAX_TONE_SEQUENCES; i++) {
+            tone_definition_t *tone_def = &config->alert_tones[i];
+            
+            if (!tone_def->valid) {
+                continue;
+            }
+            
+            tone_sequence_state_t *sequence = &global_tone_detection.sequences[global_tone_detection.num_active_sequences];
+            
+            // Initialize sequence state
+            sequence->definition = tone_def;
+            sequence->state = TONE_STATE_IDLE;
+            sequence->tone_a_confirmed = 0;
+            sequence->tone_b_confirmed = 0;
+            sequence->tone_a_detected_duration_ms = 0;
+            sequence->tone_b_detected_duration_ms = 0;
+            sequence->recording_active = 0;
+            sequence->sequence_start_time_ms = 0;
+            sequence->recording_start_time_ms = 0;
+            sequence->last_detection_time_ms = 0;
+            
+            global_tone_detection.num_active_sequences++;
+            
+            printf("[TONE_DETECT] Initialized sequence %d: %.1fHz -> %.1fHz (ID: %s)\n", 
+                   global_tone_detection.num_active_sequences,
+                   tone_def->tone_a_freq, tone_def->tone_b_freq, tone_def->tone_id);
+        }
+    }
+    
+    printf("[TONE_DETECT] Initialized %d active tone sequences\n", global_tone_detection.num_active_sequences);
 }
 
 // Initialize FFT system
