@@ -1300,6 +1300,14 @@ int start_transmission_for_channel(struct audio_stream *audio_stream)
                 audio_stream->output_stream = NULL;
                 err = paNoError; // Continue without output stream
             }
+            
+            // For critical errors, don't continue with broken streams
+            if (err == paUnanticipatedHostError) {
+                printf("[ERROR] Critical host error for channel %s - skipping output stream creation\n", 
+                       audio_stream->channel_id);
+                audio_stream->output_stream = NULL;
+                err = paNoError; // Continue without output stream
+            }
 
             // Try different parameters for output - prioritize 48000 for consistency
             int sample_rates[] = {SAMPLE_RATE, 44100, 96000};
