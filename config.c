@@ -61,22 +61,20 @@ int load_channel_config(char channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN]) {
         if (json_object_object_get_ex(config_item, channel_keys[i], &channel_obj) &&
             json_object_object_get_ex(channel_obj, "channel_id", &channel_id_obj)) {
             const char* channel_id = json_object_get_string(channel_id_obj);
-            if (channel_id && strlen(channel_id) < 64) {
+            if (channel_id && strlen(channel_id) > 0 && strlen(channel_id) < 64) {
                 strncpy(channel_ids[i], channel_id, 63);
                 channel_ids[i][63] = '\0';
                 channels_loaded++;
                 printf("Loaded channel %d ID: %s\n", i + 1, channel_ids[i]);
             } else {
-                // Provide default channel ID if channel_id is empty or invalid
-                snprintf(channel_ids[i], 64, "channel_%d", i + 1);
-                channels_loaded++;
-                printf("Loaded channel %d ID: %s (default)\n", i + 1, channel_ids[i]);
+                // Skip channels with empty or invalid channel_id
+                printf("Skipping channel %d (%s) - no valid channel_id\n", i + 1, channel_keys[i]);
+                channel_ids[i][0] = '\0'; // Mark as empty
             }
         } else {
-            // Provide default channel ID if channel section is missing
-            snprintf(channel_ids[i], 64, "channel_%d", i + 1);
-            channels_loaded++;
-            printf("Loaded channel %d ID: %s (default - missing from config)\n", i + 1, channel_ids[i]);
+            // Skip channels that don't exist in config
+            printf("Skipping channel %d (%s) - not found in config\n", i + 1, channel_keys[i]);
+            channel_ids[i][0] = '\0'; // Mark as empty
         }
     }
     

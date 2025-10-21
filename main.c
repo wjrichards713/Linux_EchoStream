@@ -138,11 +138,16 @@ int main(int argc, char *argv[]) {
     printf("Setting up %d channels...\n", global_channel_count);
     
     for (int i = 0; i < global_channel_count; i++) {
-        printf("Setting up channel %d with ID: %s\n", i + 1, global_channel_ids[i]);
-        if (!setup_channel(&channels[i], global_channel_ids[i])) {
-            fprintf(stderr, "Failed to setup channel %d (%s)\n", i + 1, global_channel_ids[i]);
-            curl_global_cleanup();
-            return 1;
+        // Only set up channels with valid (non-empty) IDs
+        if (global_channel_ids[i][0] != '\0') {
+            printf("Setting up channel %d with ID: %s\n", i + 1, global_channel_ids[i]);
+            if (!setup_channel(&channels[i], global_channel_ids[i])) {
+                fprintf(stderr, "Failed to setup channel %d (%s)\n", i + 1, global_channel_ids[i]);
+                curl_global_cleanup();
+                return 1;
+            }
+        } else {
+            printf("Skipping channel %d - no valid ID\n", i + 1);
         }
     }
     
@@ -170,9 +175,11 @@ int main(int argc, char *argv[]) {
     printf("\n=== SYSTEM BEHAVIOR ===\n");
     printf("Channel Configuration:\n");
     for (int i = 0; i < global_channel_count; i++) {
-        printf("  Channel %d (%s):\n", i + 1, global_channel_ids[i]);
-        printf("    - Output: ALWAYS plays EchoStream audio\n");
-        printf("    - Input: ENABLED (standard EchoStream)\n");
+        if (global_channel_ids[i][0] != '\0') {
+            printf("  Channel %d (%s):\n", i + 1, global_channel_ids[i]);
+            printf("    - Output: ALWAYS plays EchoStream audio\n");
+            printf("    - Input: ENABLED (standard EchoStream)\n");
+        }
     }
     // Remove stale example tones output; tones are from JSON only
     
