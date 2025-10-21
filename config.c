@@ -173,22 +173,22 @@ int load_complete_config(void) {
             }
             
             
-            channel_config->valid = 1;
-            channels_loaded++;
-            printf("Loaded channel %d config: ID=%s\n", 
-                   i+1, channel_config->channel_id);
+            // Only mark as valid if channel_id is not empty
+            if (channel_config->channel_id[0] != '\0') {
+                channel_config->valid = 1;
+                channels_loaded++;
+                printf("Loaded channel %d config: ID=%s\n", 
+                       i+1, channel_config->channel_id);
+            } else {
+                channel_config->valid = 0;
+                printf("Skipping channel %d (%s) - no valid channel_id\n", i + 1, channel_keys[i]);
+            }
         } else {
-            // Provide default configuration for missing channels
+            // Skip channels that don't exist in config
+            printf("Skipping channel %d (%s) - not found in config\n", i + 1, channel_keys[i]);
             struct channel_config *channel_config = &global_app_config.channels[i];
-            snprintf(channel_config->channel_id, 64, "channel_%d", i + 1);
-            channel_config->input_low_one = 0;
-            channel_config->input_low_two = 0;
-            channel_config->input_high_one = 0;
-            channel_config->input_high_two = 0;
-            channel_config->valid = 1;
-            channels_loaded++;
-            printf("Loaded channel %d config: ID=%s (default - missing from config)\n", 
-                   i+1, channel_config->channel_id);
+            channel_config->channel_id[0] = '\0'; // Mark as empty
+            channel_config->valid = 0; // Mark as invalid
         }
     }
     
