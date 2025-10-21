@@ -88,6 +88,8 @@ typedef struct {
 
 // Tone detection configuration
 typedef struct {
+    char channel_id[64];                    // Channel ID for this configuration
+    int tone_detect_enabled;                // Whether tone detection is enabled for this channel
     int tone_passthrough;                    // Enable tone passthrough
     char passthrough_channel[64];           // Target channel for passthrough
     tone_definition_t alert_tones[MAX_TONE_DEFINITIONS];

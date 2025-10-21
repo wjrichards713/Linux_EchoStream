@@ -1007,8 +1007,8 @@ int load_tone_detection_config(void) {
             // Load basic channel info
             cJSON *channel_id = cJSON_GetObjectItemCaseSensitive(channel_obj, "channel_id");
             if (cJSON_IsString(channel_id)) {
-                strncpy(config->passthrough_channel, cJSON_GetStringValue(channel_id), 63);
-                config->passthrough_channel[63] = '\0';
+                strncpy(config->channel_id, cJSON_GetStringValue(channel_id), 63);
+                config->channel_id[63] = '\0';
             } else {
                 // If no channel_id provided, skip this channel (like channel_four)
                 printf("[TONE_DETECT] Channel %s has no channel_id, skipping\n", channel_keys[i]);
@@ -1018,6 +1018,7 @@ int load_tone_detection_config(void) {
             // Load tone detection settings
             cJSON *tone_detect = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect");
             if (cJSON_IsBool(tone_detect) && cJSON_IsTrue(tone_detect)) {
+                config->tone_detect_enabled = 1;
                 // Load tone detection configuration
                 cJSON *tone_config = cJSON_GetObjectItemCaseSensitive(channel_obj, "tone_detect_configuration");
                 if (cJSON_IsObject(tone_config)) {
@@ -1056,9 +1057,10 @@ int load_tone_detection_config(void) {
                     config->valid = 1;
                     channels_loaded++;
                     printf("[TONE_DETECT] Loaded tone detection config for channel %d (%s)\n", 
-                           i, config->passthrough_channel);
+                           i, config->channel_id);
                 }
             } else {
+                config->tone_detect_enabled = 0;
                 printf("[TONE_DETECT] Channel %s has tone_detect=%s, skipping\n", 
                        channel_keys[i], cJSON_IsBool(tone_detect) ? (cJSON_IsTrue(tone_detect) ? "true" : "false") : "not set");
             }
@@ -1327,8 +1329,8 @@ int get_passthrough_target_channel_index(void) {
     // Look through ALL channel configurations to find which one has tone_passthrough enabled
     for (int config_idx = 0; config_idx < MAX_CHANNELS; config_idx++) {
         tone_detect_config_t *config = get_tone_detect_config(config_idx);
-        if (!config || !config->valid || !config->tone_passthrough) {
-            continue; // Skip invalid configs or channels without tone passthrough enabled
+        if (!config || !config->valid || !config->tone_detect_enabled || !config->tone_passthrough) {
+            continue; // Skip invalid configs or channels without tone detection or tone passthrough enabled
         }
         
         printf("[TONE_DETECT] Found channel %d with tone_passthrough enabled, target: %s\n", 
