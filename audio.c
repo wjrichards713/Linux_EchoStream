@@ -176,8 +176,8 @@ static void periodic_passthrough_repair(void)
     static int repair_attempt_count = 0;
     repair_attempt_count++;
 
-    // Try to repair every 1000 calls (roughly every 10-20 seconds) - MUST SUCCEED
-    if (repair_attempt_count % 1000 == 0)
+    // Try to repair every 10000 calls (roughly every 100-200 seconds) - MUST SUCCEED
+    if (repair_attempt_count % 10000 == 0)
     {
         int configured_target = get_passthrough_target_channel_index();
         if (configured_target >= 0)
@@ -185,7 +185,7 @@ static void periodic_passthrough_repair(void)
             if (!channel_has_output_stream(configured_target))
             {
                 printf("[DEBUG] *** PERIODIC REPAIR ATTEMPT #%d FOR PASSTHROUGH TARGET CHANNEL %d ***\n",
-                       repair_attempt_count / 1000, configured_target);
+                       repair_attempt_count / 10000, configured_target);
                 printf("[CRITICAL] *** PASSTHROUGH TARGET MUST WORK - ATTEMPTING REPAIR ***\n");
 
                 // Keep trying repair until success
@@ -231,9 +231,6 @@ static int is_configured_passthrough_channel_id(const char *channel_id)
         if (!tone_cfg || !tone_cfg->valid || !tone_cfg->tone_passthrough) {
             continue; // Skip invalid configs or channels without tone passthrough enabled
         }
-        
-        // Run periodic repair attempts
-        periodic_passthrough_repair();
 
         // Check if this channel matches the configured passthrough target
         // The passthrough_channel can be either a channel name (channel_one, channel_two, etc.) 
@@ -492,6 +489,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         printf("Audio input callback called #%d (frames=%lu, transmitting=%d, gpio_active=%d)\n",
                callback_count, frames, audio_stream->transmitting, audio_stream->gpio_active);
     }
+    
+    // Run periodic repair attempts for passthrough target
+    periodic_passthrough_repair();
 
     // Check if this channel has tone detection enabled (configurable from config.json)
     int channel_has_tone_detect = 0;
@@ -1991,9 +1991,88 @@ int tone_passthrough_callback(const void *input, void *output, unsigned long fra
     return paContinue;
 }
 
-// Repair passthrough output stream (placeholder implementation)
+// Repair passthrough output stream
 int repair_passthrough_output_stream(int channel_index) {
-    (void)channel_index; // Suppress unused parameter warning
-    printf("[AUDIO] Repairing passthrough output stream for channel %d (placeholder)\n", channel_index);
-    return 1; // Placeholder - always return success
+    if (channel_index < 0 || channel_index >= MAX_CHANNELS) {
+        printf("[ERROR] Invalid channel index %d for passthrough repair\n", channel_index);
+        return 0;
+    }
+    
+    struct channel_context *ctx = &channels[channel_index];
+    struct audio_stream *audio_stream = &ctx->audio;
+    
+    printf("[AUDIO] Repairing passthrough output stream for channel %d (%s)\n", 
+           channel_index, audio_stream->channel_id);
+    
+    // If output stream already exists and is active, no repair needed
+    if (audio_stream->output_stream && Pa_IsStreamActive(audio_stream->output_stream)) {
+        printf("[AUDIO] Output stream already exists and is active for channel %d\n", channel_index);
+        return 1;
+    }
+    
+    // Close existing output stream if it exists but is not active
+    if (audio_stream->output_stream) {
+        printf("[AUDIO] Closing inactive output stream for channel %d\n", channel_index);
+        Pa_CloseStream(audio_stream->output_stream);
+        audio_stream->output_stream = NULL;
+    }
+    
+    // Get the device for this channel
+    PaDeviceIndex device = get_device_for_channel(audio_stream->channel_id);
+    if (device == paNoDevice) {
+        printf("[ERROR] No device available for channel %d\n", channel_index);
+        return 0;
+    }
+    
+    // Set up output parameters
+    PaStreamParameters output_params;
+    output_params.device = device;
+    output_params.channelCount = 1; // Mono output
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    // Try to create output stream with different parameters
+    int sample_rates[] = {48000, 44100, 96000};
+    int buffer_sizes[] = {512, 1024, 2048};
+    PaError err = paNoError;
+    
+    for (int i = 0; i < 3 && err != paNoError; i++) {
+        for (int j = 0; j < 3 && err != paNoError; j++) {
+            printf("[AUDIO] Trying to create output stream with sample_rate=%d, buffer_size=%d\n", 
+                   sample_rates[i], buffer_sizes[j]);
+            
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 
+                               sample_rates[i], buffer_sizes[j], paClipOff, 
+                               audio_output_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("[AUDIO] Output stream created successfully with sample_rate=%d, buffer_size=%d\n", 
+                       sample_rates[i], buffer_sizes[j]);
+                break;
+            } else {
+                printf("[AUDIO] Failed with sample_rate=%d, buffer_size=%d: %s\n", 
+                       sample_rates[i], buffer_sizes[j], Pa_GetErrorText(err));
+            }
+        }
+    }
+    
+    if (err != paNoError) {
+        printf("[ERROR] Failed to create output stream for channel %d: %s\n", 
+               channel_index, Pa_GetErrorText(err));
+        return 0;
+    }
+    
+    // Start the output stream
+    err = Pa_StartStream(audio_stream->output_stream);
+    if (err != paNoError) {
+        printf("[ERROR] Failed to start output stream for channel %d: %s\n", 
+               channel_index, Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->output_stream);
+        audio_stream->output_stream = NULL;
+        return 0;
+    }
+    
+    printf("[AUDIO] Output stream started successfully for channel %d\n", channel_index);
+    return 1;
 }
