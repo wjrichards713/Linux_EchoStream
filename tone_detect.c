@@ -30,6 +30,7 @@ int init_tone_detection(void) {
     printf("[TONE_DETECT] Initializing tone detection system...\n");
     
     // Initialize global tone detection control
+    printf("[TONE_DETECT] Initializing global tone detection control...\n");
     memset(&global_tone_detect, 0, sizeof(tone_detect_control_t));
     global_tone_detect.enabled = 1;
     global_tone_detect.card1_input_enabled = 1;
@@ -37,28 +38,33 @@ int init_tone_detection(void) {
     pthread_mutex_init(&global_tone_detect.mutex, NULL);
     
     // Initialize passthrough buffer
+    printf("[TONE_DETECT] Initializing passthrough buffer...\n");
     memset(&global_passthrough_buffer, 0, sizeof(passthrough_audio_buffer_t));
     pthread_mutex_init(&global_passthrough_buffer.mutex, NULL);
     
     // Initialize tone detection state
+    printf("[TONE_DETECT] Initializing tone detection state...\n");
     memset(&global_tone_detection, 0, sizeof(tone_state_t));
     global_tone_detection.thread_running = 0;
     pthread_mutex_init(&global_tone_detection.state_mutex, NULL);
     pthread_cond_init(&global_tone_detection.data_ready, NULL);
     
     // Initialize FFT
+    printf("[TONE_DETECT] Initializing FFT...\n");
     if (!initialize_fft()) {
         printf("[ERROR] Failed to initialize FFT\n");
         return 0;
     }
     
     // Load tone detection configuration
+    printf("[TONE_DETECT] Loading tone detection configuration...\n");
     if (!load_tone_detection_config()) {
         printf("[WARNING] Failed to load tone detection configuration\n");
         return 0;
     }
     
     // Initialize tone sequences from configuration
+    printf("[TONE_DETECT] Initializing tone sequences...\n");
     initialize_tone_sequences();
     
     printf("[TONE_DETECT] Tone detection system initialized successfully\n");
@@ -921,11 +927,13 @@ int load_tone_detection_config(void) {
     const char* config_path = "/home/will/.an/config.json";
     printf("[TONE_DETECT] Loading tone detection configuration from %s\n", config_path);
     
+    printf("[TONE_DETECT] Attempting to open config file...\n");
     FILE *file = fopen(config_path, "r");
     if (!file) {
         printf("[ERROR] Could not open config file %s: %s\n", config_path, strerror(errno));
         return 0;
     }
+    printf("[TONE_DETECT] Config file opened successfully\n");
     
     // Read the entire file
     fseek(file, 0, SEEK_END);
@@ -944,6 +952,7 @@ int load_tone_detection_config(void) {
     fclose(file);
     
     // Parse JSON
+    printf("[TONE_DETECT] Parsing JSON configuration...\n");
     cJSON *json = cJSON_Parse(json_string);
     if (!json) {
         const char *error_ptr = cJSON_GetErrorPtr();
@@ -956,14 +965,18 @@ int load_tone_detection_config(void) {
         printf("[WARNING] Failed to parse config JSON, using default tone detection configuration\n");
         return create_default_tone_config();
     }
+    printf("[TONE_DETECT] JSON parsed successfully\n");
     free(json_string);
     
     // Try to navigate to software configuration, but provide fallback
+    printf("[TONE_DETECT] Navigating to software configuration...\n");
     cJSON *shadow = cJSON_GetObjectItemCaseSensitive(json, "shadow");
-    cJSON *state = NULL;
+    printf("[TONE_DETECT] Shadow object found: %s\n", cJSON_IsObject(shadow) ? "YES" : "NO");
     
+    cJSON *state = NULL;
     if (cJSON_IsObject(shadow)) {
         state = cJSON_GetObjectItemCaseSensitive(shadow, "state");
+        printf("[TONE_DETECT] State object found: %s\n", cJSON_IsObject(state) ? "YES" : "NO");
     }
     
     if (!cJSON_IsObject(state)) {
@@ -974,6 +987,7 @@ int load_tone_detection_config(void) {
     }
     
     cJSON *desired = cJSON_GetObjectItemCaseSensitive(state, "desired");
+    printf("[TONE_DETECT] Desired object found: %s\n", cJSON_IsObject(desired) ? "YES" : "NO");
     if (!cJSON_IsObject(desired)) {
         printf("[ERROR] No desired object in config\n");
         cJSON_Delete(json);
@@ -981,6 +995,11 @@ int load_tone_detection_config(void) {
     }
     
     cJSON *software_config = cJSON_GetObjectItemCaseSensitive(desired, "software_configuration");
+    printf("[TONE_DETECT] Software configuration array found: %s\n", cJSON_IsArray(software_config) ? "YES" : "NO");
+    if (cJSON_IsArray(software_config)) {
+        printf("[TONE_DETECT] Software configuration array size: %d\n", cJSON_GetArraySize(software_config));
+    }
+    
     if (!cJSON_IsArray(software_config) || cJSON_GetArraySize(software_config) == 0) {
         printf("[ERROR] No software_configuration array in config\n");
         cJSON_Delete(json);
@@ -988,6 +1007,7 @@ int load_tone_detection_config(void) {
     }
     
     cJSON *config_item = cJSON_GetArrayItem(software_config, 0);
+    printf("[TONE_DETECT] Configuration item found: %s\n", cJSON_IsObject(config_item) ? "YES" : "NO");
     if (!cJSON_IsObject(config_item)) {
         printf("[ERROR] No configuration item in software_configuration\n");
         cJSON_Delete(json);

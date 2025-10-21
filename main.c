@@ -83,11 +83,19 @@ int main(int argc, char *argv[]) {
     
     // Initialize tone detection system
     printf("[MAIN] Initializing tone detection system...\n");
-    if (init_tone_detection()) {
+    printf("[MAIN] About to call init_tone_detection()...\n");
+    int tone_init_result = init_tone_detection();
+    printf("[MAIN] init_tone_detection() returned: %d\n", tone_init_result);
+    
+    if (tone_init_result) {
         printf("[MAIN] Tone detection system initialized successfully\n");
         
         // Start tone detection thread
-        if (start_tone_detection()) {
+        printf("[MAIN] About to call start_tone_detection()...\n");
+        int tone_start_result = start_tone_detection();
+        printf("[MAIN] start_tone_detection() returned: %d\n", tone_start_result);
+        
+        if (tone_start_result) {
             printf("[MAIN] Tone detection thread started successfully\n");
         } else {
             printf("[MAIN] WARNING: Failed to start tone detection thread\n");
