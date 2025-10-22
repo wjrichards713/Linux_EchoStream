@@ -845,8 +845,10 @@ static struct {
 // Play detected Tone A and Tone B sequence through target channel output
 void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float tone_b_freq, 
                             float tone_a_duration, float tone_b_duration) {
-    printf("[ALERT PLAYBACK] Starting alert playback: channel=%d, A=%.1fHz(%.1fms), B=%.1fHz(%.1fms)\n", 
-           target_channel_idx + 1, tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
+    printf("\n🔊 [ALERT PLAYBACK] Generating alert tones...\n");
+    printf("   📍 Target Channel: %d\n", target_channel_idx + 1);
+    printf("   🎵 Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
+    printf("   🎵 Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
     
     if (target_channel_idx < 0 || target_channel_idx >= MAX_CHANNELS) {
         printf("[ALERT PLAYBACK] Invalid target channel index: %d\n", target_channel_idx);
@@ -880,15 +882,15 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     }
     
     // Generate Tone A
-    printf("[ALERT PLAYBACK] Generating Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
+    printf("   🎼 Generating Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
     generate_alert_tone(tone_a_freq, tone_a_duration, alert_buffer, SAMPLE_RATE);
     
     // Generate Tone B (append to buffer after Tone A)
-    printf("[ALERT PLAYBACK] Generating Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
+    printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
     generate_alert_tone(tone_b_freq, tone_b_duration, &alert_buffer[tone_a_samples], SAMPLE_RATE);
     
     // Set up global alert playback state
-    printf("[ALERT PLAYBACK] Setting up alert playback: total_samples=%d, target_channel=%d\n", 
+    printf("   ✅ Alert buffer ready: %d samples, playing on channel %d\n", 
            total_samples, target_channel_idx + 1);
     global_alert_playback.active = 1;
     global_alert_playback.tone_a_frequency = tone_a_freq;
@@ -913,8 +915,12 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
         return 0; // No alert playing
     }
     
-    printf("[ALERT PLAYBACK] Getting audio samples: played=%d/%d, max_samples=%d\n", 
-           global_alert_playback.samples_played, global_alert_playback.total_samples, max_samples);
+    // Only log occasionally to reduce spam
+    static int sample_log_counter = 0;
+    if (++sample_log_counter % 50 == 0) {
+        printf("   🔊 Playing alert: %d/%d samples\n", 
+               global_alert_playback.samples_played, global_alert_playback.total_samples);
+    }
     
     int samples_to_copy = max_samples;
     int remaining_samples = global_alert_playback.total_samples - global_alert_playback.samples_played;
@@ -936,19 +942,19 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
         // Still playing Tone A
         if (global_alert_playback.current_phase != 0) {
             global_alert_playback.current_phase = 0;
-            printf("[ALERT PLAYBACK] Playing Tone A: %.1f Hz\n", global_alert_playback.tone_a_frequency);
+            printf("   🎵 Now playing Tone A: %.1f Hz\n", global_alert_playback.tone_a_frequency);
         }
     } else {
         // Playing Tone B
         if (global_alert_playback.current_phase != 1) {
             global_alert_playback.current_phase = 1;
-            printf("[ALERT PLAYBACK] Playing Tone B: %.1f Hz\n", global_alert_playback.tone_b_frequency);
+            printf("   🎵 Now playing Tone B: %.1f Hz\n", global_alert_playback.tone_b_frequency);
         }
     }
     
     // Check if alert is finished
     if (global_alert_playback.samples_played >= global_alert_playback.total_samples) {
-        printf("[ALERT PLAYBACK] Detected tone sequence finished playing\n");
+        printf("\n✅ [ALERT COMPLETE] Alert sequence finished playing\n");
         global_alert_playback.active = 0;
         free(global_alert_playback.alert_buffer);
         global_alert_playback.alert_buffer = NULL;
@@ -1220,7 +1226,11 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         return 0;
     }
     
-    printf("[TONE] Volume level: %.1f dB (threshold: %d dB)\n", volume, global_tone_detection.config.db_threshold);
+    // Only log volume occasionally to reduce spam
+    static int volume_log_counter = 0;
+    if (++volume_log_counter % 100 == 0) {
+        printf("[TONE] Volume level: %.1f dB (threshold: %d dB)\n", volume, global_tone_detection.config.db_threshold);
+    }
     
     // Process each tone definition
     for (int t = 0; t < MAX_TONE_DEFINITIONS; t++) {
@@ -1255,22 +1265,20 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         float tone_a_freq = freq_from_fft(tone_a_segment, tone_a_samples, SAMPLE_RATE);
         float tone_b_freq = freq_from_fft(tone_b_segment, tone_b_samples, SAMPLE_RATE);
         
-        printf("[TONE] Analyzing: Tone A = %.1f Hz, Tone B = %.1f Hz\n", tone_a_freq, tone_b_freq);
-        
         // Check if frequencies match within tolerance
         int tone_a_tolerance = tone_def->tone_a_range_hz; // Use Tone A's configured tolerance
         int tone_b_tolerance = tone_def->tone_b_range_hz; // Use Tone B's configured tolerance
         int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tone_a_tolerance);
         int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tone_b_tolerance);
         
-        printf("[TONE] Checking: A=%.1f vs %.1f (tolerance=%d), B=%.1f vs %.1f (tolerance=%d)\n", 
-               tone_a_freq, tone_def->tone_a_freq, tone_a_tolerance,
-               tone_b_freq, tone_def->tone_b_freq, tone_b_tolerance);
-        
         if (tone_a_match && tone_b_match) {
-            printf("[TONE DETECTED] Match found! ID: %s, A: %.1f Hz, B: %.1f Hz\n", 
-                   tone_def->tone_id, tone_a_freq, tone_b_freq);
-            printf("[TONE] Triggering passthrough for detected alert...\n");
+            printf("\n🎯 [ALERT DETECTED] Tone sequence matched!\n");
+            printf("   📊 Alert ID: %s\n", tone_def->tone_id);
+            printf("   🔊 Tone A: %.1f Hz (expected: %.1f Hz ±%d Hz)\n", 
+                   tone_a_freq, tone_def->tone_a_freq, tone_a_tolerance);
+            printf("   🔊 Tone B: %.1f Hz (expected: %.1f Hz ±%d Hz)\n", 
+                   tone_b_freq, tone_def->tone_b_freq, tone_b_tolerance);
+            printf("   ⚡ Triggering alert playback...\n\n");
             
             // Start recording if configured
             if (tone_def->record_length_ms > 0) {
