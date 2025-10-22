@@ -173,15 +173,16 @@ PaDeviceIndex get_device_for_channel(const char *channel)
 // Placeholder functions for audio encoding and UDP sending
 static int encode_audio_data(const float *samples, unsigned long frames, unsigned char *buffer, int buffer_size) {
     // Simple placeholder - just copy samples as-is
-    if (frames * sizeof(float) > buffer_size) {
+    if ((int)(frames * sizeof(float)) > buffer_size) {
         return 0;
     }
     memcpy(buffer, samples, frames * sizeof(float));
-    return frames * sizeof(float);
+    return (int)(frames * sizeof(float));
 }
 
 static int send_audio_data(const char *channel_id, const unsigned char *data, int data_size) {
     // Placeholder - just log the data
+    (void)data; // Suppress unused parameter warning
     static int send_count = 0;
     if (send_count++ % 1000 == 0) {
         printf("[UDP] Would send %d bytes for channel %s\n", data_size, channel_id);
@@ -264,9 +265,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 }
 
 // Audio output callback
-static int audio_output_callback(const void *input, void *output, unsigned long frames,
-                                 const PaStreamCallbackTimeInfo *time_info,
-                                 PaStreamCallbackFlags flags, void *user_data)
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo *time_info,
+                         PaStreamCallbackFlags flags, void *user_data)
 {
     (void)input;     // Suppress unused parameter warning
     (void)time_info; // Suppress unused parameter warning
@@ -377,10 +378,10 @@ int setup_audio_stream(struct audio_stream *audio_stream, const char *channel_id
 }
 
 // Setup channel
-int setup_channel(const char *channel_id)
+int setup_channel(struct channel_context *ctx, const char *channel_id)
 {
-    if (!channel_id || strlen(channel_id) == 0) {
-        printf("[ERROR] Invalid channel ID provided\n");
+    if (!ctx || !channel_id || strlen(channel_id) == 0) {
+        printf("[ERROR] Invalid parameters for setup_channel\n");
         return 0;
     }
 
@@ -420,7 +421,7 @@ int setup_channel(const char *channel_id)
 }
 
 // Cleanup audio devices
-void cleanup_audio_devices(void)
+int cleanup_audio_devices(void)
 {
     printf("[INFO] Cleaning up audio devices...\n");
     
@@ -438,4 +439,5 @@ void cleanup_audio_devices(void)
     }
     
     printf("[INFO] Audio devices cleaned up\n");
+    return 1;
 }
