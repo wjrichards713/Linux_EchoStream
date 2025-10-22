@@ -791,18 +791,40 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     }
     
     // Setup output stream for other channels
-    // Special handling for the last channel (typically the passthrough target) - use Device 0 for output to avoid PulseAudio issues
-    extern int global_channel_count;
-    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-    int is_last_channel_setup = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
+    // Use the assigned device for this channel to avoid conflicts
+    output_params.device = audio_stream->device_index;
+    output_params.channelCount = 1;
     
-    if (is_last_channel_setup) {
-        printf("[DEBUG] Last channel: Using Device 0 for output (avoiding PulseAudio issues)\n");
-        output_params.device = 0; // Use Device 0 which is stable
-        output_params.channelCount = 2; // Device 0 has 2 output channels
-    } else {
-        output_params.device = audio_stream->device_index;
-        output_params.channelCount = 1;
+    // Check if this device is already in use by another channel
+    static int used_devices[MAX_CHANNELS] = {-1, -1, -1, -1};
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (used_devices[i] == output_params.device) {
+            printf("[DEBUG] Device %d already in use, trying next available device\n", output_params.device);
+            // Try to find an unused device
+            for (int j = 0; j < Pa_GetDeviceCount(); j++) {
+                int device_in_use = 0;
+                for (int k = 0; k < MAX_CHANNELS; k++) {
+                    if (used_devices[k] == j) {
+                        device_in_use = 1;
+                        break;
+                    }
+                }
+                if (!device_in_use) {
+                    output_params.device = j;
+                    printf("[DEBUG] Switching to unused device %d\n", j);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    
+    // Mark this device as used
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (used_devices[i] == -1) {
+            used_devices[i] = output_params.device;
+            break;
+        }
     }
     output_params.sampleFormat = paFloat32;
     
@@ -811,6 +833,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     if (device_info) {
         printf("[DEBUG] Device %d info: maxOutputChannels=%d, maxInputChannels=%d, name=%s\n", 
                output_params.device, device_info->maxOutputChannels, device_info->maxInputChannels, device_info->name);
+        
+        // Ensure the device supports output
+        if (device_info->maxOutputChannels == 0) {
+            printf("[DEBUG] Device %d has no output channels, trying default output device\n", output_params.device);
+            output_params.device = Pa_GetDefaultOutputDevice();
+            device_info = Pa_GetDeviceInfo(output_params.device);
+        }
         
         // Handle devices that PortAudio incorrectly reports as having 0 output channels
         // Some USB audio devices have output capability but PortAudio doesn't detect it properly
@@ -842,7 +871,12 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
 
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
-        printf("[DEBUG] Failed to create output stream for channel %s\n", audio_stream->channel_id);
+        printf("[DEBUG] Failed to create output stream for channel %s on device %d\n", audio_stream->channel_id, output_params.device);
+        
+        // Check if this is a device conflict (device already in use)
+        if (err == paDeviceUnavailable) {
+            printf("[DEBUG] Device %d is unavailable (likely in use by another channel)\n", output_params.device);
+        }
         
         // Try alternative approaches for devices that fail with standard parameters
         printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
