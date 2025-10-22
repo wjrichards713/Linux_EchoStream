@@ -312,7 +312,25 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
             printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d\n", frames, global_shared_buffer.valid);
         }
         
-        // Tone detection reads directly from shared buffer
+        // Process audio using Python approach (sliding window with FFT on specific time segments)
+        if (process_audio_python_approach(samples, frames)) {
+            printf("[TONE DETECTED] Alert tone detected on channel %s\n", audio_stream->channel_id);
+            
+            // Handle passthrough if configured
+            struct channel_config* channel_config = NULL;
+            for (int i = 0; i < MAX_CHANNELS; i++) {
+                struct channel_config* cfg = get_channel_config(i);
+                if (cfg && cfg->valid && strcmp(cfg->channel_id, audio_stream->channel_id) == 0) {
+                    channel_config = cfg;
+                    break;
+                }
+            }
+            
+            if (channel_config && channel_config->tone_detect_config.tone_passthrough) {
+                printf("[TONE] Passthrough triggered to %s\n", channel_config->tone_detect_config.passthrough_channel);
+                // TODO: Implement passthrough functionality
+            }
+        }
     }
     
     // Process audio for EchoStream (only if input is enabled for this channel)
@@ -450,6 +468,14 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
+        // Add alert tones if playing
+        if (is_alert_playing()) {
+            int alert_samples = get_alert_audio_samples(out, frames);
+            if (alert_samples > 0) {
+                printf("[ALERT PLAYBACK] Mixing alert tone with passthrough audio - %d samples\n", alert_samples);
+            }
+        }
+        
     // Debug logging for passthrough audio
     static int passthrough_audio_count = 0;
     if (passthrough_audio_count++ % 1000 == 0) {
@@ -520,6 +546,14 @@ static int audio_output_callback(const void *input, void *output, unsigned long 
                 out[i] = 0.0f;
             }
             frames_filled = frames;
+        }
+    }
+    
+    // Add alert tones if playing (for normal EchoStream output)
+    if (is_alert_playing()) {
+        int alert_samples = get_alert_audio_samples(out, frames);
+        if (alert_samples > 0) {
+            printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
         }
     }
     

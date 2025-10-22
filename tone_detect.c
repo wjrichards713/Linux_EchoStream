@@ -13,6 +13,12 @@
 // Global tone detection state
 struct tone_detection_state global_tone_detection = {0};
 
+// Audio buffer for sliding window analysis (following Python approach)
+#define MAX_AUDIO_BUFFER_SAMPLES (10 * SAMPLE_RATE) // 10 seconds max
+static float audio_buffer[MAX_AUDIO_BUFFER_SAMPLES];
+static int audio_buffer_pos = 0;
+static int audio_buffer_size = 0;
+
 // Initialize tone detection system
 int init_tone_detection(void) {
     // Save existing tone definitions before clearing
@@ -802,27 +808,210 @@ void reset_tone_detection_stats(void) {
     global_tone_detection.new_tone_detections = 0;
 }
 
-// Trigger tone passthrough when tones are detected
-void trigger_tone_passthrough(void) {
-    // Check if tone passthrough is configured for channel 1 (index 0)
-    struct tone_detect_config* tone_config = get_tone_detect_config(0); // Channel 1
+// Generate alert tone for local playback
+void generate_alert_tone(float frequency, float duration_seconds, float* output_buffer, int sample_rate) {
+    int samples = (int)(duration_seconds * sample_rate);
     
-    if (tone_config && tone_config->tone_passthrough) {
-        // Check if the target channel has a working output stream
-        int target_channel_idx = get_passthrough_target_channel_index();
-        if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-            if (channel_has_output_stream(target_channel_idx)) {
-                printf("[TONE PASSTHROUGH] Tone detected, activating passthrough\n");
-                // Enable passthrough mode; audio.c routes to the configured target from JSON
-                set_passthrough_output_mode(1);
-            } else {
-                printf("[TONE PASSTHROUGH] Tone detected but target channel has no output stream - passthrough disabled\n");
-            }
-        } else {
-            printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index - passthrough disabled\n");
+    for (int i = 0; i < samples; i++) {
+        float t = (float)i / sample_rate;
+        // Generate sine wave with envelope (fade in/out)
+        float envelope = 1.0f;
+        if (i < sample_rate * 0.1f) {
+            envelope = (float)i / (sample_rate * 0.1f); // Fade in
+        } else if (i > samples - sample_rate * 0.1f) {
+            envelope = (samples - i) / (sample_rate * 0.1f); // Fade out
+        }
+        
+        output_buffer[i] = envelope * 0.3f * sin(2.0f * M_PI * frequency * t);
+    }
+}
+
+// Global alert playback state
+static struct {
+    int active;
+    float tone_a_frequency;
+    float tone_b_frequency;
+    float tone_a_duration_seconds;
+    float tone_b_duration_seconds;
+    int samples_played;
+    int total_samples;
+    float* alert_buffer;
+    int target_channel_idx;
+    int current_phase; // 0 = playing tone A, 1 = playing tone B
+    int tone_a_samples_played;
+    int tone_b_samples_played;
+} global_alert_playback = {0};
+
+// Play detected Tone A and Tone B sequence through target channel output
+void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float tone_b_freq, 
+                            float tone_a_duration, float tone_b_duration) {
+    if (target_channel_idx < 0 || target_channel_idx >= MAX_CHANNELS) {
+        printf("[ALERT PLAYBACK] Invalid target channel index: %d\n", target_channel_idx);
+        return;
+    }
+    
+    if (!channel_has_output_stream(target_channel_idx)) {
+        printf("[ALERT PLAYBACK] Target channel %d has no output stream\n", target_channel_idx + 1);
+        return;
+    }
+    
+    // Stop any existing alert playback
+    if (global_alert_playback.active) {
+        printf("[ALERT PLAYBACK] Stopping previous alert to start new one\n");
+        if (global_alert_playback.alert_buffer) {
+            free(global_alert_playback.alert_buffer);
+            global_alert_playback.alert_buffer = NULL;
+        }
+    }
+    
+    // Calculate total samples needed for both tones
+    int tone_a_samples = (int)(tone_a_duration * SAMPLE_RATE);
+    int tone_b_samples = (int)(tone_b_duration * SAMPLE_RATE);
+    int total_samples = tone_a_samples + tone_b_samples;
+    
+    // Allocate buffer for both tones
+    float* alert_buffer = malloc(total_samples * sizeof(float));
+    if (!alert_buffer) {
+        printf("[ALERT PLAYBACK] Failed to allocate memory for alert tones\n");
+        return;
+    }
+    
+    // Generate Tone A
+    generate_alert_tone(tone_a_freq, tone_a_duration, alert_buffer, SAMPLE_RATE);
+    
+    // Generate Tone B (append to buffer after Tone A)
+    generate_alert_tone(tone_b_freq, tone_b_duration, &alert_buffer[tone_a_samples], SAMPLE_RATE);
+    
+    // Set up global alert playback state
+    global_alert_playback.active = 1;
+    global_alert_playback.tone_a_frequency = tone_a_freq;
+    global_alert_playback.tone_b_frequency = tone_b_freq;
+    global_alert_playback.tone_a_duration_seconds = tone_a_duration;
+    global_alert_playback.tone_b_duration_seconds = tone_b_duration;
+    global_alert_playback.samples_played = 0;
+    global_alert_playback.total_samples = total_samples;
+    global_alert_playback.alert_buffer = alert_buffer;
+    global_alert_playback.target_channel_idx = target_channel_idx;
+    global_alert_playback.current_phase = 0; // Start with Tone A
+    global_alert_playback.tone_a_samples_played = 0;
+    global_alert_playback.tone_b_samples_played = 0;
+    
+    printf("[ALERT PLAYBACK] Playing detected tones: A=%.1f Hz (%.1fs), B=%.1f Hz (%.1fs) on channel %d\n", 
+           tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration, target_channel_idx + 1);
+}
+
+// Get alert audio samples for output callback (called from audio.c)
+int get_alert_audio_samples(float* output_buffer, int max_samples) {
+    if (!global_alert_playback.active || !global_alert_playback.alert_buffer) {
+        return 0; // No alert playing
+    }
+    
+    int samples_to_copy = max_samples;
+    int remaining_samples = global_alert_playback.total_samples - global_alert_playback.samples_played;
+    
+    if (samples_to_copy > remaining_samples) {
+        samples_to_copy = remaining_samples;
+    }
+    
+    // Copy alert samples to output buffer
+    for (int i = 0; i < samples_to_copy; i++) {
+        output_buffer[i] += global_alert_playback.alert_buffer[global_alert_playback.samples_played + i];
+    }
+    
+    global_alert_playback.samples_played += samples_to_copy;
+    
+    // Update phase tracking
+    int tone_a_samples = (int)(global_alert_playback.tone_a_duration_seconds * SAMPLE_RATE);
+    if (global_alert_playback.samples_played <= tone_a_samples) {
+        // Still playing Tone A
+        if (global_alert_playback.current_phase != 0) {
+            global_alert_playback.current_phase = 0;
+            printf("[ALERT PLAYBACK] Playing Tone A: %.1f Hz\n", global_alert_playback.tone_a_frequency);
         }
     } else {
+        // Playing Tone B
+        if (global_alert_playback.current_phase != 1) {
+            global_alert_playback.current_phase = 1;
+            printf("[ALERT PLAYBACK] Playing Tone B: %.1f Hz\n", global_alert_playback.tone_b_frequency);
+        }
+    }
+    
+    // Check if alert is finished
+    if (global_alert_playback.samples_played >= global_alert_playback.total_samples) {
+        printf("[ALERT PLAYBACK] Detected tone sequence finished playing\n");
+        global_alert_playback.active = 0;
+        free(global_alert_playback.alert_buffer);
+        global_alert_playback.alert_buffer = NULL;
+    }
+    
+    return samples_to_copy;
+}
+
+// Check if alert is currently playing
+int is_alert_playing(void) {
+    return global_alert_playback.active;
+}
+
+// Trigger tone passthrough when tones are detected
+void trigger_tone_passthrough(void) {
+    // Find which channel has tone detection enabled and get its config
+    struct tone_detect_config* tone_config = NULL;
+    int source_channel_idx = -1;
+    
+    // Search through all channels to find the one with tone detection enabled
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        struct channel_config* channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid && channel_config->tone_detect) {
+            tone_config = &channel_config->tone_config;
+            source_channel_idx = i;
+            break;
+        }
+    }
+    
+    if (!tone_config || !tone_config->tone_passthrough) {
         printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
+        return;
+    }
+    
+    printf("[TONE PASSTHROUGH] Source channel %d detected tone, target: %s\n", 
+           source_channel_idx + 1, tone_config->passthrough_channel);
+    
+    // Check if the target channel has a working output stream
+    int target_channel_idx = get_passthrough_target_channel_index();
+    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
+        if (channel_has_output_stream(target_channel_idx)) {
+            printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
+                   target_channel_idx + 1);
+            
+            // Play back the actual detected Tone A and Tone B sequence
+            // Find the tone definition that was detected
+            float tone_a_freq = 1000.0f; // Default frequencies
+            float tone_b_freq = 1000.0f;
+            float tone_a_duration = 1.0f; // Default durations
+            float tone_b_duration = 0.5f;
+            
+            for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
+                if (global_tone_detection.tone_definitions[i].valid) {
+                    // Use the actual detected Tone A and Tone B frequencies and durations
+                    tone_a_freq = global_tone_detection.tone_definitions[i].tone_a_freq;
+                    tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
+                    tone_a_duration = global_tone_detection.tone_definitions[i].tone_a_length_ms / 1000.0f;
+                    tone_b_duration = global_tone_detection.tone_definitions[i].tone_b_length_ms / 1000.0f;
+                    printf("[ALERT] Playing back detected tones: A=%.1f Hz (%.1fs), B=%.1f Hz (%.1fs)\n",
+                           tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
+                    break;
+                }
+            }
+            
+            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, tone_a_duration, tone_b_duration);
+            
+        } else {
+            printf("[TONE PASSTHROUGH] Tone detected but target channel %d has no output stream - alert playback disabled\n", 
+                   target_channel_idx + 1);
+        }
+    } else {
+        printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index %d - alert playback disabled\n", 
+               target_channel_idx);
     }
 }
 
@@ -896,4 +1085,190 @@ int set_tone_config(float threshold, float gain, int db_threshold, int detect_ne
     printf("[TONE CONFIG] Updated configuration: threshold=%.2f, gain=%.2f, db=%d\n",
            threshold, gain, db_threshold);
     return 1;
+}
+
+// Add audio samples to sliding window buffer (Python approach)
+void add_audio_to_sliding_buffer(const float* samples, int count) {
+    // Add samples to sliding buffer
+    for (int i = 0; i < count; i++) {
+        audio_buffer[audio_buffer_pos] = samples[i];
+        audio_buffer_pos = (audio_buffer_pos + 1) % MAX_AUDIO_BUFFER_SAMPLES;
+        if (audio_buffer_size < MAX_AUDIO_BUFFER_SAMPLES) {
+            audio_buffer_size++;
+        }
+    }
+}
+
+// Calculate RMS volume level (Python approach)
+float calculate_volume_level(void) {
+    if (audio_buffer_size == 0) return 0.0f;
+    
+    float sum_squares = 0.0f;
+    int start_pos = (audio_buffer_pos - audio_buffer_size + MAX_AUDIO_BUFFER_SAMPLES) % MAX_AUDIO_BUFFER_SAMPLES;
+    
+    for (int i = 0; i < audio_buffer_size; i++) {
+        int pos = (start_pos + i) % MAX_AUDIO_BUFFER_SAMPLES;
+        float sample = audio_buffer[pos];
+        sum_squares += sample * sample;
+    }
+    
+    float rms = sqrt(sum_squares / audio_buffer_size);
+    return 20.0f * log10(rms + 1e-10f); // Add small value to avoid log(0)
+}
+
+// Get audio samples from sliding buffer (Python approach)
+void get_audio_segment(int start_offset_samples, int length_samples, float* output) {
+    int start_pos = (audio_buffer_pos - start_offset_samples + MAX_AUDIO_BUFFER_SAMPLES) % MAX_AUDIO_BUFFER_SAMPLES;
+    
+    for (int i = 0; i < length_samples; i++) {
+        int pos = (start_pos + i) % MAX_AUDIO_BUFFER_SAMPLES;
+        output[i] = audio_buffer[pos];
+    }
+}
+
+// Get current time in milliseconds
+int get_current_time_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int)(now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
+
+// Extract frequency from FFT (Python approach)
+float freq_from_fft(float* samples, int sample_count, int sample_rate) {
+    if (sample_count < FFT_SIZE) {
+        return 0.0f; // Not enough samples
+    }
+    
+    // Create temporary FFT buffers
+    static double temp_fft_input[FFT_SIZE];
+    static fftw_complex temp_fft_output[FFT_SIZE];
+    static fftw_plan temp_plan = NULL;
+    
+    // Initialize FFT plan if not already done
+    if (!temp_plan) {
+        temp_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, temp_fft_input, temp_fft_output, FFTW_ESTIMATE);
+    }
+    
+    if (!temp_plan) {
+        return 0.0f;
+    }
+    
+    // Copy samples to FFT input
+    for (int i = 0; i < FFT_SIZE; i++) {
+        temp_fft_input[i] = (double)samples[i];
+    }
+    
+    // Apply window function (Hanning window)
+    for (int i = 0; i < FFT_SIZE; i++) {
+        double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
+        temp_fft_input[i] *= window;
+    }
+    
+    // Perform FFT
+    fftw_execute(temp_plan);
+    
+    // Find peak frequency
+    float max_magnitude = 0.0f;
+    int peak_bin = 0;
+    
+    for (int i = 1; i < FREQ_BINS - 1; i++) {
+        float magnitude = sqrt(temp_fft_output[i][0] * temp_fft_output[i][0] + 
+                              temp_fft_output[i][1] * temp_fft_output[i][1]);
+        
+        if (magnitude > max_magnitude) {
+            max_magnitude = magnitude;
+            peak_bin = i;
+        }
+    }
+    
+    // Convert bin to frequency
+    float frequency = (float)peak_bin * (float)sample_rate / (float)FFT_SIZE;
+    
+    return frequency;
+}
+
+// Process audio using Python approach - sliding window with FFT on specific time segments
+int process_audio_python_approach(const float* samples, int sample_count) {
+    // Add samples to sliding buffer
+    add_audio_to_sliding_buffer(samples, sample_count);
+    
+    // Check if we have enough audio data
+    if (audio_buffer_size < SAMPLE_RATE) { // Need at least 1 second
+        return 0;
+    }
+    
+    // Calculate volume level
+    float volume = calculate_volume_level();
+    
+    // Only process if volume is above threshold
+    if (volume < global_tone_detection.config.db_threshold) {
+        return 0;
+    }
+    
+    printf("[TONE] Volume level: %.1f dB (threshold: %d dB)\n", volume, global_tone_detection.config.db_threshold);
+    
+    // Process each tone definition
+    for (int t = 0; t < MAX_TONE_DEFINITIONS; t++) {
+        struct tone_definition* tone_def = &global_tone_detection.tone_definitions[t];
+        if (!tone_def->valid) continue;
+        
+        // Calculate required buffer sizes
+        int tone_a_samples = (int)(tone_def->tone_a_length_ms * SAMPLE_RATE / 1000.0f);
+        int tone_b_samples = (int)(tone_def->tone_b_length_ms * SAMPLE_RATE / 1000.0f);
+        int total_samples = tone_a_samples + tone_b_samples;
+        
+        // Check if we have enough data
+        if (audio_buffer_size < total_samples) continue;
+        
+        // Get audio segments for analysis
+        float* tone_a_segment = malloc(tone_a_samples * sizeof(float));
+        float* tone_b_segment = malloc(tone_b_samples * sizeof(float));
+        
+        if (!tone_a_segment || !tone_b_segment) {
+            free(tone_a_segment);
+            free(tone_b_segment);
+            continue;
+        }
+        
+        // Extract Tone A segment (older audio)
+        get_audio_segment(total_samples, tone_a_samples, tone_a_segment);
+        
+        // Extract Tone B segment (newer audio)
+        get_audio_segment(tone_b_samples, tone_b_samples, tone_b_segment);
+        
+        // Perform FFT on each segment
+        float tone_a_freq = freq_from_fft(tone_a_segment, tone_a_samples, SAMPLE_RATE);
+        float tone_b_freq = freq_from_fft(tone_b_segment, tone_b_samples, SAMPLE_RATE);
+        
+        printf("[TONE] Analyzing: Tone A = %.1f Hz, Tone B = %.1f Hz\n", tone_a_freq, tone_b_freq);
+        
+        // Check if frequencies match within tolerance
+        int tolerance = 10; // Default tolerance in Hz
+        int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tolerance);
+        int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tolerance);
+        
+        if (tone_a_match && tone_b_match) {
+            printf("[TONE DETECTED] Match found! ID: %s, A: %.1f Hz, B: %.1f Hz\n", 
+                   tone_def->tone_id, tone_a_freq, tone_b_freq);
+            
+            // Start recording if configured
+            if (tone_def->record_length_ms > 0) {
+                printf("[TONE] Starting recording for %d ms\n", tone_def->record_length_ms);
+                global_tone_detection.recording_active = 1;
+                global_tone_detection.recording_start_time = get_current_time_ms();
+            }
+            
+            // Trigger tone passthrough if configured
+            trigger_tone_passthrough();
+            
+            free(tone_a_segment);
+            free(tone_b_segment);
+            return 1; // Tone detected
+        }
+        
+        free(tone_a_segment);
+        free(tone_b_segment);
+    }
+    
+    return 0; // No tone detected
 }

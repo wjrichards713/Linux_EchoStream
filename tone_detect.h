@@ -137,4 +137,21 @@ int apply_audio_frequency_filters(float* audio_samples, int sample_count);
 int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def);
 void reset_tone_tracking(void);
 
+// Python approach functions
+void add_audio_to_sliding_buffer(const float* samples, int count);
+float calculate_volume_level(void);
+void get_audio_segment(int start_offset_samples, int length_samples, float* output);
+int process_audio_python_approach(const float* samples, int sample_count);
+int get_current_time_ms(void);
+
+// Alert playback functions
+void generate_alert_tone(float frequency, float duration_seconds, float* output_buffer, int sample_rate);
+void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float tone_b_freq, 
+                            float tone_a_duration, float tone_b_duration);
+int get_alert_audio_samples(float* output_buffer, int max_samples);
+int is_alert_playing(void);
+
+// FFT frequency extraction
+float freq_from_fft(float* samples, int sample_count, int sample_rate);
+
 #endif // TONE_DETECT_H

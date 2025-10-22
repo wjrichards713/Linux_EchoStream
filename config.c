@@ -312,8 +312,8 @@ int load_complete_config(void) {
                 }
             }
             
-            channel_config->valid = 1;
-            channels_loaded++;
+                channel_config->valid = 1;
+                channels_loaded++;
             printf("Loaded channel %d config: ID=%s, tone_detect=%d\n", 
                    i+1, channel_config->channel_id, channel_config->tone_detect);
         }
