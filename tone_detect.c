@@ -1077,7 +1077,7 @@ int load_tone_detection_config(void) {
                     config->valid = 1;
                     channels_loaded++;
                     printf("[TONE_DETECT] Loaded tone detection config for channel %d (%s)\n", 
-                           i, config->channel_id);
+                           i + 1, config->channel_id);
                 }
             } else {
                 config->tone_detect_enabled = 0;

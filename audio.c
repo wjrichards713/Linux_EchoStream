@@ -2024,6 +2024,24 @@ int repair_passthrough_output_stream(int channel_index) {
         return 0;
     }
     
+    printf("[AUDIO] Using device %d for channel %d repair\n", device, channel_index);
+    
+    // Check if device is available
+    const PaDeviceInfo *device_info = Pa_GetDeviceInfo(device);
+    if (!device_info) {
+        printf("[ERROR] Device %d info not available for channel %d\n", device, channel_index);
+        return 0;
+    }
+    
+    printf("[AUDIO] Device %d info: %s (Input: %d, Output: %d)\n", 
+           device, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
+    
+    // Check if device supports output
+    if (device_info->maxOutputChannels == 0) {
+        printf("[ERROR] Device %d does not support output for channel %d\n", device, channel_index);
+        return 0;
+    }
+    
     // Set up output parameters
     PaStreamParameters output_params;
     output_params.device = device;
@@ -2035,7 +2053,7 @@ int repair_passthrough_output_stream(int channel_index) {
     // Try to create output stream with different parameters
     int sample_rates[] = {48000, 44100, 96000};
     int buffer_sizes[] = {512, 1024, 2048};
-    PaError err = paNoError;
+    PaError err = paInvalidDevice; // Start with error to ensure loop runs
     
     for (int i = 0; i < 3 && err != paNoError; i++) {
         for (int j = 0; j < 3 && err != paNoError; j++) {
