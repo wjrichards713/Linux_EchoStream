@@ -191,10 +191,10 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t b = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t c = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t d = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -226,10 +226,10 @@ size_t decode_base64_len(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t b = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t c = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t d = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -564,7 +564,7 @@ int setup_global_udp(struct server_config* config) {
     global_server_addr.sin_family = AF_INET;
     global_server_addr.sin_port = htons(config->udp_port);
     
-    if (inet_aton(config->udp_host, &global_server_addr.sin_addr) == 0) {
+    if (inet_pton(AF_INET, config->udp_host, &global_server_addr.sin_addr) != 1) {
         fprintf(stderr, "Invalid UDP host\n");
         close(global_udp_socket);
         global_udp_socket = -1;

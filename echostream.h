@@ -34,6 +34,7 @@
 // Global state
 extern volatile int global_interrupted;
 extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+extern int global_channel_count;
 
 // Forward declarations for modules
 void audio_init(void);
