@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -std=c99 -O2 -g -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod -lfftw3f -lcjson
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c api_call.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = echostream
 
