@@ -1258,8 +1258,8 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         printf("[TONE] Analyzing: Tone A = %.1f Hz, Tone B = %.1f Hz\n", tone_a_freq, tone_b_freq);
         
         // Check if frequencies match within tolerance
-        int tone_a_tolerance = tone_def->tone_a_range; // Use Tone A's configured tolerance
-        int tone_b_tolerance = tone_def->tone_b_range; // Use Tone B's configured tolerance
+        int tone_a_tolerance = tone_def->tone_a_range_hz; // Use Tone A's configured tolerance
+        int tone_b_tolerance = tone_def->tone_b_range_hz; // Use Tone B's configured tolerance
         int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tone_a_tolerance);
         int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tone_b_tolerance);
         
