@@ -333,7 +333,7 @@ int setup_audio_stream(struct audio_stream *audio_stream, const char *channel_id
     double open_sample_rate = (dinfo && dinfo->defaultSampleRate > 0.0) ? dinfo->defaultSampleRate : SAMPLE_RATE;
 
     // Helper to find a PortAudio device by exact name (e.g., "pulse" or "default")
-    auto find_device_by_name = [](const char* name) -> PaDeviceIndex {
+    PaDeviceIndex find_device_by_name(const char* name) {
         int n = Pa_GetDeviceCount();
         for (int i = 0; i < n; i++) {
             const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
@@ -342,7 +342,7 @@ int setup_audio_stream(struct audio_stream *audio_stream, const char *channel_id
             }
         }
         return paNoDevice;
-    };
+    }
 
     // Create input stream
     printf("[DEBUG] Creating input stream for channel %s...\n", audio_stream->channel_id);
