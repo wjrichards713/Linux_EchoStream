@@ -327,28 +327,98 @@ int setup_audio_stream(struct audio_stream *audio_stream, const char *channel_id
     output_params.hostApiSpecificStreamInfo = NULL;
 
     PaError err;
+    
+    // Prefer the device's default sample rate to avoid ALSA busy/unavailable
+    const PaDeviceInfo* dinfo = Pa_GetDeviceInfo(audio_stream->device_index);
+    double open_sample_rate = (dinfo && dinfo->defaultSampleRate > 0.0) ? dinfo->defaultSampleRate : SAMPLE_RATE;
+
+    // Helper to find a PortAudio device by exact name (e.g., "pulse" or "default")
+    auto find_device_by_name = [](const char* name) -> PaDeviceIndex {
+        int n = Pa_GetDeviceCount();
+        for (int i = 0; i < n; i++) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            if (info && info->name && strcmp(info->name, name) == 0) {
+                return (PaDeviceIndex)i;
+            }
+        }
+        return paNoDevice;
+    };
 
     // Create input stream
     printf("[DEBUG] Creating input stream for channel %s...\n", audio_stream->channel_id);
-    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
+    err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, (double)open_sample_rate, AUDIO_BUFFER_SIZE,
                         paClipOff, audio_input_callback, audio_stream);
 
     if (err != paNoError) {
-        printf("[ERROR] Failed to create input stream for channel %s: %s\n",
-               audio_stream->channel_id, Pa_GetErrorText(err));
-        return 0;
+        printf("[WARN] Failed input on device %d (%s). Trying fallback devices...\n",
+               input_params.device, Pa_GetErrorText(err));
+
+        // Try default input device
+        PaDeviceIndex defIn = Pa_GetDefaultInputDevice();
+        if (defIn != paNoDevice) {
+            input_params.device = defIn;
+            const PaDeviceInfo* d2 = Pa_GetDeviceInfo(defIn);
+            open_sample_rate = (d2 && d2->defaultSampleRate > 0.0) ? d2->defaultSampleRate : open_sample_rate;
+            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, (double)open_sample_rate, AUDIO_BUFFER_SIZE,
+                                paClipOff, audio_input_callback, audio_stream);
+        }
+
+        // Try pulse device if still failing
+        if (err != paNoError) {
+            PaDeviceIndex pulse = find_device_by_name("pulse");
+            if (pulse != paNoDevice) {
+                input_params.device = pulse;
+                const PaDeviceInfo* d3 = Pa_GetDeviceInfo(pulse);
+                open_sample_rate = (d3 && d3->defaultSampleRate > 0.0) ? d3->defaultSampleRate : open_sample_rate;
+                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, (double)open_sample_rate, AUDIO_BUFFER_SIZE,
+                                    paClipOff, audio_input_callback, audio_stream);
+            }
+        }
+
+        if (err != paNoError) {
+            printf("[ERROR] Failed to create input stream for channel %s: %s\n",
+                   audio_stream->channel_id, Pa_GetErrorText(err));
+            return 0;
+        }
     }
 
     // Create output stream
     printf("[DEBUG] Creating output stream for channel %s...\n", audio_stream->channel_id);
-    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, SAMPLE_RATE, AUDIO_BUFFER_SIZE,
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, (double)open_sample_rate, AUDIO_BUFFER_SIZE,
                         paClipOff, audio_output_callback, audio_stream);
 
     if (err != paNoError) {
-        printf("[ERROR] Failed to create output stream for channel %s: %s\n",
-               audio_stream->channel_id, Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        return 0;
+        printf("[WARN] Failed output on device %d (%s). Trying fallback devices...\n",
+               output_params.device, Pa_GetErrorText(err));
+
+        // Try default output device
+        PaDeviceIndex defOut = Pa_GetDefaultOutputDevice();
+        if (defOut != paNoDevice) {
+            output_params.device = defOut;
+            const PaDeviceInfo* d2 = Pa_GetDeviceInfo(defOut);
+            double out_sr = (d2 && d2->defaultSampleRate > 0.0) ? d2->defaultSampleRate : open_sample_rate;
+            err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, (double)out_sr, AUDIO_BUFFER_SIZE,
+                                paClipOff, audio_output_callback, audio_stream);
+        }
+
+        // Try pulse device if still failing
+        if (err != paNoError) {
+            PaDeviceIndex pulse = find_device_by_name("pulse");
+            if (pulse != paNoDevice) {
+                output_params.device = pulse;
+                const PaDeviceInfo* d3 = Pa_GetDeviceInfo(pulse);
+                double out_sr = (d3 && d3->defaultSampleRate > 0.0) ? d3->defaultSampleRate : open_sample_rate;
+                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, (double)out_sr, AUDIO_BUFFER_SIZE,
+                                    paClipOff, audio_output_callback, audio_stream);
+            }
+        }
+
+        if (err != paNoError) {
+            printf("[ERROR] Failed to create output stream for channel %s: %s\n",
+                   audio_stream->channel_id, Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
     }
 
     // Start input stream
