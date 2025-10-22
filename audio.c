@@ -441,3 +441,128 @@ int cleanup_audio_devices(void)
     printf("[INFO] Audio devices cleaned up\n");
     return 1;
 }
+
+// Start transmission for a specific channel
+int start_transmission_for_channel(struct audio_stream* audio_stream) {
+    PaStreamParameters input_params, output_params;
+    
+    audio_stream->device_index = get_device_for_channel(audio_stream->channel_id);
+    
+    // Setup input stream
+    input_params.device = audio_stream->device_index;
+    if (input_params.device == paNoDevice) {
+        fprintf(stderr, "No input device for channel %s\n", audio_stream->channel_id);
+        return 0;
+    }
+    
+    input_params.channelCount = 1;
+    input_params.sampleFormat = paFloat32;
+    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+    input_params.hostApiSpecificStreamInfo = NULL;
+    
+    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                paClipOff, audio_input_callback, audio_stream);
+    
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
+        printf("WARNING: USB device %d failed for channel %s, trying default device\n", 
+               audio_stream->device_index, audio_stream->channel_id);
+        fflush(stdout);
+        
+        // Try fallback to default input device
+        PaDeviceIndex default_device = Pa_GetDefaultInputDevice();
+        if (default_device != paNoDevice && default_device != audio_stream->device_index) {
+            input_params.device = default_device;
+            input_params.suggestedLatency = Pa_GetDeviceInfo(default_device)->defaultLowInputLatency;
+            
+            err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                                paClipOff, audio_input_callback, audio_stream);
+            
+            if (err == paNoError) {
+                printf("Successfully opened input stream on default device %d for channel %s\n", 
+                       default_device, audio_stream->channel_id);
+                audio_stream->device_index = default_device;
+            } else {
+                fprintf(stderr, "PortAudio default device also failed: %s\n", Pa_GetErrorText(err));
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    }
+    
+    // Setup output stream
+    output_params.device = audio_stream->device_index;
+    output_params.channelCount = 1;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = Pa_GetDeviceInfo(output_params.device)->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+    
+    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024, 
+                        paClipOff, audio_output_callback, audio_stream);
+    
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
+        printf("WARNING: Output stream failed for channel %s (device %d), trying input-only mode\n", 
+               audio_stream->channel_id, audio_stream->device_index);
+        
+        // Try input-only mode as fallback
+        Pa_CloseStream(audio_stream->input_stream);
+        audio_stream->input_stream = NULL;
+        
+        // Reopen input stream
+        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                            paClipOff, audio_input_callback, audio_stream);
+        
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
+            return 0;
+        }
+        
+        // Start input stream only
+        err = Pa_StartStream(audio_stream->input_stream);
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
+        
+        printf("Channel %s running in input-only mode (no audio output)\n", audio_stream->channel_id);
+        audio_stream->transmitting = 1;
+        return 1;
+    }
+    
+    // Start both streams
+    err = Pa_StartStream(audio_stream->input_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->output_stream);
+        return 0;
+    }
+    
+    err = Pa_StartStream(audio_stream->output_stream);
+    if (err != paNoError) {
+        fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(audio_stream->input_stream);
+        Pa_CloseStream(audio_stream->output_stream);
+        return 0;
+    }
+    
+    // Check if streams are actually running
+    if (Pa_IsStreamActive(audio_stream->input_stream)) {
+        printf("Input stream is active for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
+    }
+    
+    if (Pa_IsStreamActive(audio_stream->output_stream)) {
+        printf("Output stream is active for channel %s\n", audio_stream->channel_id);
+    } else {
+        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+    }
+    
+    audio_stream->transmitting = 1;
+    printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+    return 1;
+}
