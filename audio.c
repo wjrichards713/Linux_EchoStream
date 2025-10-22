@@ -514,17 +514,20 @@ int setup_channel(struct channel_context *ctx, const char *channel_id)
 
     printf("Setting up channel with ID: %s\n", channel_id);
 
-    // Find available slot
+    // Use the passed context directly instead of finding an empty slot
+    // This ensures the GPIO code can find the correct channel by index
+    
+    // Assign USB device based on channel index
     int channel_index = -1;
     for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (strlen(channels[i].audio.channel_id) == 0) {
+        if (&channels[i] == ctx) {
             channel_index = i;
             break;
         }
     }
-
+    
     if (channel_index == -1) {
-        printf("[ERROR] No available channel slots\n");
+        printf("[ERROR] Invalid channel context passed\n");
         return 0;
     }
 
@@ -538,11 +541,14 @@ int setup_channel(struct channel_context *ctx, const char *channel_id)
     }
 
     // Setup audio stream
-    if (!setup_audio_stream(&channels[channel_index].audio, channel_id)) {
+    if (!setup_audio_stream(&ctx->audio, channel_id)) {
         printf("[ERROR] Failed to setup audio stream for channel %s\n", channel_id);
         return 0;
     }
 
+    // Mark channel as active
+    ctx->active = 1;
+    
     printf("[INFO] Channel %s setup completed successfully\n", channel_id);
     return 1;
 }
@@ -567,6 +573,19 @@ int cleanup_audio_devices(void)
     
     printf("[INFO] Audio devices cleaned up\n");
     return 1;
+}
+
+// Function to manually enable audio for a channel (for testing)
+int enable_channel_audio(const char *channel_id) {
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
+            channels[i].audio.gpio_active = 1;
+            printf("[TEST] Manually enabled audio for channel %s\n", channel_id);
+            return 1;
+        }
+    }
+    printf("[TEST] Channel %s not found or not active\n", channel_id);
+    return 0;
 }
 
 // Start transmission for a specific channel

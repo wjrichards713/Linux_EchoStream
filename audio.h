@@ -61,6 +61,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream);
 void auto_assign_usb_devices(void);
 PaDeviceIndex get_device_for_channel(const char* channel);
 int setup_channel(struct channel_context *ctx, const char *channel_id);
+int enable_channel_audio(const char *channel_id); // For testing
 
 
 // Audio device initialization and cleanup

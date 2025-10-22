@@ -150,6 +150,15 @@ int main(int argc, char *argv[]) {
         }
     }
     
+    // TEMPORARY FIX: Manually enable audio for all channels since GPIO monitoring
+    // might start before channels are fully initialized
+    printf("\n[TEMPORARY FIX] Manually enabling audio for all channels...\n");
+    for (int i = 0; i < global_channel_count; i++) {
+        if (global_channel_ids[i][0] != '\0') {
+            enable_channel_audio(global_channel_ids[i]);
+        }
+    }
+    
     
     // Connect global WebSocket for all channels
     if (!connect_global_websocket()) {
