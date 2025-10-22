@@ -12,9 +12,9 @@
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo *time_info,
                                 PaStreamCallbackFlags flags, void *user_data);
-static int audio_output_callback(const void *input, void *output, unsigned long frames,
-                                 const PaStreamCallbackTimeInfo *time_info,
-                                 PaStreamCallbackFlags flags, void *user_data);
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo *time_info,
+                         PaStreamCallbackFlags flags, void *user_data);
 void kill_processes_using_audio_device(PaDeviceIndex device_index);
 
 // Global audio state
