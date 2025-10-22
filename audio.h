@@ -4,6 +4,9 @@
 #include "echostream.h"
 #include "tone_detect.h"
 
+// Audio constants
+#define AUDIO_BUFFER_SIZE 1024
+
 // Audio structures
 struct audio_frame {
     float samples[SAMPLES_PER_FRAME];
@@ -34,6 +37,7 @@ struct audio_stream {
     int current_output_frame_pos;
     PaDeviceIndex device_index;
     char channel_id[CHANNEL_ID_LEN];
+    unsigned char encoded_buffer[1024];  // Buffer for encoded audio data
 };
 
 struct channel_context {
@@ -106,6 +110,10 @@ int init_audio_passthrough(void);
 void* audio_passthrough_thread(void* arg);
 int start_audio_passthrough(void);
 void stop_audio_passthrough(void);
+
+// Audio encoding and transmission functions
+int encode_audio_data(const float* samples, int frame_count, unsigned char* encoded_buffer, int buffer_size);
+int send_audio_data(const char* channel_id, const unsigned char* encoded_data, int data_size);
 
 // Audio device initialization and cleanup
 int initialize_audio_devices(void);

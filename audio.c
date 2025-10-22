@@ -386,9 +386,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
 }
 
 // Modified audio output callback
-static int audio_output_callback(const void *input, void *output, unsigned long frames,
-                                const PaStreamCallbackTimeInfo* time_info,
-                                PaStreamCallbackFlags flags, void *user_data) {
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo* time_info,
+                         PaStreamCallbackFlags flags, void *user_data) {
     (void)input; // Suppress unused parameter warning
     (void)time_info; // Suppress unused parameter warning
     (void)flags; // Suppress unused parameter warning
