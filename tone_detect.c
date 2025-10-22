@@ -1,7 +1,7 @@
 #include "tone_detect.h"
 #include "config.h"
 #include "audio.h"
-#include <cjson/cjson.h>
+#include <cjson/cJSON.h>
 #include <math.h>
 #include <string.h>
 #include <unistd.h>
