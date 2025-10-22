@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+#include "audio.h"
 #include "tone_detect.h"
 #include "crypto.h"
 #include "config.h"
@@ -167,6 +168,25 @@ PaDeviceIndex get_device_for_channel(const char *channel)
     }
     
     return usb_devices[channel_index];
+}
+
+// Placeholder functions for audio encoding and UDP sending
+static int encode_audio_data(const float *samples, unsigned long frames, unsigned char *buffer, int buffer_size) {
+    // Simple placeholder - just copy samples as-is
+    if (frames * sizeof(float) > buffer_size) {
+        return 0;
+    }
+    memcpy(buffer, samples, frames * sizeof(float));
+    return frames * sizeof(float);
+}
+
+static int send_audio_data(const char *channel_id, const unsigned char *data, int data_size) {
+    // Placeholder - just log the data
+    static int send_count = 0;
+    if (send_count++ % 1000 == 0) {
+        printf("[UDP] Would send %d bytes for channel %s\n", data_size, channel_id);
+    }
+    return data_size;
 }
 
 // Audio input callback with tone detection integration

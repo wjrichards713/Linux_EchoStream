@@ -33,6 +33,7 @@ struct audio_stream {
     int current_output_frame_pos;
     PaDeviceIndex device_index;
     char channel_id[CHANNEL_ID_LEN];
+    unsigned char encoded_buffer[4096]; // Buffer for encoded audio data
 };
 
 struct channel_context {
@@ -88,6 +89,11 @@ int tone_passthrough_callback(const void *input, void *output, unsigned long fra
 // Audio buffer functions
 int init_shared_audio_buffer(void);
 int update_shared_audio_buffer(const float *samples, int sample_count);
+
+// Audio callback functions
+int audio_output_callback(const void *input, void *output, unsigned long frames,
+                         const PaStreamCallbackTimeInfo* time_info,
+                         PaStreamCallbackFlags flags, void *user_data);
 
 
 
