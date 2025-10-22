@@ -421,25 +421,82 @@ int setup_audio_stream(struct audio_stream *audio_stream, const char *channel_id
         }
     }
 
-    // Start input stream
+    // Start input stream (with retry on default/pulse if needed)
     printf("[DEBUG] Starting input stream for channel %s...\n", audio_stream->channel_id);
     err = Pa_StartStream(audio_stream->input_stream);
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
         Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
-        return 0;
+        // Reopen input on default
+        PaDeviceIndex defIn2 = Pa_GetDefaultInputDevice();
+        if (defIn2 != paNoDevice) {
+            input_params.device = defIn2;
+            const PaDeviceInfo* d2 = Pa_GetDeviceInfo(defIn2);
+            double sr2 = (d2 && d2->defaultSampleRate > 0.0) ? d2->defaultSampleRate : open_sample_rate;
+            if (Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, sr2, AUDIO_BUFFER_SIZE,
+                               paClipOff, audio_input_callback, audio_stream) == paNoError) {
+                err = Pa_StartStream(audio_stream->input_stream);
+            }
+        }
+        // Reopen input on pulse if still failing
+        if (err != paNoError) {
+            PaDeviceIndex pulse2 = find_device_by_name("pulse");
+            if (pulse2 != paNoDevice) {
+                input_params.device = pulse2;
+                const PaDeviceInfo* d3 = Pa_GetDeviceInfo(pulse2);
+                double sr3 = (d3 && d3->defaultSampleRate > 0.0) ? d3->defaultSampleRate : open_sample_rate;
+                if (Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, sr3, AUDIO_BUFFER_SIZE,
+                                   paClipOff, audio_input_callback, audio_stream) == paNoError) {
+                    err = Pa_StartStream(audio_stream->input_stream);
+                }
+            }
+        }
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio input start failed after retries: %s\n", Pa_GetErrorText(err));
+            Pa_CloseStream(audio_stream->output_stream);
+            return 0;
+        }
     }
 
-    // Start output stream
+    // Small delay to let input callback thread settle
+    Pa_Sleep(200);
+
+    // Start output stream (with retry on default/pulse if needed)
     printf("[DEBUG] Starting output stream for channel %s...\n", audio_stream->channel_id);
     err = Pa_StartStream(audio_stream->output_stream);
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-        Pa_AbortStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->input_stream);
         Pa_CloseStream(audio_stream->output_stream);
-        return 0;
+        // Reopen output on default
+        PaDeviceIndex defOut2 = Pa_GetDefaultOutputDevice();
+        if (defOut2 != paNoDevice) {
+            output_params.device = defOut2;
+            const PaDeviceInfo* d2 = Pa_GetDeviceInfo(defOut2);
+            double sr2 = (d2 && d2->defaultSampleRate > 0.0) ? d2->defaultSampleRate : open_sample_rate;
+            if (Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, sr2, AUDIO_BUFFER_SIZE,
+                               paClipOff, audio_output_callback, audio_stream) == paNoError) {
+                err = Pa_StartStream(audio_stream->output_stream);
+            }
+        }
+        // Reopen output on pulse if still failing
+        if (err != paNoError) {
+            PaDeviceIndex pulse2 = find_device_by_name("pulse");
+            if (pulse2 != paNoDevice) {
+                output_params.device = pulse2;
+                const PaDeviceInfo* d3 = Pa_GetDeviceInfo(pulse2);
+                double sr3 = (d3 && d3->defaultSampleRate > 0.0) ? d3->defaultSampleRate : open_sample_rate;
+                if (Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, sr3, AUDIO_BUFFER_SIZE,
+                                   paClipOff, audio_output_callback, audio_stream) == paNoError) {
+                    err = Pa_StartStream(audio_stream->output_stream);
+                }
+            }
+        }
+        if (err != paNoError) {
+            fprintf(stderr, "PortAudio output start failed after retries: %s\n", Pa_GetErrorText(err));
+            Pa_AbortStream(audio_stream->input_stream);
+            Pa_CloseStream(audio_stream->input_stream);
+            return 0;
+        }
     }
 
     printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
