@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/time.h>
 
 // Global variables
 tone_detect_control_t global_tone_detect = {0};
@@ -667,7 +668,7 @@ static void* tone_detection_thread_func(void* arg) {
             }
         }
         
-        usleep(10000); // 10ms sleep
+        nanosleep((struct timespec[]){{0, 10000000}}, NULL); // 10ms sleep
     }
     
     printf("[TONE_DETECT] Tone detection thread exiting\n");

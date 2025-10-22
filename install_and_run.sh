@@ -120,7 +120,7 @@ if [ ! -f "main.c" ]; then
 fi
 
 # Check for all required source files (including tone detection)
-required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c" "tone_detect.c")
+required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c" "tone_detect.c" "api_call.c")
 missing_files=()
 
 for file in "${required_files[@]}"; do
