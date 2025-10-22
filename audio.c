@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 #include "audio.h"
 #include "crypto.h"
 #include "config.h"
@@ -326,8 +327,8 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
                 }
             }
             
-            if (channel_config && channel_config->tone_detect_config.tone_passthrough) {
-                printf("[TONE] Passthrough triggered to %s\n", channel_config->tone_detect_config.passthrough_channel);
+            if (channel_config && channel_config->tone_config.tone_passthrough) {
+                printf("[TONE] Passthrough triggered to %s\n", channel_config->tone_config.passthrough_channel);
                 // TODO: Implement passthrough functionality
             }
         }
