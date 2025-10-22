@@ -83,9 +83,6 @@ print_status "Searching for cJSON headers..."
 find /usr/include -name "*cjson*" -type f 2>/dev/null | head -5
 find /usr/local/include -name "*cjson*" -type f 2>/dev/null | head -5
 
-# Install FFTW3 library for tone detection
-print_status "Installing FFTW3 library for FFT operations..."
-sudo apt install -y libfftw3-dev libfftw3-double3 libfftw3-single3
 
 # Install cURL library
 print_status "Installing cURL library..."
@@ -119,7 +116,7 @@ if [ ! -f "main.c" ]; then
 fi
 
 # Check for all required source files (including tone detection)
-required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c" "tone_detect.c")
+required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c")
 missing_files=()
 
 for file in "${required_files[@]}"; do
@@ -140,25 +137,6 @@ fi
 print_success "All dependencies installed successfully!"
 
 # Verify tone detection dependencies
-print_status "Verifying tone detection dependencies..."
-
-# Check FFTW3 library (try multiple methods)
-fftw3_found=false
-if pkg-config --exists libfftw3; then
-    print_success "FFTW3 library found via pkg-config"
-    fftw3_found=true
-elif [ -f "/usr/lib/aarch64-linux-gnu/libfftw3.so" ] || [ -f "/usr/lib/x86_64-linux-gnu/libfftw3.so" ] || [ -f "/usr/lib/arm-linux-gnueabihf/libfftw3.so" ]; then
-    print_success "FFTW3 library found in system libraries"
-    fftw3_found=true
-elif ldconfig -p | grep -q libfftw3; then
-    print_success "FFTW3 library found via ldconfig"
-    fftw3_found=true
-fi
-
-if [ "$fftw3_found" = false ]; then
-    print_warning "FFTW3 library not found via standard methods, but continuing..."
-    print_status "FFTW3 packages were installed, compilation should work"
-fi
 
 # Check cJSON library and headers
 cjson_found=false
@@ -262,22 +240,6 @@ make
 if [ $? -ne 0 ]; then
     print_warning "First compilation attempt failed, trying with explicit library paths..."
     
-    # Try to find FFTW3 library path
-    FFTW3_PATH=""
-    if [ -d "/usr/lib/aarch64-linux-gnu" ]; then
-        FFTW3_PATH="/usr/lib/aarch64-linux-gnu"
-    elif [ -d "/usr/lib/x86_64-linux-gnu" ]; then
-        FFTW3_PATH="/usr/lib/x86_64-linux-gnu"
-    elif [ -d "/usr/lib/arm-linux-gnueabihf" ]; then
-        FFTW3_PATH="/usr/lib/arm-linux-gnueabihf"
-    fi
-    
-    if [ -n "$FFTW3_PATH" ]; then
-        print_status "Trying compilation with explicit library path: $FFTW3_PATH"
-        export LD_LIBRARY_PATH="$FFTW3_PATH:$LD_LIBRARY_PATH"
-        make clean
-        make
-    fi
 fi
 
 if [ $? -eq 0 ]; then
@@ -287,12 +249,6 @@ if [ $? -eq 0 ]; then
     if [ -f "./echostream" ]; then
         print_success "EchoStream executable created successfully!"
         
-        # Check if tone detection symbols are present (basic check)
-        if nm ./echostream 2>/dev/null | grep -q "tone_detect\|fftw"; then
-            print_success "Tone detection symbols found in executable!"
-        else
-            print_warning "Tone detection symbols not found, but executable was built"
-        fi
     else
         print_error "EchoStream executable not found after compilation!"
         exit 1
@@ -337,32 +293,9 @@ else
     print_warning "Please log out and log back in for GPIO permissions to take effect"
 fi
 
-# Test tone detection if test program exists
-if [ -f "test_tone_detect" ]; then
-    print_status "Testing tone detection system..."
-    ./test_tone_detect
-    if [ $? -eq 0 ]; then
-        print_success "Tone detection test passed!"
-    else
-        print_warning "Tone detection test failed, but continuing..."
-    fi
-else
-    print_status "Building tone detection test program..."
-    make test 2>/dev/null || print_warning "Could not build test program"
-    
-    if [ -f "test_tone_detect" ]; then
-        print_status "Testing tone detection system..."
-        ./test_tone_detect
-        if [ $? -eq 0 ]; then
-            print_success "Tone detection test passed!"
-        else
-            print_warning "Tone detection test failed, but continuing..."
-        fi
-    fi
-fi
 
 # Auto-run EchoStream after installation
-print_status "Starting EchoStream with tone detection..."
+print_status "Starting EchoStream..."
 echo "Press Ctrl+C to stop"
 echo ""
 ./echostream
