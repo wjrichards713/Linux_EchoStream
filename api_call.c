@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <errno.h>
+#include "echostream.h"
+#include <math.h>
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
@@ -90,7 +93,8 @@ struct channel_context {
 static struct channel_context channels[4] = {0};
 static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice, paNoDevice, paNoDevice};
 static int device_assigned = 0;
-static volatile int global_interrupted = 0;
+/* Use shared global from echostream.h */
+extern volatile int global_interrupted;
 static int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
@@ -104,9 +108,7 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
-// Use the global channel IDs from main.c instead of hardcoded values
-extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-extern int global_channel_count;
+// Use the global channel IDs from main.c instead of hardcoded values (from echostream.h)
 
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
@@ -1181,7 +1183,8 @@ void* heartbeat_worker(void* arg) {
         }
         
         for (int i = 0; i < 100 && !global_interrupted; i++) {
-            usleep(100000);
+            struct timespec ts = {0, 100000000};
+            nanosleep(&ts, NULL);
         }
     }
     
@@ -1396,7 +1399,10 @@ void* gpio_monitor_worker(void* arg) {
         }
 
         pthread_mutex_unlock(&gpio_mutex);
-        usleep(100000); // 100 ms poll
+        {
+            struct timespec ts = {0, 100000000};
+            nanosleep(&ts, NULL); // 100 ms poll
+        }
     }
 
     printf("GPIO monitor worker stopped\n");
@@ -1588,7 +1594,10 @@ void* udp_listener_worker(void* arg) {
         } else if (bytes_received < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 printf("UDP Listener: No data available (would block)\n");
-                usleep(100000); // Wait 100ms before trying again
+                {
+                    struct timespec ts = {0, 100000000};
+                    nanosleep(&ts, NULL); // Wait 100ms before trying again
+                }
             } else {
                 if (!global_interrupted) {
                     printf("UDP Listener: Receive error - %s (errno=%d)\n", strerror(errno), errno);
