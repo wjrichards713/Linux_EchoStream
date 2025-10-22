@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "tone_detect.h"
 #include "config.h"
 #include "audio.h"
@@ -19,7 +20,6 @@ static tone_detect_config_t tone_configs[MAX_CHANNELS] = {0};
 // Threading variables
 static pthread_t tone_detection_thread;
 static volatile int thread_running = 0;
-static volatile int global_interrupted = 0;
 
 // FFT buffers
 static fftwf_complex *fft_input;
@@ -32,8 +32,6 @@ static float *audio_buffer = NULL;
 static int buffer_size = 0;
 static int buffer_pos = 0;
 static time_t last_detect_time = 0;
-static tone_definition_t *last_unknown_tone = NULL;
-static int unknown_tone_count = 0;
 
 // Initialize FFT system
 static int init_fft_system(void) {
@@ -93,7 +91,8 @@ double freq_from_fft(const float *samples, int sample_count, int sample_rate) {
     // Copy samples to FFT input (use last FFT_SIZE samples)
     int start_idx = (sample_count > FFT_SIZE) ? sample_count - FFT_SIZE : 0;
     for (int i = 0; i < FFT_SIZE; i++) {
-        fft_input[i] = samples[start_idx + i] + 0.0 * I;
+        fft_input[i][0] = samples[start_idx + i];
+        fft_input[i][1] = 0.0;
     }
     
     // Perform FFT
@@ -104,7 +103,7 @@ double freq_from_fft(const float *samples, int sample_count, int sample_rate) {
     int peak_bin = 0;
     
     for (int i = 1; i < FFT_SIZE / 2; i++) { // Skip DC component
-        double magnitude = cabs(fft_output[i]);
+        double magnitude = sqrt(fft_output[i][0] * fft_output[i][0] + fft_output[i][1] * fft_output[i][1]);
         if (magnitude > max_magnitude) {
             max_magnitude = magnitude;
             peak_bin = i;
@@ -128,7 +127,7 @@ int apply_frequency_filters(float *samples, int sample_count, int sample_rate,
         if (!filters[f].valid) continue;
         
         double filter_freq = filters[f].frequency;
-        int filter_range = filters[f].range;
+        int filter_range = filters[f].filter_range;
         
         // Calculate frequency bins
         int center_bin = (int)(filter_freq * FFT_SIZE / sample_rate);
@@ -140,10 +139,12 @@ int apply_frequency_filters(float *samples, int sample_count, int sample_rate,
             
             // Copy chunk to FFT input
             for (int i = 0; i < chunk_size; i++) {
-                fft_input[i] = samples[start + i] + 0.0 * I;
+                fft_input[i][0] = samples[start + i];
+                fft_input[i][1] = 0.0;
             }
             for (int i = chunk_size; i < FFT_SIZE; i++) {
-                fft_input[i] = 0.0 + 0.0 * I;
+                fft_input[i][0] = 0.0;
+                fft_input[i][1] = 0.0;
             }
             
             // Perform FFT
@@ -153,21 +154,27 @@ int apply_frequency_filters(float *samples, int sample_count, int sample_rate,
             if (strcmp(filters[f].type, "above") == 0) {
                 // Remove frequencies above the threshold
                 for (int i = center_bin; i < FFT_SIZE / 2; i++) {
-                    fft_output[i] = 0.0 + 0.0 * I;
-                    fft_output[FFT_SIZE - i] = 0.0 + 0.0 * I;
+                    fft_output[i][0] = 0.0;
+                    fft_output[i][1] = 0.0;
+                    fft_output[FFT_SIZE - i][0] = 0.0;
+                    fft_output[FFT_SIZE - i][1] = 0.0;
                 }
             } else if (strcmp(filters[f].type, "below") == 0) {
                 // Remove frequencies below the threshold
                 for (int i = 1; i <= center_bin; i++) {
-                    fft_output[i] = 0.0 + 0.0 * I;
-                    fft_output[FFT_SIZE - i] = 0.0 + 0.0 * I;
+                    fft_output[i][0] = 0.0;
+                    fft_output[i][1] = 0.0;
+                    fft_output[FFT_SIZE - i][0] = 0.0;
+                    fft_output[FFT_SIZE - i][1] = 0.0;
                 }
             } else if (strcmp(filters[f].type, "center") == 0) {
                 // Remove frequencies around the center frequency
                 for (int i = center_bin - range_bins; i <= center_bin + range_bins; i++) {
                     if (i > 0 && i < FFT_SIZE / 2) {
-                        fft_output[i] = 0.0 + 0.0 * I;
-                        fft_output[FFT_SIZE - i] = 0.0 + 0.0 * I;
+                        fft_output[i][0] = 0.0;
+                        fft_output[i][1] = 0.0;
+                        fft_output[FFT_SIZE - i][0] = 0.0;
+                        fft_output[FFT_SIZE - i][1] = 0.0;
                     }
                 }
             }
@@ -179,7 +186,7 @@ int apply_frequency_filters(float *samples, int sample_count, int sample_rate,
             
             // Copy filtered samples back
             for (int i = 0; i < chunk_size; i++) {
-                samples[start + i] = creal(fft_input[i]) / FFT_SIZE;
+                samples[start + i] = fft_input[i][0] / FFT_SIZE;
             }
         }
     }
