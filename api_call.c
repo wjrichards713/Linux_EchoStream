@@ -1,4 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +19,6 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "echostream.h"
-#include <math.h>
 
 void auto_assign_usb_devices();
 PaDeviceIndex get_device_for_channel(const char* channel);
@@ -93,8 +90,7 @@ struct channel_context {
 static struct channel_context channels[4] = {0};
 static PaDeviceIndex usb_devices[4] = {paNoDevice, paNoDevice, paNoDevice, paNoDevice};
 static int device_assigned = 0;
-/* Use shared global from echostream.h */
-extern volatile int global_interrupted;
+static volatile int global_interrupted = 0;
 static int global_udp_socket = -1;
 static struct sockaddr_in global_server_addr;
 static pthread_t heartbeat_thread;
@@ -108,7 +104,9 @@ static struct server_config global_config = {0};
 static struct lws_context *global_ws_context = NULL;
 static struct lws *global_ws_client = NULL;
 static int global_config_initialized = 0;
-// Use the global channel IDs from main.c instead of hardcoded values (from echostream.h)
+// Use the global channel IDs from main.c instead of hardcoded values
+extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+extern int global_channel_count;
 
 static void handle_interrupt(int sig) {
     printf("\nShutdown signal received, cleaning up...\n");
@@ -191,10 +189,10 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t b = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t c = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t d = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -226,10 +224,10 @@ size_t decode_base64_len(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t b = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t c = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
-        uint32_t d = (input[i] == '=') ? (i++, 0u) : (uint32_t)table[(unsigned char)input[i++]];
+        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -564,7 +562,7 @@ int setup_global_udp(struct server_config* config) {
     global_server_addr.sin_family = AF_INET;
     global_server_addr.sin_port = htons(config->udp_port);
     
-    if (inet_pton(AF_INET, config->udp_host, &global_server_addr.sin_addr) != 1) {
+    if (inet_aton(config->udp_host, &global_server_addr.sin_addr) == 0) {
         fprintf(stderr, "Invalid UDP host\n");
         close(global_udp_socket);
         global_udp_socket = -1;
@@ -1183,8 +1181,7 @@ void* heartbeat_worker(void* arg) {
         }
         
         for (int i = 0; i < 100 && !global_interrupted; i++) {
-            struct timespec ts = {0, 100000000};
-            nanosleep(&ts, NULL);
+            usleep(100000);
         }
     }
     
@@ -1399,10 +1396,7 @@ void* gpio_monitor_worker(void* arg) {
         }
 
         pthread_mutex_unlock(&gpio_mutex);
-        {
-            struct timespec ts = {0, 100000000};
-            nanosleep(&ts, NULL); // 100 ms poll
-        }
+        usleep(100000); // 100 ms poll
     }
 
     printf("GPIO monitor worker stopped\n");
@@ -1594,10 +1588,7 @@ void* udp_listener_worker(void* arg) {
         } else if (bytes_received < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 printf("UDP Listener: No data available (would block)\n");
-                {
-                    struct timespec ts = {0, 100000000};
-                    nanosleep(&ts, NULL); // Wait 100ms before trying again
-                }
+                usleep(100000); // Wait 100ms before trying again
             } else {
                 if (!global_interrupted) {
                     printf("UDP Listener: Receive error - %s (errno=%d)\n", strerror(errno), errno);

@@ -1,9 +1,9 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2 -g -D_POSIX_C_SOURCE=200809L
-LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod -lfftw3f -lcjson
+LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = echostream
 
@@ -27,7 +27,7 @@ clean:
 # Install dependencies (for Ubuntu/Debian)
 install-deps:
 	sudo apt-get update
-	sudo apt-get install -y libportaudio2-dev libopus-dev libcurl4-openssl-dev libwebsockets-dev libcjson-dev libfftw3-dev
+	sudo apt-get install -y libportaudio2-dev libopus-dev libcurl4-openssl-dev libwebsockets-dev libcjson-dev
 
 # Run the program
 run: $(TARGET)

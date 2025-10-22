@@ -25,16 +25,13 @@
 
 // Constants
 #define JITTER_BUFFER_SIZE 8
-#define SAMPLE_RATE 48000
 #define SAMPLES_PER_FRAME 1920
-#define AUDIO_BUFFER_SIZE 512
 #define MAX_CHANNELS 4
 #define CHANNEL_ID_LEN 64
 
 // Global state
 extern volatile int global_interrupted;
 extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-extern int global_channel_count;
 
 // Forward declarations for modules
 void audio_init(void);

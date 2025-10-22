@@ -84,10 +84,6 @@ find /usr/include -name "*cjson*" -type f 2>/dev/null | head -5
 find /usr/local/include -name "*cjson*" -type f 2>/dev/null | head -5
 
 
-# Install FFTW3 library for tone detection
-print_status "Installing FFTW3 library for FFT operations..."
-sudo apt install -y libfftw3-dev libfftw3-double3 libfftw3-single3
-
 # Install cURL library
 print_status "Installing cURL library..."
 sudo apt install -y libcurl4-openssl-dev curl
@@ -120,7 +116,7 @@ if [ ! -f "main.c" ]; then
 fi
 
 # Check for all required source files (including tone detection)
-required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c" "tone_detect.c")
+required_files=("main.c" "audio.c" "websocket.c" "gpio.c" "udp.c" "config.c" "crypto.c")
 missing_files=()
 
 for file in "${required_files[@]}"; do
@@ -299,7 +295,7 @@ fi
 
 
 # Auto-run EchoStream after installation
-print_status "Starting EchoStream with tone detection..."
+print_status "Starting EchoStream..."
 echo "Press Ctrl+C to stop"
 echo ""
 ./echostream

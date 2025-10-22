@@ -101,10 +101,7 @@ void* gpio_monitor_worker(void* arg) {
     
     // Set gpio_active for any pins that are already active at startup
     if (gpio_38_state == 0) {
-        printf("[DEBUG] PIN 38 is ACTIVE, looking for channel %s\n", global_channel_ids[0]);
         for (int i = 0; i < 4; i++) {
-            printf("[DEBUG] Checking channels[%d]: active=%d, channel_id='%s'\n", 
-                   i, channels[i].active, channels[i].audio.channel_id);
             if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[0]) == 0) {
                 channels[i].audio.gpio_active = 1;
                 printf("Channel %s audio ENABLED (PIN 38 was already active)\n", global_channel_ids[0]);
@@ -114,10 +111,7 @@ void* gpio_monitor_worker(void* arg) {
     }
     
     if (gpio_40_state == 0) {
-        printf("[DEBUG] PIN 40 is ACTIVE, looking for channel %s\n", global_channel_ids[1]);
         for (int i = 0; i < 4; i++) {
-            printf("[DEBUG] Checking channels[%d]: active=%d, channel_id='%s'\n", 
-                   i, channels[i].active, channels[i].audio.channel_id);
             if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[1]) == 0) {
                 channels[i].audio.gpio_active = 1;
                 printf("Channel %s audio ENABLED (PIN 40 was already active)\n", global_channel_ids[1]);
@@ -127,10 +121,7 @@ void* gpio_monitor_worker(void* arg) {
     }
     
     if (gpio_16_state == 0) {
-        printf("[DEBUG] PIN 16 is ACTIVE, looking for channel %s\n", global_channel_ids[2]);
         for (int i = 0; i < 4; i++) {
-            printf("[DEBUG] Checking channels[%d]: active=%d, channel_id='%s'\n", 
-                   i, channels[i].active, channels[i].audio.channel_id);
             if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[2]) == 0) {
                 channels[i].audio.gpio_active = 1;
                 printf("Channel %s audio ENABLED (PIN 16 was already active)\n", global_channel_ids[2]);
@@ -140,10 +131,7 @@ void* gpio_monitor_worker(void* arg) {
     }
     
     if (gpio_18_state == 0) {
-        printf("[DEBUG] PIN 18 is ACTIVE, looking for channel %s\n", global_channel_ids[3]);
         for (int i = 0; i < 4; i++) {
-            printf("[DEBUG] Checking channels[%d]: active=%d, channel_id='%s'\n", 
-                   i, channels[i].active, channels[i].audio.channel_id);
             if (channels[i].active && strcmp(channels[i].audio.channel_id, global_channel_ids[3]) == 0) {
                 channels[i].audio.gpio_active = 1;
                 printf("Channel %s audio ENABLED (PIN 18 was already active)\n", global_channel_ids[3]);
