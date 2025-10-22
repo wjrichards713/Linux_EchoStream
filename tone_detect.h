@@ -6,6 +6,13 @@
 #include <complex.h>
 #include <pthread.h>
 
+// Constants
+#define MAX_TONE_DEFINITIONS 10
+#define MAX_FILTERS 10
+#define MAX_TONE_LEN 5.0  // Maximum tone length in seconds
+#define FFT_SIZE 1024
+#define TONE_DETECTION_THREAD_STACK_SIZE 65536
+
 // Tone detection configuration structures
 typedef struct {
     char tone_id[64];
@@ -123,12 +130,5 @@ int apply_frequency_filters(float *samples, int sample_count, int sample_rate,
                            frequency_filter_t *filters, int filter_count);
 int detect_new_tones(const float *samples, int sample_count, int sample_rate,
                      alert_details_t *alert_details);
-
-// Constants
-#define MAX_TONE_DEFINITIONS 10
-#define MAX_FILTERS 10
-#define MAX_TONE_LEN 5.0  // Maximum tone length in seconds
-#define FFT_SIZE 1024
-#define TONE_DETECTION_THREAD_STACK_SIZE 65536
 
 #endif // TONE_DETECT_H
