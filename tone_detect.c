@@ -845,6 +845,9 @@ static struct {
 // Play detected Tone A and Tone B sequence through target channel output
 void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float tone_b_freq, 
                             float tone_a_duration, float tone_b_duration) {
+    printf("[ALERT PLAYBACK] Starting alert playback: channel=%d, A=%.1fHz(%.1fms), B=%.1fHz(%.1fms)\n", 
+           target_channel_idx + 1, tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
+    
     if (target_channel_idx < 0 || target_channel_idx >= MAX_CHANNELS) {
         printf("[ALERT PLAYBACK] Invalid target channel index: %d\n", target_channel_idx);
         return;
@@ -877,12 +880,16 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     }
     
     // Generate Tone A
+    printf("[ALERT PLAYBACK] Generating Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
     generate_alert_tone(tone_a_freq, tone_a_duration, alert_buffer, SAMPLE_RATE);
     
     // Generate Tone B (append to buffer after Tone A)
+    printf("[ALERT PLAYBACK] Generating Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
     generate_alert_tone(tone_b_freq, tone_b_duration, &alert_buffer[tone_a_samples], SAMPLE_RATE);
     
     // Set up global alert playback state
+    printf("[ALERT PLAYBACK] Setting up alert playback: total_samples=%d, target_channel=%d\n", 
+           total_samples, target_channel_idx + 1);
     global_alert_playback.active = 1;
     global_alert_playback.tone_a_frequency = tone_a_freq;
     global_alert_playback.tone_b_frequency = tone_b_freq;
@@ -905,6 +912,9 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
     if (!global_alert_playback.active || !global_alert_playback.alert_buffer) {
         return 0; // No alert playing
     }
+    
+    printf("[ALERT PLAYBACK] Getting audio samples: played=%d/%d, max_samples=%d\n", 
+           global_alert_playback.samples_played, global_alert_playback.total_samples, max_samples);
     
     int samples_to_copy = max_samples;
     int remaining_samples = global_alert_playback.total_samples - global_alert_playback.samples_played;
@@ -968,8 +978,13 @@ void trigger_tone_passthrough(void) {
         }
     }
     
-    if (!tone_config || !tone_config->tone_passthrough) {
-        printf("[TONE PASSTHROUGH] Tone passthrough not configured or not enabled\n");
+    if (!tone_config) {
+        printf("[TONE PASSTHROUGH] No tone config found for any channel\n");
+        return;
+    }
+    
+    if (!tone_config->tone_passthrough) {
+        printf("[TONE PASSTHROUGH] Tone passthrough not enabled in config\n");
         return;
     }
     
@@ -1243,13 +1258,19 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         printf("[TONE] Analyzing: Tone A = %.1f Hz, Tone B = %.1f Hz\n", tone_a_freq, tone_b_freq);
         
         // Check if frequencies match within tolerance
-        int tolerance = 10; // Default tolerance in Hz
-        int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tolerance);
-        int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tolerance);
+        int tone_a_tolerance = tone_def->tone_a_range; // Use Tone A's configured tolerance
+        int tone_b_tolerance = tone_def->tone_b_range; // Use Tone B's configured tolerance
+        int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tone_a_tolerance);
+        int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tone_b_tolerance);
+        
+        printf("[TONE] Checking: A=%.1f vs %.1f (tolerance=%d), B=%.1f vs %.1f (tolerance=%d)\n", 
+               tone_a_freq, tone_def->tone_a_freq, tone_a_tolerance,
+               tone_b_freq, tone_def->tone_b_freq, tone_b_tolerance);
         
         if (tone_a_match && tone_b_match) {
             printf("[TONE DETECTED] Match found! ID: %s, A: %.1f Hz, B: %.1f Hz\n", 
                    tone_def->tone_id, tone_a_freq, tone_b_freq);
+            printf("[TONE] Triggering passthrough for detected alert...\n");
             
             // Start recording if configured
             if (tone_def->record_length_ms > 0) {
