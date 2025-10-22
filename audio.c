@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
-#include "audio.h"
+#include "tone_detect.h"
 #include "crypto.h"
 #include "config.h"
 #include "udp.h"
@@ -169,7 +169,7 @@ PaDeviceIndex get_device_for_channel(const char *channel)
     return usb_devices[channel_index];
 }
 
-// Audio input callback
+// Audio input callback with tone detection integration
 static int audio_input_callback(const void *input, void *output, unsigned long frames,
                                 const PaStreamCallbackTimeInfo *time_info,
                                 PaStreamCallbackFlags flags, void *user_data)
@@ -200,6 +200,24 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
     }
 
     const float *samples = (const float *)input;
+
+    // Check if this channel has tone detection enabled
+    int channel_has_tone_detect = 0;
+    for (int i = 0; i < MAX_CHANNELS; i++)
+    {
+        struct channel_config *channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid &&
+            strcmp(channel_config->channel_id, audio_stream->channel_id) == 0)
+        {
+            channel_has_tone_detect = channel_config->tone_detect;
+            break;
+        }
+    }
+
+    // If tone detection is enabled for this channel, send audio to tone detection
+    if (channel_has_tone_detect && is_tone_detect_enabled()) {
+        update_shared_audio_buffer(samples, frames);
+    }
 
     // Send audio data via UDP
     if (audio_stream->transmitting && audio_stream->gpio_active)

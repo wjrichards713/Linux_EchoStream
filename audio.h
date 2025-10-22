@@ -1,7 +1,7 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 
-#include "echostream.h"
+#include "tone_detect.h"
 
 // Audio structures
 struct audio_frame {
@@ -67,10 +67,27 @@ int initialize_audio_devices(void);
 int cleanup_audio_devices(void);
 
 
-// Audio callback functions
-int audio_output_callback(const void *input, void *output, unsigned long frames,
-                         const PaStreamCallbackTimeInfo* time_info,
-                         PaStreamCallbackFlags flags, void *user_data);
+// Tone detection integration functions
+int init_tone_detect_control(void);
+int enable_tone_detection(void);
+int disable_tone_detection(void);
+int set_passthrough_output_mode(int passthrough_mode);
+int is_tone_detect_enabled(void);
+int is_card1_input_enabled(void);
+int is_passthrough_mode(void);
+int get_passthrough_target_channel_index(void);
+int channel_has_output_stream(int channel_index);
+int repair_passthrough_output_stream(int channel_index);
+int start_tone_passthrough(int target_channel);
+int stop_tone_passthrough(void);
+int is_tone_passthrough_active(void);
+int tone_passthrough_callback(const void *input, void *output, unsigned long frames,
+                              const PaStreamCallbackTimeInfo *time_info,
+                              PaStreamCallbackFlags flags, void *user_data);
+
+// Audio buffer functions
+int init_shared_audio_buffer(void);
+int update_shared_audio_buffer(const float *samples, int sample_count);
 
 
 
