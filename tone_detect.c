@@ -822,7 +822,7 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
             envelope = (samples - i) / (sample_rate * 0.1f); // Fade out
         }
         
-        output_buffer[i] = envelope * 0.8f * sin(2.0f * M_PI * frequency * t);
+        output_buffer[i] = envelope * 1.0f * sin(2.0f * M_PI * frequency * t);
     }
 }
 
@@ -916,10 +916,25 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     
     printf("[ALERT PLAYBACK] Playing detected tones: A=%.1f Hz (%.1fms), B=%.1f Hz (%.1fms) on channel %d\n", 
            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration, target_channel_idx + 1);
+    
+    // Debug: Verify the alert is actually active
+    printf("[DEBUG] Alert state after setup: active=%d, samples_played=%d, total_samples=%d\n",
+           global_alert_playback.active, global_alert_playback.samples_played, global_alert_playback.total_samples);
+    
+    // Test: Play a simple test tone to verify audio output
+    printf("[TEST] Playing test tone on channel %d - you should hear a 1000Hz tone for 2 seconds\n", target_channel_idx + 1);
+    play_alert_tone_locally(target_channel_idx, 1000.0f, 1000.0f, 2000.0f, 0.0f);
 }
 
 // Get alert audio samples for output callback (called from audio.c)
 int get_alert_audio_samples(float* output_buffer, int max_samples) {
+    static int debug_count = 0;
+    if (++debug_count % 1000 == 0) {
+        printf("[DEBUG] get_alert_audio_samples called: active=%d, buffer=%p, samples_played=%d, total=%d\n",
+               global_alert_playback.active, global_alert_playback.alert_buffer, 
+               global_alert_playback.samples_played, global_alert_playback.total_samples);
+    }
+    
     if (!global_alert_playback.active || !global_alert_playback.alert_buffer) {
         return 0; // No alert playing
     }

@@ -559,6 +559,18 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             if (++mixing_log_counter % 100 == 0) {
                 printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
             }
+        } else {
+            // Debug: Log when alert is playing but no samples returned
+            static int no_samples_count = 0;
+            if (++no_samples_count % 1000 == 0) {
+                printf("[DEBUG] Alert playing but no samples returned - frames=%lu\n", frames);
+            }
+        }
+    } else {
+        // Debug: Log when alert is not playing
+        static int not_playing_count = 0;
+        if (++not_playing_count % 10000 == 0) {
+            printf("[DEBUG] Alert not playing - frames=%lu\n", frames);
         }
     }
     
