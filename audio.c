@@ -554,7 +554,11 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     if (is_alert_playing()) {
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
-            printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
+            // Only log occasionally to reduce spam
+            static int mixing_log_counter = 0;
+            if (++mixing_log_counter % 100 == 0) {
+                printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
+            }
         }
     }
     

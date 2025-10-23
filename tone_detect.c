@@ -822,7 +822,7 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
             envelope = (samples - i) / (sample_rate * 0.1f); // Fade out
         }
         
-        output_buffer[i] = envelope * 0.3f * sin(2.0f * M_PI * frequency * t);
+        output_buffer[i] = envelope * 0.8f * sin(2.0f * M_PI * frequency * t);
     }
 }
 
@@ -869,9 +869,9 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
         }
     }
     
-    // Calculate total samples needed for both tones
-    int tone_a_samples = (int)(tone_a_duration * SAMPLE_RATE);
-    int tone_b_samples = (int)(tone_b_duration * SAMPLE_RATE);
+    // Calculate total samples needed for both tones (convert ms to seconds)
+    int tone_a_samples = (int)((tone_a_duration / 1000.0f) * SAMPLE_RATE);
+    int tone_b_samples = (int)((tone_b_duration / 1000.0f) * SAMPLE_RATE);
     int total_samples = tone_a_samples + tone_b_samples;
     
     // Allocate buffer for both tones
@@ -883,11 +883,20 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     
     // Generate Tone A
     printf("   🎼 Generating Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
-    generate_alert_tone(tone_a_freq, tone_a_duration, alert_buffer, SAMPLE_RATE);
+    generate_alert_tone(tone_a_freq, tone_a_duration / 1000.0f, alert_buffer, SAMPLE_RATE);
     
     // Generate Tone B (append to buffer after Tone A)
     printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
-    generate_alert_tone(tone_b_freq, tone_b_duration, &alert_buffer[tone_a_samples], SAMPLE_RATE);
+    generate_alert_tone(tone_b_freq, tone_b_duration / 1000.0f, &alert_buffer[tone_a_samples], SAMPLE_RATE);
+    
+    // Debug: Check if tones were generated correctly
+    float max_amplitude = 0.0f;
+    for (int i = 0; i < total_samples; i++) {
+        if (fabs(alert_buffer[i]) > max_amplitude) {
+            max_amplitude = fabs(alert_buffer[i]);
+        }
+    }
+    printf("   🔍 Generated alert buffer: %d samples, max amplitude: %.3f\n", total_samples, max_amplitude);
     
     // Set up global alert playback state
     printf("   ✅ Alert buffer ready: %d samples, playing on channel %d\n", 
@@ -895,8 +904,8 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     global_alert_playback.active = 1;
     global_alert_playback.tone_a_frequency = tone_a_freq;
     global_alert_playback.tone_b_frequency = tone_b_freq;
-    global_alert_playback.tone_a_duration_seconds = tone_a_duration;
-    global_alert_playback.tone_b_duration_seconds = tone_b_duration;
+    global_alert_playback.tone_a_duration_seconds = tone_a_duration / 1000.0f;
+    global_alert_playback.tone_b_duration_seconds = tone_b_duration / 1000.0f;
     global_alert_playback.samples_played = 0;
     global_alert_playback.total_samples = total_samples;
     global_alert_playback.alert_buffer = alert_buffer;
@@ -1008,16 +1017,16 @@ void trigger_tone_passthrough(void) {
             // Find the tone definition that was detected
             float tone_a_freq = 1000.0f; // Default frequencies
             float tone_b_freq = 1000.0f;
-            float tone_a_duration = 1.0f; // Default durations
-            float tone_b_duration = 0.5f;
+            float tone_a_duration = 1000.0f; // Default durations in milliseconds
+            float tone_b_duration = 500.0f;
             
             for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
                 if (global_tone_detection.tone_definitions[i].valid) {
                     // Use the actual detected Tone A and Tone B frequencies and durations
                     tone_a_freq = global_tone_detection.tone_definitions[i].tone_a_freq;
                     tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
-                    tone_a_duration = global_tone_detection.tone_definitions[i].tone_a_length_ms / 1000.0f;
-                    tone_b_duration = global_tone_detection.tone_definitions[i].tone_b_length_ms / 1000.0f;
+                    tone_a_duration = global_tone_detection.tone_definitions[i].tone_a_length_ms;
+                    tone_b_duration = global_tone_detection.tone_definitions[i].tone_b_length_ms;
                     printf("[ALERT] Playing back detected tones: A=%.1f Hz (%.1fs), B=%.1f Hz (%.1fs)\n",
                            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
                     break;
