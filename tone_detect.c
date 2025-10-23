@@ -812,12 +812,6 @@ void reset_tone_detection_stats(void) {
 void generate_alert_tone(float frequency, float duration_seconds, float* output_buffer, int sample_rate) {
     int samples = (int)(duration_seconds * sample_rate);
     
-    // Debug: Log the first few samples to verify frequency
-    static int debug_count = 0;
-    if (++debug_count % 10 == 0) {
-        printf("[DEBUG] generate_alert_tone: freq=%.1f Hz, duration=%.3f s, samples=%d, sample_rate=%d\n", 
-               frequency, duration_seconds, samples, sample_rate);
-    }
     
     for (int i = 0; i < samples; i++) {
         float t = (float)i / sample_rate;
@@ -831,25 +825,7 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
         
         output_buffer[i] = envelope * 1.0f * sin(2.0f * M_PI * frequency * t);
         
-        // Debug: Log first few samples to verify the sine wave
-        if (debug_count % 10 == 0 && i < 10) {
-            printf("[DEBUG] Sample %d: t=%.6f, sin(2π*%.1f*%.6f)=%.6f\n", 
-                   i, t, frequency, t, sin(2.0f * M_PI * frequency * t));
-        }
         
-        // Debug: Check for frequency doubling by looking at zero crossings
-        if (debug_count % 10 == 0 && i > 0) {
-            static int zero_crossings = 0;
-            static int last_sign = 0;
-            int current_sign = (output_buffer[i] >= 0) ? 1 : -1;
-            if (last_sign != 0 && last_sign != current_sign) {
-                zero_crossings++;
-                if (zero_crossings <= 5) {
-                    printf("[DEBUG] Zero crossing %d at sample %d (t=%.6f)\n", zero_crossings, i, t);
-                }
-            }
-            last_sign = current_sign;
-        }
     }
 }
 
@@ -876,7 +852,6 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     printf("   📍 Target Channel: %d\n", target_channel_idx + 1);
     printf("   🎵 Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
     printf("   🎵 Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
-    printf("   🔍 [DEBUG] Alert generation frequencies: A=%.1f Hz, B=%.1f Hz\n", tone_a_freq, tone_b_freq);
     
     if (target_channel_idx < 0 || target_channel_idx >= MAX_CHANNELS) {
         printf("[ALERT PLAYBACK] Invalid target channel index: %d\n", target_channel_idx);
@@ -928,13 +903,6 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms (sample_rate=%.1f)\n", tone_b_freq, tone_b_duration, actual_sample_rate);
     generate_alert_tone(tone_b_freq, tone_b_duration / 1000.0f, &alert_buffer[tone_a_samples], (int)actual_sample_rate);
     
-    // DEBUG: Add a 440 Hz test tone at the beginning to verify frequency
-    printf("   🧪 [DEBUG] Adding 440 Hz test tone for 200ms to verify frequency\n");
-    int test_samples = (int)(0.2f * actual_sample_rate); // 200ms
-    for (int i = 0; i < test_samples && i < total_samples; i++) {
-        float t = (float)i / actual_sample_rate;
-        alert_buffer[i] = 0.3f * sin(2.0f * M_PI * 440.0f * t); // 440 Hz test tone
-    }
     
     // Debug: Check if tones were generated correctly
     float max_amplitude = 0.0f;
@@ -965,24 +933,11 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration, target_channel_idx + 1);
     
     // Debug: Verify the alert is actually active
-    printf("[DEBUG] Alert state after setup: active=%d, samples_played=%d, total_samples=%d, target_channel=%d\n",
-           global_alert_playback.active, global_alert_playback.samples_played, global_alert_playback.total_samples, target_channel_idx);
     
-    // Debug: Check if we're getting called too frequently
-    static int call_count = 0;
-    if (++call_count % 10 == 0) {
-        printf("[DEBUG] play_alert_tone_locally called %d times\n", call_count);
-    }
 }
 
 // Get alert audio samples for output callback (called from audio.c)
 int get_alert_audio_samples(float* output_buffer, int max_samples) {
-    static int debug_count = 0;
-    if (++debug_count % 1000 == 0) {
-        printf("[DEBUG] get_alert_audio_samples called: active=%d, buffer=%p, samples_played=%d, total=%d\n",
-               global_alert_playback.active, global_alert_playback.alert_buffer, 
-               global_alert_playback.samples_played, global_alert_playback.total_samples);
-    }
     
     if (!global_alert_playback.active || !global_alert_playback.alert_buffer) {
         return 0; // No alert playing
@@ -1088,9 +1043,7 @@ void trigger_tone_passthrough(void) {
     
     // Check if the target channel has a working output stream
     int target_channel_idx = get_passthrough_target_channel_index();
-    printf("[DEBUG] get_passthrough_target_channel_index returned: %d\n", target_channel_idx);
     if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-        printf("[DEBUG] Checking if channel %d has output stream\n", target_channel_idx);
         if (channel_has_output_stream(target_channel_idx)) {
             printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
                    target_channel_idx + 1);
@@ -1131,8 +1084,6 @@ void trigger_tone_passthrough(void) {
 int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
                        int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
                        int record_length) {
-    printf("[DEBUG] add_tone_definition() called: ID=%s, A=%.1f Hz±%d, B=%.1f Hz±%d\n", 
-           tone_id, tone_a_freq, tone_a_range, tone_b_freq, tone_b_range);
     
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         if (!global_tone_detection.tone_definitions[i].valid) {
@@ -1156,7 +1107,6 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
                     total_count++;
                 }
             }
-            printf("[DEBUG] Total tone definitions now: %d\n", total_count);
             
             return 1;
         }
@@ -1296,6 +1246,7 @@ float freq_from_fft(float* samples, int sample_count, int sample_rate) {
     // Convert bin to frequency
     float frequency = (float)peak_bin * (float)sample_rate / (float)FFT_SIZE;
     
+    
     return frequency;
 }
 
@@ -1355,12 +1306,6 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         // Perform FFT on each segment
         float tone_a_freq = freq_from_fft(tone_a_segment, tone_a_samples, SAMPLE_RATE);
         float tone_b_freq = freq_from_fft(tone_b_segment, tone_b_samples, SAMPLE_RATE);
-        
-        // Debug: Log detected vs expected frequencies
-        printf("[DEBUG] Tone A: Detected=%.1f Hz, Expected=%.1f Hz, Diff=%.1f Hz\n", 
-               tone_a_freq, tone_def->tone_a_freq, fabs(tone_a_freq - tone_def->tone_a_freq));
-        printf("[DEBUG] Tone B: Detected=%.1f Hz, Expected=%.1f Hz, Diff=%.1f Hz\n", 
-               tone_b_freq, tone_def->tone_b_freq, fabs(tone_b_freq - tone_def->tone_b_freq));
         
         // Check if frequencies match within tolerance
         int tone_a_tolerance = tone_def->tone_a_range_hz; // Use Tone A's configured tolerance
