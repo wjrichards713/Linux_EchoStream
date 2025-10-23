@@ -449,19 +449,28 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         
         // Only play alert if one is active
-        if (should_play_alert_on_channel(current_channel_index)) {
-            int alert_samples = get_alert_audio_samples(out, frames);
-            if (alert_samples > 0) {
-                printf("[ALERT PLAYBACK] Playing alert tone directly on passthrough target - %d samples\n", alert_samples);
-                // Alert is playing directly - replaces silence
-            }
-        } else {
-            // No alert playing - output should be silence (already set above)
-            static int silence_count = 0;
-            if (silence_count++ % 10000 == 0) {
-                printf("[DEBUG] Passthrough target channel %s: No alert playing, outputting silence\n", audio_stream->channel_id);
+    if (should_play_alert_on_channel(current_channel_index)) {
+        // Debug: Check actual sample rate of the output stream
+        static int sample_rate_debug_count = 0;
+        if (++sample_rate_debug_count % 1000 == 0) {
+            const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->output_stream);
+            if (stream_info) {
+                printf("[DEBUG] Output stream actual sample rate: %.1f Hz (requested: 48000 Hz)\n", stream_info->sampleRate);
             }
         }
+        
+        int alert_samples = get_alert_audio_samples(out, frames);
+        if (alert_samples > 0) {
+            printf("[ALERT PLAYBACK] Playing alert tone directly on passthrough target - %d samples\n", alert_samples);
+            // Alert is playing directly - replaces silence
+        }
+    } else {
+        // No alert playing - output should be silence (already set above)
+        static int silence_count = 0;
+        if (silence_count++ % 10000 == 0) {
+            printf("[DEBUG] Passthrough target channel %s: No alert playing, outputting silence\n", audio_stream->channel_id);
+        }
+    }
         
         return paContinue;
     }
@@ -858,6 +867,18 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, 48000, 1024,
                         paClipOff, audio_output_callback, audio_stream);
     printf("[DEBUG] Pa_OpenStream for output stream returned: %s\n", Pa_GetErrorText(err));
+    
+    // Check actual sample rate after stream creation
+    if (err == paNoError) {
+        const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->output_stream);
+        if (stream_info) {
+            printf("[DEBUG] Output stream created with actual sample rate: %.1f Hz (requested: 48000 Hz)\n", stream_info->sampleRate);
+            if (fabs(stream_info->sampleRate - 48000.0) > 1.0) {
+                printf("[WARNING] Sample rate mismatch! Generated tones will play at wrong frequency!\n");
+                printf("[WARNING] Frequency scaling factor: %.3f\n", stream_info->sampleRate / 48000.0);
+            }
+        }
+    }
 
     if (err != paNoError) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));

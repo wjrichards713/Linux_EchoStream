@@ -812,6 +812,13 @@ void reset_tone_detection_stats(void) {
 void generate_alert_tone(float frequency, float duration_seconds, float* output_buffer, int sample_rate) {
     int samples = (int)(duration_seconds * sample_rate);
     
+    // Debug: Log the first few samples to verify frequency
+    static int debug_count = 0;
+    if (++debug_count % 10 == 0) {
+        printf("[DEBUG] generate_alert_tone: freq=%.1f Hz, duration=%.3f s, samples=%d, sample_rate=%d\n", 
+               frequency, duration_seconds, samples, sample_rate);
+    }
+    
     for (int i = 0; i < samples; i++) {
         float t = (float)i / sample_rate;
         // Generate sine wave with envelope (fade in/out)
@@ -823,6 +830,12 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
         }
         
         output_buffer[i] = envelope * 1.0f * sin(2.0f * M_PI * frequency * t);
+        
+        // Debug: Log first few samples to verify the sine wave
+        if (debug_count % 10 == 0 && i < 10) {
+            printf("[DEBUG] Sample %d: t=%.6f, sin(2π*%.1f*%.6f)=%.6f\n", 
+                   i, t, frequency, t, sin(2.0f * M_PI * frequency * t));
+        }
     }
 }
 
@@ -860,6 +873,17 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
         return;
     }
     
+    // Get the actual sample rate from the PortAudio stream
+    extern struct channel_context channels[MAX_CHANNELS];
+    double actual_sample_rate = SAMPLE_RATE; // Default fallback
+    if (channels[target_channel_idx].audio.output_stream) {
+        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[target_channel_idx].audio.output_stream);
+        if (stream_info) {
+            actual_sample_rate = stream_info->sampleRate;
+            printf("   🎛️ Using actual sample rate: %.1f Hz (instead of %d Hz)\n", actual_sample_rate, SAMPLE_RATE);
+        }
+    }
+    
     // Stop any existing alert playback
     if (global_alert_playback.active) {
         printf("[ALERT PLAYBACK] Stopping previous alert to start new one\n");
@@ -870,8 +894,8 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     }
     
     // Calculate total samples needed for both tones (convert ms to seconds)
-    int tone_a_samples = (int)((tone_a_duration / 1000.0f) * SAMPLE_RATE);
-    int tone_b_samples = (int)((tone_b_duration / 1000.0f) * SAMPLE_RATE);
+    int tone_a_samples = (int)((tone_a_duration / 1000.0f) * actual_sample_rate);
+    int tone_b_samples = (int)((tone_b_duration / 1000.0f) * actual_sample_rate);
     int total_samples = tone_a_samples + tone_b_samples;
     
     // Allocate buffer for both tones
@@ -882,12 +906,12 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     }
     
     // Generate Tone A
-    printf("   🎼 Generating Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
-    generate_alert_tone(tone_a_freq, tone_a_duration / 1000.0f, alert_buffer, SAMPLE_RATE);
+    printf("   🎼 Generating Tone A: %.1f Hz for %.1f ms (sample_rate=%.1f)\n", tone_a_freq, tone_a_duration, actual_sample_rate);
+    generate_alert_tone(tone_a_freq, tone_a_duration / 1000.0f, alert_buffer, (int)actual_sample_rate);
     
     // Generate Tone B (append to buffer after Tone A)
-    printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
-    generate_alert_tone(tone_b_freq, tone_b_duration / 1000.0f, &alert_buffer[tone_a_samples], SAMPLE_RATE);
+    printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms (sample_rate=%.1f)\n", tone_b_freq, tone_b_duration, actual_sample_rate);
+    generate_alert_tone(tone_b_freq, tone_b_duration / 1000.0f, &alert_buffer[tone_a_samples], (int)actual_sample_rate);
     
     // Debug: Check if tones were generated correctly
     float max_amplitude = 0.0f;
@@ -962,8 +986,19 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
     
     global_alert_playback.samples_played += samples_to_copy;
     
-    // Update phase tracking
-    int tone_a_samples = (int)(global_alert_playback.tone_a_duration_seconds * SAMPLE_RATE);
+    // Update phase tracking (use actual sample rate from stream)
+    extern struct channel_context channels[MAX_CHANNELS];
+    double actual_sample_rate = SAMPLE_RATE; // Default fallback
+    if (global_alert_playback.target_channel_idx >= 0 && 
+        global_alert_playback.target_channel_idx < MAX_CHANNELS &&
+        channels[global_alert_playback.target_channel_idx].audio.output_stream) {
+        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[global_alert_playback.target_channel_idx].audio.output_stream);
+        if (stream_info) {
+            actual_sample_rate = stream_info->sampleRate;
+        }
+    }
+    
+    int tone_a_samples = (int)(global_alert_playback.tone_a_duration_seconds * actual_sample_rate);
     if (global_alert_playback.samples_played <= tone_a_samples) {
         // Still playing Tone A
         if (global_alert_playback.current_phase != 0) {
