@@ -918,12 +918,14 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration, target_channel_idx + 1);
     
     // Debug: Verify the alert is actually active
-    printf("[DEBUG] Alert state after setup: active=%d, samples_played=%d, total_samples=%d\n",
-           global_alert_playback.active, global_alert_playback.samples_played, global_alert_playback.total_samples);
+    printf("[DEBUG] Alert state after setup: active=%d, samples_played=%d, total_samples=%d, target_channel=%d\n",
+           global_alert_playback.active, global_alert_playback.samples_played, global_alert_playback.total_samples, target_channel_idx);
     
-    // Test: Play a simple test tone to verify audio output
-    printf("[TEST] Playing test tone on channel %d - you should hear a 1000Hz tone for 2 seconds\n", target_channel_idx + 1);
-    play_alert_tone_locally(target_channel_idx, 1000.0f, 1000.0f, 2000.0f, 0.0f);
+    // Debug: Check if we're getting called too frequently
+    static int call_count = 0;
+    if (++call_count % 10 == 0) {
+        printf("[DEBUG] play_alert_tone_locally called %d times\n", call_count);
+    }
 }
 
 // Get alert audio samples for output callback (called from audio.c)
@@ -1023,7 +1025,9 @@ void trigger_tone_passthrough(void) {
     
     // Check if the target channel has a working output stream
     int target_channel_idx = get_passthrough_target_channel_index();
+    printf("[DEBUG] get_passthrough_target_channel_index returned: %d\n", target_channel_idx);
     if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
+        printf("[DEBUG] Checking if channel %d has output stream\n", target_channel_idx);
         if (channel_has_output_stream(target_channel_idx)) {
             printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
                    target_channel_idx + 1);

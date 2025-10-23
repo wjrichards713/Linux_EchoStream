@@ -399,7 +399,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     struct jitter_buffer *jitter = &audio_stream->output_jitter;
     
     static int callback_count = 0;
-    if (callback_count++ % 100000 == 0) {  // Even less frequent logging - about every 30 seconds
+    if (callback_count++ % 1000 == 0) {  // More frequent logging for debugging
         printf("Audio output callback called for channel %s (frames=%lu, buffer_count=%d)\n", 
                audio_stream->channel_id, frames, jitter->frame_count);
     }
@@ -552,25 +552,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     // Add alert tones if playing (for normal EchoStream output)
     if (is_alert_playing()) {
+        printf("[DEBUG] Alert is playing, calling get_alert_audio_samples for channel %s\n", audio_stream->channel_id);
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
-            // Only log occasionally to reduce spam
-            static int mixing_log_counter = 0;
-            if (++mixing_log_counter % 100 == 0) {
-                printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
-            }
+            printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
         } else {
-            // Debug: Log when alert is playing but no samples returned
-            static int no_samples_count = 0;
-            if (++no_samples_count % 1000 == 0) {
-                printf("[DEBUG] Alert playing but no samples returned - frames=%lu\n", frames);
-            }
+            printf("[DEBUG] Alert playing but no samples returned - frames=%lu\n", frames);
         }
     } else {
-        // Debug: Log when alert is not playing
-        static int not_playing_count = 0;
-        if (++not_playing_count % 10000 == 0) {
-            printf("[DEBUG] Alert not playing - frames=%lu\n", frames);
+        // Debug: Log when alert is not playing - but only for the target channel
+        if (strcmp(audio_stream->channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
+            static int not_playing_count = 0;
+            if (++not_playing_count % 100 == 0) {
+                printf("[DEBUG] Alert not playing for target channel %s - frames=%lu\n", audio_stream->channel_id, frames);
+            }
         }
     }
     
