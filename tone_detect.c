@@ -955,9 +955,9 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
         samples_to_copy = remaining_samples;
     }
     
-    // Copy alert samples to output buffer
+    // Copy alert samples to output buffer (REPLACE, don't mix)
     for (int i = 0; i < samples_to_copy; i++) {
-        output_buffer[i] += global_alert_playback.alert_buffer[global_alert_playback.samples_played + i];
+        output_buffer[i] = global_alert_playback.alert_buffer[global_alert_playback.samples_played + i];
     }
     
     global_alert_playback.samples_played += samples_to_copy;
