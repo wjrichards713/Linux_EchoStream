@@ -431,28 +431,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     
     if (passthrough_mode) {
-        // Configured passthrough target in passthrough mode - play audio from shared buffer (Channel 1 input)
-        unsigned long frames_filled = 0;
-        pthread_mutex_lock(&global_shared_buffer.mutex);
-        if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
-            unsigned long to_copy = global_shared_buffer.sample_count;
-            if (to_copy > frames) to_copy = frames;
-            for (unsigned long i = 0; i < to_copy; i++) {
-                out[i] = global_shared_buffer.samples[i];
-            }
-            frames_filled = to_copy;
-            // do not invalidate; tone detection thread also reads; this is a tap
-        } else {
-            // Debug: no audio data in shared buffer
-            static int no_audio_count = 0;
-            if (no_audio_count++ % 100 == 0) {
-                printf("[DEBUG] Passthrough mode active but no audio in shared buffer: valid=%d, sample_count=%d\n", 
-                       global_shared_buffer.valid, global_shared_buffer.sample_count);
-            }
-        }
-        pthread_mutex_unlock(&global_shared_buffer.mutex);
-        
-        // Add alert tones if playing (only on target channel)
+        // Configured passthrough target - should ONLY play alerts, not passthrough audio
         // First, find the current channel index
         extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
         extern int global_channel_count;
@@ -464,35 +443,26 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             }
         }
         
+        // Initialize output buffer to silence
+        for (unsigned long i = 0; i < frames; i++) {
+            out[i] = 0.0f;
+        }
+        
+        // Only play alert if one is active
         if (should_play_alert_on_channel(current_channel_index)) {
             int alert_samples = get_alert_audio_samples(out, frames);
             if (alert_samples > 0) {
                 printf("[ALERT PLAYBACK] Playing alert tone directly on passthrough target - %d samples\n", alert_samples);
-                // Alert is playing directly - no need to mix with passthrough audio
-                // The alert audio has already been written to the output buffer
+                // Alert is playing directly - replaces silence
+            }
+        } else {
+            // No alert playing - output should be silence (already set above)
+            static int silence_count = 0;
+            if (silence_count++ % 10000 == 0) {
+                printf("[DEBUG] Passthrough target channel %s: No alert playing, outputting silence\n", audio_stream->channel_id);
             }
         }
         
-    // Debug logging for passthrough audio
-    static int passthrough_audio_count = 0;
-    if (passthrough_audio_count++ % 1000 == 0) {
-        printf("[DEBUG] Passthrough audio: frames_filled=%lu, shared_valid=%d, shared_count=%d\n", 
-               frames_filled, global_shared_buffer.valid, global_shared_buffer.sample_count);
-    }
-    
-    // Additional debug for passthrough activation
-    if (frames_filled > 0) {
-        static int passthrough_active_count = 0;
-        if (passthrough_active_count++ % 100 == 0) {
-            printf("[TONE PASSTHROUGH] Audio being played on channel %s - %lu frames\n", 
-                   audio_stream->channel_id, frames_filled);
-        }
-    }
-        
-        // Fill any remainder with silence
-        for (unsigned long i = frames_filled; i < frames; i++) {
-            out[i] = 0.0f;
-        }
         return paContinue;
     }
     
