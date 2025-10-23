@@ -1346,10 +1346,10 @@ int process_audio_python_approach(const float* samples, int sample_count) {
             continue;
         }
         
-        // Extract Tone A segment (older audio)
-        get_audio_segment(total_samples, tone_a_samples, tone_a_segment);
+        // Extract Tone A segment (older audio) - goes back (tone_a_samples + tone_b_samples)
+        get_audio_segment(tone_a_samples + tone_b_samples, tone_a_samples, tone_a_segment);
         
-        // Extract Tone B segment (newer audio)
+        // Extract Tone B segment (newer audio) - goes back tone_b_samples
         get_audio_segment(tone_b_samples, tone_b_samples, tone_b_segment);
         
         // Perform FFT on each segment
