@@ -484,7 +484,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         if (should_play_alert_on_channel(current_channel_index)) {
             int alert_samples = get_alert_audio_samples(out, frames);
             if (alert_samples > 0) {
-                printf("[ALERT PLAYBACK] Mixing alert tone with passthrough audio - %d samples\n", alert_samples);
+                printf("[ALERT PLAYBACK] Playing alert tone directly on passthrough target - %d samples\n", alert_samples);
+                // Alert is playing directly - no need to mix with passthrough audio
+                // The alert audio has already been written to the output buffer
             }
         }
         
@@ -577,7 +579,9 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         printf("[DEBUG] Alert should play on channel %s (index %d), calling get_alert_audio_samples\n", audio_stream->channel_id, current_channel_index);
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
-            printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
+            printf("[ALERT PLAYBACK] Playing alert tone directly on target channel - %d samples\n", alert_samples);
+            // Alert is playing directly - no need to mix with EchoStream
+            // The alert audio has already been written to the output buffer
         } else {
             printf("[DEBUG] Alert playing but no samples returned - frames=%lu\n", frames);
         }
