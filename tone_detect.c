@@ -876,6 +876,7 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     printf("   📍 Target Channel: %d\n", target_channel_idx + 1);
     printf("   🎵 Tone A: %.1f Hz for %.1f ms\n", tone_a_freq, tone_a_duration);
     printf("   🎵 Tone B: %.1f Hz for %.1f ms\n", tone_b_freq, tone_b_duration);
+    printf("   🔍 [DEBUG] Alert generation frequencies: A=%.1f Hz, B=%.1f Hz\n", tone_a_freq, tone_b_freq);
     
     if (target_channel_idx < 0 || target_channel_idx >= MAX_CHANNELS) {
         printf("[ALERT PLAYBACK] Invalid target channel index: %d\n", target_channel_idx);
@@ -1354,6 +1355,12 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         // Perform FFT on each segment
         float tone_a_freq = freq_from_fft(tone_a_segment, tone_a_samples, SAMPLE_RATE);
         float tone_b_freq = freq_from_fft(tone_b_segment, tone_b_samples, SAMPLE_RATE);
+        
+        // Debug: Log detected vs expected frequencies
+        printf("[DEBUG] Tone A: Detected=%.1f Hz, Expected=%.1f Hz, Diff=%.1f Hz\n", 
+               tone_a_freq, tone_def->tone_a_freq, fabs(tone_a_freq - tone_def->tone_a_freq));
+        printf("[DEBUG] Tone B: Detected=%.1f Hz, Expected=%.1f Hz, Diff=%.1f Hz\n", 
+               tone_b_freq, tone_def->tone_b_freq, fabs(tone_b_freq - tone_def->tone_b_freq));
         
         // Check if frequencies match within tolerance
         int tone_a_tolerance = tone_def->tone_a_range_hz; // Use Tone A's configured tolerance
