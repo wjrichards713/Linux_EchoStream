@@ -836,6 +836,20 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
             printf("[DEBUG] Sample %d: t=%.6f, sin(2π*%.1f*%.6f)=%.6f\n", 
                    i, t, frequency, t, sin(2.0f * M_PI * frequency * t));
         }
+        
+        // Debug: Check for frequency doubling by looking at zero crossings
+        if (debug_count % 10 == 0 && i > 0) {
+            static int zero_crossings = 0;
+            static int last_sign = 0;
+            int current_sign = (output_buffer[i] >= 0) ? 1 : -1;
+            if (last_sign != 0 && last_sign != current_sign) {
+                zero_crossings++;
+                if (zero_crossings <= 5) {
+                    printf("[DEBUG] Zero crossing %d at sample %d (t=%.6f)\n", zero_crossings, i, t);
+                }
+            }
+            last_sign = current_sign;
+        }
     }
 }
 
@@ -912,6 +926,14 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     // Generate Tone B (append to buffer after Tone A)
     printf("   🎼 Generating Tone B: %.1f Hz for %.1f ms (sample_rate=%.1f)\n", tone_b_freq, tone_b_duration, actual_sample_rate);
     generate_alert_tone(tone_b_freq, tone_b_duration / 1000.0f, &alert_buffer[tone_a_samples], (int)actual_sample_rate);
+    
+    // DEBUG: Add a 440 Hz test tone at the beginning to verify frequency
+    printf("   🧪 [DEBUG] Adding 440 Hz test tone for 200ms to verify frequency\n");
+    int test_samples = (int)(0.2f * actual_sample_rate); // 200ms
+    for (int i = 0; i < test_samples && i < total_samples; i++) {
+        float t = (float)i / actual_sample_rate;
+        alert_buffer[i] = 0.3f * sin(2.0f * M_PI * 440.0f * t); // 440 Hz test tone
+    }
     
     // Debug: Check if tones were generated correctly
     float max_amplitude = 0.0f;
