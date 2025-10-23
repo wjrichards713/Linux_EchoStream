@@ -469,8 +469,19 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Add alert tones if playing
-        if (is_alert_playing()) {
+        // Add alert tones if playing (only on target channel)
+        // First, find the current channel index
+        extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+        extern int global_channel_count;
+        int current_channel_index = -1;
+        for (int i = 0; i < global_channel_count; i++) {
+            if (strcmp(audio_stream->channel_id, global_channel_ids[i]) == 0) {
+                current_channel_index = i;
+                break;
+            }
+        }
+        
+        if (should_play_alert_on_channel(current_channel_index)) {
             int alert_samples = get_alert_audio_samples(out, frames);
             if (alert_samples > 0) {
                 printf("[ALERT PLAYBACK] Mixing alert tone with passthrough audio - %d samples\n", alert_samples);
@@ -551,8 +562,19 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     }
     
     // Add alert tones if playing (for normal EchoStream output)
-    if (is_alert_playing()) {
-        printf("[DEBUG] Alert is playing, calling get_alert_audio_samples for channel %s\n", audio_stream->channel_id);
+    // First, find the current channel index
+    extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
+    extern int global_channel_count;
+    int current_channel_index = -1;
+    for (int i = 0; i < global_channel_count; i++) {
+        if (strcmp(audio_stream->channel_id, global_channel_ids[i]) == 0) {
+            current_channel_index = i;
+            break;
+        }
+    }
+    
+    if (should_play_alert_on_channel(current_channel_index)) {
+        printf("[DEBUG] Alert should play on channel %s (index %d), calling get_alert_audio_samples\n", audio_stream->channel_id, current_channel_index);
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
             printf("[ALERT PLAYBACK] Mixing alert tone with EchoStream audio - %d samples\n", alert_samples);
@@ -564,7 +586,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         if (strcmp(audio_stream->channel_id, "308e2478-072c-4d8b-ffff24d-51854e06711a") == 0) {
             static int not_playing_count = 0;
             if (++not_playing_count % 100 == 0) {
-                printf("[DEBUG] Alert not playing for target channel %s - frames=%lu\n", audio_stream->channel_id, frames);
+                printf("[DEBUG] Alert not playing for target channel %s (index %d) - frames=%lu\n", audio_stream->channel_id, current_channel_index, frames);
             }
         }
     }

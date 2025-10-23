@@ -994,6 +994,11 @@ int is_alert_playing(void) {
     return global_alert_playback.active;
 }
 
+// Check if alert should be played on the current channel
+int should_play_alert_on_channel(int channel_index) {
+    return global_alert_playback.active && (global_alert_playback.target_channel_idx == channel_index);
+}
+
 // Trigger tone passthrough when tones are detected
 void trigger_tone_passthrough(void) {
     // Find which channel has tone detection enabled and get its config

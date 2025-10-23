@@ -150,6 +150,7 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
                             float tone_a_duration, float tone_b_duration);
 int get_alert_audio_samples(float* output_buffer, int max_samples);
 int is_alert_playing(void);
+int should_play_alert_on_channel(int channel_index);
 
 // FFT frequency extraction
 float freq_from_fft(float* samples, int sample_count, int sample_rate);
