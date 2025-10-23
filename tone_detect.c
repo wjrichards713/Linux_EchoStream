@@ -914,7 +914,7 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
     global_alert_playback.tone_a_samples_played = 0;
     global_alert_playback.tone_b_samples_played = 0;
     
-    printf("[ALERT PLAYBACK] Playing detected tones: A=%.1f Hz (%.1fs), B=%.1f Hz (%.1fs) on channel %d\n", 
+    printf("[ALERT PLAYBACK] Playing detected tones: A=%.1f Hz (%.1fms), B=%.1f Hz (%.1fms) on channel %d\n", 
            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration, target_channel_idx + 1);
 }
 
@@ -1027,7 +1027,7 @@ void trigger_tone_passthrough(void) {
                     tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
                     tone_a_duration = global_tone_detection.tone_definitions[i].tone_a_length_ms;
                     tone_b_duration = global_tone_detection.tone_definitions[i].tone_b_length_ms;
-                    printf("[ALERT] Playing back detected tones: A=%.1f Hz (%.1fs), B=%.1f Hz (%.1fs)\n",
+                    printf("[ALERT] Playing back detected tones: A=%.1f Hz (%.1fms), B=%.1f Hz (%.1fms)\n",
                            tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
                     break;
                 }
