@@ -425,25 +425,8 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                    is_configured_target, passthrough_mode, frames);
         }
         
-        // Test: Generate a simple tone to verify audio output is working
-        static int test_tone_count = 0;
-        if (test_tone_count++ % 10000 == 0) {
-            printf("[DEBUG] Last channel: Generating test tone to verify audio output\n");
-        }
-        
-        // Generate a simple 440Hz test tone (A4 note) for testing
-        static float phase = 0.0f;
-        float frequency = 440.0f; // A4 note
-        float sample_rate = 48000.0f;
-        float phase_increment = 2.0f * 3.14159265359f * frequency / sample_rate;
-        
-        for (unsigned long i = 0; i < frames; i++) {
-            out[i] = 0.1f * sinf(phase); // Low volume test tone
-            phase += phase_increment;
-            if (phase > 2.0f * 3.14159265359f) phase -= 2.0f * 3.14159265359f;
-        }
-        
-        return paContinue; // Skip normal processing for last channel test
+        // REMOVED: Test tone generation - this was causing the constant tone!
+        // The target channel should only play alerts, not test tones
     }
     
     
