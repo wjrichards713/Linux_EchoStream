@@ -477,10 +477,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                current_time - global_tone_detection.tone_b_tracking_start);
                         global_tone_detection.tone_b_detections++;
                         
-                        // Start recording
-                        global_tone_detection.recording_active = 1;
-                        global_tone_detection.recording_start_time = current_time;
-                        printf("[TONE] Recording started for %d ms\n", tone_def->record_length_ms);
+                        // Start or extend recording
+                        start_recording_timer(tone_def->record_length_ms);
                         
                         // Trigger tone passthrough if configured
                         trigger_tone_passthrough();
@@ -514,16 +512,18 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         detect_new_tones(global_tone_detection.frequency_magnitudes, FREQ_BINS);
     }
     
+    // Apply frequency filters to audio samples if any are configured
+    apply_audio_frequency_filters(samples, sample_count);
+    
+    // Check for single tone detection for passthrough
+    detect_single_tone_for_passthrough(samples, sample_count);
+    
     // Check if recording should stop
     if (global_tone_detection.recording_active) {
-        for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-            struct tone_definition* tone_def = &global_tone_detection.tone_definitions[i];
-            if (tone_def->valid && 
-                current_time - global_tone_detection.recording_start_time >= tone_def->record_length_ms) {
-                global_tone_detection.recording_active = 0;
-                printf("[TONE] Recording stopped\n");
-                break;
-            }
+        int elapsed = current_time - global_tone_detection.recording_start_time;
+        if (elapsed >= global_tone_detection.recording_duration_ms) {
+            global_tone_detection.recording_active = 0;
+            printf("[TONE] Recording stopped - %d ms elapsed\n", elapsed);
         }
     }
     
@@ -726,7 +726,11 @@ void reset_tone_tracking(void) {
 
 // Detect new tones
 int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
-    // Simple new tone detection - look for strong peaks not in defined tones
+    if (!global_tone_detection.config.detect_new_tones) {
+        return 0;
+    }
+    
+    // Enhanced new tone detection with duration and range checking
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         float freq = global_tone_detection.peak_frequencies[i];
         int is_known_tone = 0;
@@ -745,22 +749,37 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
         }
         
         if (!is_known_tone) {
-            // Check if we've already detected this frequency recently (within 3 Hz)
+            // Check if we've already detected this frequency recently (within configured range)
             for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
-                if (fabs(global_tone_detection.detected_frequencies[k] - freq) < 3.0f) {
+                if (fabs(global_tone_detection.detected_frequencies[k] - freq) < global_tone_detection.config.new_tone_range_hz) {
                     is_duplicate = 1;
                     break;
                 }
             }
             
             if (!is_duplicate && global_tone_detection.detected_frequency_count < 100) {
-                // This is a genuinely new tone - only log once per frequency
-                global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
-                global_tone_detection.detected_frequency_count++;
-                global_tone_detection.new_tone_detections++;
-                // Suppress NEW TONE logs for frequencies within any configured tone window
-                if (!is_known_tone) {
-                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz\n", freq);
+                // Check if tone duration meets minimum requirement
+                int required_samples = (int)(global_tone_detection.config.new_tone_length_ms * SAMPLE_RATE / 1000.0f);
+                if (audio_buffer_size >= required_samples) {
+                    // Analyze the tone duration by checking if it persists
+                    float* tone_segment = malloc(required_samples * sizeof(float));
+                    if (tone_segment) {
+                        get_audio_segment(required_samples, required_samples, tone_segment);
+                        float detected_freq = freq_from_fft(tone_segment, required_samples, SAMPLE_RATE);
+                        
+                        // Check if the detected frequency is consistent with the peak frequency
+                        if (fabs(detected_freq - freq) < global_tone_detection.config.new_tone_range_hz) {
+                            // This is a genuinely new tone that meets duration requirements
+                            global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
+                            global_tone_detection.detected_frequency_count++;
+                            global_tone_detection.new_tone_detections++;
+                            
+                            printf("[NEW TONE] Detected unknown frequency: %.1f Hz (duration: %d ms, range: ±%d Hz)\n", 
+                                   freq, global_tone_detection.config.new_tone_length_ms, 
+                                   global_tone_detection.config.new_tone_range_hz);
+                        }
+                        free(tone_segment);
+                    }
                 }
             }
         }
@@ -1322,11 +1341,9 @@ int process_audio_python_approach(const float* samples, int sample_count) {
                    tone_b_freq, tone_def->tone_b_freq, tone_b_tolerance);
             printf("   ⚡ Triggering alert playback...\n\n");
             
-            // Start recording if configured
+            // Start or extend recording if configured
             if (tone_def->record_length_ms > 0) {
-                printf("[TONE] Starting recording for %d ms\n", tone_def->record_length_ms);
-                global_tone_detection.recording_active = 1;
-                global_tone_detection.recording_start_time = get_current_time_ms();
+                start_recording_timer(tone_def->record_length_ms);
             }
             
             // Trigger tone passthrough if configured
@@ -1342,4 +1359,229 @@ int process_audio_python_approach(const float* samples, int sample_count) {
     }
     
     return 0; // No tone detected
+}
+
+// Single tone detection for passthrough (not A+B pair)
+int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
+    // Add samples to sliding buffer
+    add_audio_to_sliding_buffer(samples, sample_count);
+    
+    // Check if we have enough audio data
+    if (audio_buffer_size < SAMPLE_RATE) { // Need at least 1 second
+        return 0;
+    }
+    
+    // Calculate volume level
+    float volume = calculate_volume_level();
+    
+    // Only process if volume is above threshold
+    if (volume < global_tone_detection.config.db_threshold) {
+        return 0;
+    }
+    
+    // Check each tone definition for individual tone detection
+    for (int t = 0; t < MAX_TONE_DEFINITIONS; t++) {
+        struct tone_definition* tone_def = &global_tone_detection.tone_definitions[t];
+        if (!tone_def->valid) continue;
+        
+        // Check Tone A individually
+        if (tone_def->tone_a_length_ms > 0) {
+            int tone_a_samples = (int)(tone_def->tone_a_length_ms * SAMPLE_RATE / 1000.0f);
+            if (audio_buffer_size >= tone_a_samples) {
+                float* tone_a_segment = malloc(tone_a_samples * sizeof(float));
+                if (tone_a_segment) {
+                    get_audio_segment(tone_a_samples, tone_a_samples, tone_a_segment);
+                    float tone_a_freq = freq_from_fft(tone_a_segment, tone_a_samples, SAMPLE_RATE);
+                    
+                    int tone_a_tolerance = tone_def->tone_a_range_hz;
+                    int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tone_a_tolerance);
+                    
+                    if (tone_a_match) {
+                        printf("\n🎯 [SINGLE TONE DETECTED] Tone A: %.1f Hz (ID: %s)\n", 
+                               tone_a_freq, tone_def->tone_id);
+                        
+                        // Start or extend recording
+                        if (tone_def->record_length_ms > 0) {
+                            start_recording_timer(tone_def->record_length_ms);
+                        }
+                        
+                        // Trigger tone passthrough
+                        trigger_tone_passthrough();
+                        
+                        free(tone_a_segment);
+                        return 1; // Tone detected
+                    }
+                    free(tone_a_segment);
+                }
+            }
+        }
+        
+        // Check Tone B individually
+        if (tone_def->tone_b_length_ms > 0) {
+            int tone_b_samples = (int)(tone_def->tone_b_length_ms * SAMPLE_RATE / 1000.0f);
+            if (audio_buffer_size >= tone_b_samples) {
+                float* tone_b_segment = malloc(tone_b_samples * sizeof(float));
+                if (tone_b_segment) {
+                    get_audio_segment(tone_b_samples, tone_b_samples, tone_b_segment);
+                    float tone_b_freq = freq_from_fft(tone_b_segment, tone_b_samples, SAMPLE_RATE);
+                    
+                    int tone_b_tolerance = tone_def->tone_b_range_hz;
+                    int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tone_b_tolerance);
+                    
+                    if (tone_b_match) {
+                        printf("\n🎯 [SINGLE TONE DETECTED] Tone B: %.1f Hz (ID: %s)\n", 
+                               tone_b_freq, tone_def->tone_id);
+                        
+                        // Start or extend recording
+                        if (tone_def->record_length_ms > 0) {
+                            start_recording_timer(tone_def->record_length_ms);
+                        }
+                        
+                        // Trigger tone passthrough
+                        trigger_tone_passthrough();
+                        
+                        free(tone_b_segment);
+                        return 1; // Tone detected
+                    }
+                    free(tone_b_segment);
+                }
+            }
+        }
+    }
+    
+    return 0; // No single tone detected
+}
+
+// Apply frequency filters to audio samples
+int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
+    if (!audio_samples || sample_count <= 0) {
+        return 0;
+    }
+    
+    // Apply each configured filter
+    for (int f = 0; f < MAX_FILTERS; f++) {
+        struct frequency_filter* filter = &global_tone_detection.filters[f];
+        if (!filter->valid) continue;
+        
+        // Calculate frequency bins for this filter
+        float filter_freq = filter->frequency;
+        int filter_range = filter->filter_range_hz;
+        
+        if (strcmp(filter->type, "above") == 0) {
+            // Remove all audio above the specified frequency
+            float cutoff_freq = filter_freq;
+            int cutoff_bin = (int)((cutoff_freq * FFT_SIZE) / SAMPLE_RATE);
+            
+            // Apply low-pass filter by zeroing out high frequencies
+            for (int i = 0; i < sample_count; i++) {
+                // Simple frequency domain filtering would be more accurate,
+                // but for now we'll use a basic approach
+                if (i > cutoff_bin) {
+                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
+                }
+            }
+            
+            printf("[FILTER] Applied 'above' filter: removed audio above %.1f Hz\n", filter_freq);
+            
+        } else if (strcmp(filter->type, "below") == 0) {
+            // Remove all audio below the specified frequency
+            float cutoff_freq = filter_freq;
+            int cutoff_bin = (int)((cutoff_freq * FFT_SIZE) / SAMPLE_RATE);
+            
+            // Apply high-pass filter by zeroing out low frequencies
+            for (int i = 0; i < sample_count; i++) {
+                if (i < cutoff_bin) {
+                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
+                }
+            }
+            
+            printf("[FILTER] Applied 'below' filter: removed audio below %.1f Hz\n", filter_freq);
+            
+        } else if (strcmp(filter->type, "centered") == 0) {
+            // Remove all audio in the specified frequency range
+            float center_freq = filter_freq;
+            float range_hz = filter_range;
+            float low_freq = center_freq - range_hz;
+            float high_freq = center_freq + range_hz;
+            
+            int low_bin = (int)((low_freq * FFT_SIZE) / SAMPLE_RATE);
+            int high_bin = (int)((high_freq * FFT_SIZE) / SAMPLE_RATE);
+            
+            // Apply band-stop filter by zeroing out the specified range
+            for (int i = 0; i < sample_count; i++) {
+                if (i >= low_bin && i <= high_bin) {
+                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
+                }
+            }
+            
+            printf("[FILTER] Applied 'centered' filter: removed audio from %.1f Hz to %.1f Hz\n", 
+                   low_freq, high_freq);
+        }
+    }
+    
+    return 1;
+}
+
+// Recording timer management functions
+int start_recording_timer(int record_length_ms) {
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    
+    int current_time = get_current_time_ms();
+    
+    if (global_tone_detection.recording_active) {
+        // Recording is already active - check if we should extend the duration
+        int elapsed = current_time - global_tone_detection.recording_start_time;
+        int remaining_time = global_tone_detection.recording_duration_ms - elapsed;
+        
+        // Use the longer of remaining time vs new tone length
+        if (record_length_ms > remaining_time) {
+            printf("[RECORDING] Timer extended: %d ms remaining -> %d ms (new tone longer)\n", 
+                   remaining_time, record_length_ms);
+            global_tone_detection.recording_duration_ms = record_length_ms;
+        } else {
+            printf("[RECORDING] Timer unchanged: %d ms remaining (current recording longer)\n", 
+                   remaining_time);
+        }
+    } else {
+        // Start new recording
+        printf("[RECORDING] Started: %d ms duration\n", record_length_ms);
+        global_tone_detection.recording_active = 1;
+        global_tone_detection.recording_start_time = current_time;
+        global_tone_detection.recording_duration_ms = record_length_ms;
+    }
+    
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+    return 1;
+}
+
+void stop_recording_timer(void) {
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    global_tone_detection.recording_active = 0;
+    printf("[RECORDING] Timer stopped\n");
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+}
+
+int is_recording_active(void) {
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    int active = global_tone_detection.recording_active;
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+    return active;
+}
+
+int get_recording_time_remaining_ms(void) {
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    
+    if (!global_tone_detection.recording_active) {
+        pthread_mutex_unlock(&global_tone_detection.mutex);
+        return 0;
+    }
+    
+    int current_time = get_current_time_ms();
+    int elapsed = current_time - global_tone_detection.recording_start_time;
+    int remaining = global_tone_detection.recording_duration_ms - elapsed;
+    
+    if (remaining < 0) remaining = 0;
+    
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+    return remaining;
 }

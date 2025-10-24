@@ -67,6 +67,7 @@ struct tone_detection_state {
     int tone_sequence_active;
     int recording_active;
     int recording_start_time;
+    int recording_duration_ms;     // Current recording duration (ms)
     int tone_a_start_time;
     int tone_b_start_time;
     
@@ -142,6 +143,7 @@ void add_audio_to_sliding_buffer(const float* samples, int count);
 float calculate_volume_level(void);
 void get_audio_segment(int start_offset_samples, int length_samples, float* output);
 int process_audio_python_approach(const float* samples, int sample_count);
+int detect_single_tone_for_passthrough(const float* samples, int sample_count);
 int get_current_time_ms(void);
 
 // Alert playback functions
@@ -154,5 +156,11 @@ int should_play_alert_on_channel(int channel_index);
 
 // FFT frequency extraction
 float freq_from_fft(float* samples, int sample_count, int sample_rate);
+
+// Recording timer management
+int start_recording_timer(int record_length_ms);
+void stop_recording_timer(void);
+int is_recording_active(void);
+int get_recording_time_remaining_ms(void);
 
 #endif // TONE_DETECT_H
