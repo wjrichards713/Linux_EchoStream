@@ -515,10 +515,10 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     }
     
     // Apply frequency filters to audio samples if any are configured
-    apply_audio_frequency_filters(samples, sample_count);
+    apply_audio_frequency_filters(audio_samples, sample_count);
     
     // Check for single tone detection for passthrough
-    detect_single_tone_for_passthrough(samples, sample_count);
+    detect_single_tone_for_passthrough(audio_samples, sample_count);
     
     // Check if recording should stop
     if (global_tone_detection.recording_active) {
@@ -1465,75 +1465,6 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
     return 0; // No single tone detected
 }
 
-// Apply frequency filters to audio samples
-int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
-    if (!audio_samples || sample_count <= 0) {
-        return 0;
-    }
-    
-    // Apply each configured filter
-    for (int f = 0; f < MAX_FILTERS; f++) {
-        struct frequency_filter* filter = &global_tone_detection.filters[f];
-        if (!filter->valid) continue;
-        
-        // Calculate frequency bins for this filter
-        float filter_freq = filter->frequency;
-        int filter_range = filter->filter_range_hz;
-        
-        if (strcmp(filter->type, "above") == 0) {
-            // Remove all audio above the specified frequency
-            float cutoff_freq = filter_freq;
-            int cutoff_bin = (int)((cutoff_freq * FFT_SIZE) / SAMPLE_RATE);
-            
-            // Apply low-pass filter by zeroing out high frequencies
-            for (int i = 0; i < sample_count; i++) {
-                // Simple frequency domain filtering would be more accurate,
-                // but for now we'll use a basic approach
-                if (i > cutoff_bin) {
-                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
-                }
-            }
-            
-            printf("[FILTER] Applied 'above' filter: removed audio above %.1f Hz\n", filter_freq);
-            
-        } else if (strcmp(filter->type, "below") == 0) {
-            // Remove all audio below the specified frequency
-            float cutoff_freq = filter_freq;
-            int cutoff_bin = (int)((cutoff_freq * FFT_SIZE) / SAMPLE_RATE);
-            
-            // Apply high-pass filter by zeroing out low frequencies
-            for (int i = 0; i < sample_count; i++) {
-                if (i < cutoff_bin) {
-                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
-                }
-            }
-            
-            printf("[FILTER] Applied 'below' filter: removed audio below %.1f Hz\n", filter_freq);
-            
-        } else if (strcmp(filter->type, "centered") == 0) {
-            // Remove all audio in the specified frequency range
-            float center_freq = filter_freq;
-            float range_hz = filter_range;
-            float low_freq = center_freq - range_hz;
-            float high_freq = center_freq + range_hz;
-            
-            int low_bin = (int)((low_freq * FFT_SIZE) / SAMPLE_RATE);
-            int high_bin = (int)((high_freq * FFT_SIZE) / SAMPLE_RATE);
-            
-            // Apply band-stop filter by zeroing out the specified range
-            for (int i = 0; i < sample_count; i++) {
-                if (i >= low_bin && i <= high_bin) {
-                    audio_samples[i] *= 0.1f; // Reduce amplitude significantly
-                }
-            }
-            
-            printf("[FILTER] Applied 'centered' filter: removed audio from %.1f Hz to %.1f Hz\n", 
-                   low_freq, high_freq);
-        }
-    }
-    
-    return 1;
-}
 
 // Recording timer management functions
 int start_recording_timer(int record_length_ms) {
