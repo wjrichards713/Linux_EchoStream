@@ -27,12 +27,27 @@ struct tone_passthrough_control global_tone_passthrough = {0};
 int get_passthrough_target_channel_index(void) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
     if (!tone_cfg || !tone_cfg->tone_passthrough) {
+        printf("[DEBUG] get_passthrough_target_channel_index: no tone config or passthrough disabled\n");
         return -1;
     }
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) return 3;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) return 2;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) return 1;
-    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) return 0;
+    printf("[DEBUG] get_passthrough_target_channel_index: passthrough_channel=%s\n", tone_cfg->passthrough_channel);
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) {
+        printf("[DEBUG] Mapping channel_four to index 2\n");
+        return 2; // Map to channel_three (index 2)
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) {
+        printf("[DEBUG] Mapping channel_three to index 2\n");
+        return 2;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) {
+        printf("[DEBUG] Mapping channel_two to index 1\n");
+        return 1;
+    }
+    else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) {
+        printf("[DEBUG] Mapping channel_one to index 0\n");
+        return 0;
+    }
+    printf("[DEBUG] Unknown passthrough channel: %s\n", tone_cfg->passthrough_channel);
     return -1;
 }
 
@@ -83,7 +98,7 @@ static int is_configured_passthrough_channel_id(const char* channel_id) {
         return 0;
     }
     int idx = -1;
-    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 3;
+    if (strcmp(tone_cfg->passthrough_channel, "channel_four") == 0) idx = 2; // Map to channel_three (index 2)
     else if (strcmp(tone_cfg->passthrough_channel, "channel_three") == 0) idx = 2;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_two") == 0) idx = 1;
     else if (strcmp(tone_cfg->passthrough_channel, "channel_one") == 0) idx = 0;

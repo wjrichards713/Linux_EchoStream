@@ -478,7 +478,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         global_tone_detection.tone_b_detections++;
                         
                         // Start or extend recording
+                        printf("[DEBUG] About to start recording timer for %d ms\n", tone_def->record_length_ms);
                         start_recording_timer(tone_def->record_length_ms);
+                        printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
                         
                         // Trigger tone passthrough if configured
                         trigger_tone_passthrough();
@@ -1062,6 +1064,7 @@ void trigger_tone_passthrough(void) {
     
     // Check if the target channel has a working output stream
     int target_channel_idx = get_passthrough_target_channel_index();
+    printf("[DEBUG] Target channel index: %d\n", target_channel_idx);
     if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
         if (channel_has_output_stream(target_channel_idx)) {
             printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 

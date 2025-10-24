@@ -1,6 +1,7 @@
 #include "gpio.h"
 #include "audio.h"
 #include "websocket.h"
+#include "tone_detect.h"
 #include <unistd.h>
 
 // GPIO state variables
@@ -230,6 +231,15 @@ void* gpio_monitor_worker(void* arg) {
                    curr_val_16 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[2]);
             printf("PIN 18 (GPIO 24): %s (Channel: %s)\n", 
                    curr_val_18 == 0 ? "ACTIVE" : "INACTIVE", global_channel_ids[3]);
+            
+            // Add recording status
+            extern struct tone_detection_state global_tone_detection;
+            if (global_tone_detection.recording_active) {
+                int remaining = get_recording_time_remaining_ms();
+                printf("🎙️  RECORDING: Active (%d ms remaining)\n", remaining);
+            } else {
+                printf("🎙️  RECORDING: Inactive\n");
+            }
             printf("==========================================\n\n");
             status_counter = 0;
         }
