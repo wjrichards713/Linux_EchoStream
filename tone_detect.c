@@ -1070,27 +1070,25 @@ void trigger_tone_passthrough(void) {
             printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
                    target_channel_idx + 1);
             
-            // Play back the actual detected Tone A and Tone B sequence
+            // Play a 20-second alert tone when Tone A is detected
             // Find the tone definition that was detected
-            float tone_a_freq = 1000.0f; // Default frequencies
-            float tone_b_freq = 1000.0f;
-            float tone_a_duration = 1000.0f; // Default durations in milliseconds
-            float tone_b_duration = 500.0f;
+            float tone_a_freq = 1000.0f; // Default frequency
+            float tone_b_freq = 1000.0f; // Default frequency
+            float alert_duration = 20000.0f; // 20 seconds in milliseconds
             
             for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
                 if (global_tone_detection.tone_definitions[i].valid) {
-                    // Use the actual detected Tone A and Tone B frequencies and durations
+                    // Use the detected Tone A frequency for the 20-second alert
                     tone_a_freq = global_tone_detection.tone_definitions[i].tone_a_freq;
                     tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
-                    tone_a_duration = global_tone_detection.tone_definitions[i].tone_a_length_ms;
-                    tone_b_duration = global_tone_detection.tone_definitions[i].tone_b_length_ms;
-                    printf("[ALERT] Playing back detected tones: A=%.1f Hz (%.1fms), B=%.1f Hz (%.1fms)\n",
-                           tone_a_freq, tone_a_duration, tone_b_freq, tone_b_duration);
+                    printf("[ALERT] Playing 20-second alert tone at %.1f Hz (detected from %.1f Hz Tone A)\n",
+                           tone_a_freq, tone_a_freq);
                     break;
                 }
             }
             
-            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, tone_a_duration, tone_b_duration);
+            // Play a 20-second tone at the detected frequency
+            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, alert_duration, 0);
             
         } else {
             printf("[TONE PASSTHROUGH] Tone detected but target channel %d has no output stream - alert playback disabled\n", 
@@ -1408,8 +1406,14 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                             start_recording_timer(tone_def->record_length_ms);
                         }
                         
-                        // Trigger tone passthrough
-                        trigger_tone_passthrough();
+                        // Play 20-second alert tone immediately
+                        extern int get_passthrough_target_channel_index(void);
+                        extern int channel_has_output_stream(int channel_index);
+                        int target_channel_idx = get_passthrough_target_channel_index();
+                        if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
+                            printf("[ALERT] Playing 20-second alert tone at %.1f Hz\n", tone_a_freq);
+                            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_a_freq, 20000.0f, 0);
+                        }
                         
                         free(tone_a_segment);
                         return 1; // Tone detected
@@ -1440,8 +1444,14 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                             start_recording_timer(tone_def->record_length_ms);
                         }
                         
-                        // Trigger tone passthrough
-                        trigger_tone_passthrough();
+                        // Play 20-second alert tone immediately
+                        extern int get_passthrough_target_channel_index(void);
+                        extern int channel_has_output_stream(int channel_index);
+                        int target_channel_idx = get_passthrough_target_channel_index();
+                        if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
+                            printf("[ALERT] Playing 20-second alert tone at %.1f Hz\n", tone_b_freq);
+                            play_alert_tone_locally(target_channel_idx, tone_b_freq, tone_b_freq, 20000.0f, 0);
+                        }
                         
                         free(tone_b_segment);
                         return 1; // Tone detected
