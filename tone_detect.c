@@ -895,13 +895,22 @@ void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float to
         }
     }
     
-    // Stop any existing alert playback
+    // Stop any existing alert playback and manage recording timer
     if (global_alert_playback.active) {
         printf("[ALERT PLAYBACK] Stopping previous alert to start new one\n");
+        printf("[ALERT PLAYBACK] Previous alert was playing for %d/%d samples\n", 
+               global_alert_playback.samples_played, global_alert_playback.total_samples);
+        
+        // Clean up previous alert
         if (global_alert_playback.alert_buffer) {
             free(global_alert_playback.alert_buffer);
             global_alert_playback.alert_buffer = NULL;
         }
+        
+        // Reset alert state
+        global_alert_playback.active = 0;
+        global_alert_playback.samples_played = 0;
+        global_alert_playback.total_samples = 0;
     }
     
     // Calculate total samples needed for both tones (convert ms to seconds)
@@ -1070,24 +1079,25 @@ void trigger_tone_passthrough(void) {
             printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
                    target_channel_idx + 1);
             
-            // Play a 20-second alert tone when Tone A is detected
+            // Play alert tone with duration from config.json record_length
             // Find the tone definition that was detected
             float tone_a_freq = 1000.0f; // Default frequency
             float tone_b_freq = 1000.0f; // Default frequency
-            float alert_duration = 20000.0f; // 20 seconds in milliseconds
+            float alert_duration = 20000.0f; // Default 20 seconds
             
             for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
                 if (global_tone_detection.tone_definitions[i].valid) {
-                    // Use the detected Tone A frequency for the 20-second alert
+                    // Use the detected Tone A frequency and record_length from config
                     tone_a_freq = global_tone_detection.tone_definitions[i].tone_a_freq;
                     tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
-                    printf("[ALERT] Playing 20-second alert tone at %.1f Hz (detected from %.1f Hz Tone A)\n",
-                           tone_a_freq, tone_a_freq);
+                    alert_duration = (float)global_tone_detection.tone_definitions[i].record_length_ms;
+                    printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz (record_length from config)\n",
+                           alert_duration / 1000.0f, tone_a_freq);
                     break;
                 }
             }
             
-            // Play a 20-second tone at the detected frequency
+            // Play alert tone with duration from config.json
             play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, alert_duration, 0);
             
         } else {
@@ -1406,13 +1416,20 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                             start_recording_timer(tone_def->record_length_ms);
                         }
                         
-                        // Play 20-second alert tone immediately
+                        // Play alert tone with duration from config.json record_length
                         extern int get_passthrough_target_channel_index(void);
                         extern int channel_has_output_stream(int channel_index);
                         int target_channel_idx = get_passthrough_target_channel_index();
                         if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
-                            printf("[ALERT] Playing 20-second alert tone at %.1f Hz\n", tone_a_freq);
-                            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_a_freq, 20000.0f, 0);
+                            float alert_duration = (float)tone_def->record_length_ms;
+                            if (global_alert_playback.active) {
+                                printf("[ALERT] Interrupting current alert to play new %.1f-second tone at %.1f Hz\n", 
+                                       alert_duration / 1000.0f, tone_a_freq);
+                            } else {
+                                printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz\n", 
+                                       alert_duration / 1000.0f, tone_a_freq);
+                            }
+                            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_a_freq, alert_duration, 0);
                         }
                         
                         free(tone_a_segment);
@@ -1444,13 +1461,20 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                             start_recording_timer(tone_def->record_length_ms);
                         }
                         
-                        // Play 20-second alert tone immediately
+                        // Play alert tone with duration from config.json record_length
                         extern int get_passthrough_target_channel_index(void);
                         extern int channel_has_output_stream(int channel_index);
                         int target_channel_idx = get_passthrough_target_channel_index();
                         if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
-                            printf("[ALERT] Playing 20-second alert tone at %.1f Hz\n", tone_b_freq);
-                            play_alert_tone_locally(target_channel_idx, tone_b_freq, tone_b_freq, 20000.0f, 0);
+                            float alert_duration = (float)tone_def->record_length_ms;
+                            if (global_alert_playback.active) {
+                                printf("[ALERT] Interrupting current alert to play new %.1f-second tone at %.1f Hz\n", 
+                                       alert_duration / 1000.0f, tone_b_freq);
+                            } else {
+                                printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz\n", 
+                                       alert_duration / 1000.0f, tone_b_freq);
+                            }
+                            play_alert_tone_locally(target_channel_idx, tone_b_freq, tone_b_freq, alert_duration, 0);
                         }
                         
                         free(tone_b_segment);
@@ -1476,6 +1500,9 @@ int start_recording_timer(int record_length_ms) {
         // Recording is already active - check if we should extend the duration
         int elapsed = current_time - global_tone_detection.recording_start_time;
         int remaining_time = global_tone_detection.recording_duration_ms - elapsed;
+        
+        printf("[RECORDING] Overlapping detection: %d ms elapsed, %d ms remaining, new tone: %d ms\n", 
+               elapsed, remaining_time, record_length_ms);
         
         // Use the longer of remaining time vs new tone length
         if (record_length_ms > remaining_time) {
