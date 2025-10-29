@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <json-c/json.h>
 
 #ifdef HAVE_MOSQUITTO
@@ -13,6 +14,7 @@
 
 // Global MQTT state
 static struct mqtt_state global_mqtt = {0};
+static pthread_mutex_t mqtt_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // UUID generation (simple version)
 static void generate_uuid(char* uuid, size_t size) {
@@ -36,13 +38,17 @@ static int find_certificates(char* ca_path, char* cert_path, char* key_path, siz
 int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     (void)broker_port;  // Suppress unused parameter warning
 #ifdef HAVE_MOSQUITTO
+    pthread_mutex_lock(&mqtt_mutex);
+    
     if (global_mqtt.initialized) {
         printf("[MQTT] Already initialized\n");
+        pthread_mutex_unlock(&mqtt_mutex);
         return 1;
     }
     
     if (!device_id || !broker_host) {
         printf("[MQTT] ERROR: device_id or broker_host is NULL\n");
+        pthread_mutex_unlock(&mqtt_mutex);
         return 0;
     }
     
@@ -104,6 +110,7 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
         printf("[MQTT] Check: 1) Broker is running/accessible, 2) Port is correct, 3) Certificates are valid (for AWS IoT)\n");
         global_mqtt.connected = 0;
         global_mqtt.initialized = 1;
+        pthread_mutex_unlock(&mqtt_mutex);
         return 0;
     }
     
@@ -132,6 +139,7 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     }
     
     global_mqtt.initialized = 1;
+    pthread_mutex_unlock(&mqtt_mutex);
     return 1;
 #else
     (void)device_id;
@@ -145,13 +153,17 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
 // Publish MQTT message
 int mqtt_publish(const char* topic, const char* payload) {
 #ifdef HAVE_MOSQUITTO
+    pthread_mutex_lock(&mqtt_mutex);
+    
     if (!global_mqtt.initialized || !global_mqtt.mosq) {
         printf("[MQTT] Not initialized, skipping publish to %s\n", topic ? topic : "NULL");
+        pthread_mutex_unlock(&mqtt_mutex);
         return 0;
     }
     
     if (!topic || !payload) {
         printf("[MQTT] ERROR: topic or payload is NULL\n");
+        pthread_mutex_unlock(&mqtt_mutex);
         return 0;
     }
     
@@ -164,6 +176,7 @@ int mqtt_publish(const char* topic, const char* payload) {
         if (rc_reconnect != MOSQ_ERR_SUCCESS) {
             printf("[MQTT] ERROR: Reconnect failed (rc=%d), cannot publish\n", rc_reconnect);
             global_mqtt.connected = 0;
+            pthread_mutex_unlock(&mqtt_mutex);
             return 0;
         }
         // Wait for reconnection acknowledgment
@@ -178,6 +191,7 @@ int mqtt_publish(const char* topic, const char* payload) {
         }
         if (!global_mqtt.connected) {
             printf("[MQTT] ERROR: Reconnection timeout\n");
+            pthread_mutex_unlock(&mqtt_mutex);
             return 0;
         }
     }
@@ -189,6 +203,7 @@ int mqtt_publish(const char* topic, const char* payload) {
         printf("[MQTT] ERROR: Failed to publish to '%s' (rc=%d: %s)\n", 
                topic, rc, error_str ? error_str : "unknown error");
         global_mqtt.connected = 0;
+        pthread_mutex_unlock(&mqtt_mutex);
         return 0;
     }
     
@@ -199,6 +214,7 @@ int mqtt_publish(const char* topic, const char* payload) {
         mosquitto_loop(global_mqtt.mosq, 50, 1);  // 50ms timeout, quick processing
     }
     
+    pthread_mutex_unlock(&mqtt_mutex);
     return 1;
 #else
     (void)topic;
@@ -212,6 +228,12 @@ int mqtt_publish(const char* topic, const char* payload) {
 // Call this periodically (e.g., every few seconds) from a main loop or worker thread
 void mqtt_keepalive(void) {
 #ifdef HAVE_MOSQUITTO
+    // Try to lock without blocking - if publish is in progress, skip this cycle
+    if (pthread_mutex_trylock(&mqtt_mutex) != 0) {
+        // Couldn't acquire lock, skip this keepalive cycle (publish in progress)
+        return;
+    }
+    
     if (global_mqtt.initialized && global_mqtt.mosq) {
         // Quick network I/O processing - non-blocking
         int loop_rc = mosquitto_loop(global_mqtt.mosq, 0, 1);
@@ -233,21 +255,29 @@ void mqtt_keepalive(void) {
             }
         }
     }
+    
+    pthread_mutex_unlock(&mqtt_mutex);
 #endif
 }
 
 // Cleanup MQTT
 void cleanup_mqtt(void) {
 #ifdef HAVE_MOSQUITTO
+    pthread_mutex_lock(&mqtt_mutex);
+    
     if (global_mqtt.mosq) {
         mosquitto_disconnect(global_mqtt.mosq);
         mosquitto_destroy(global_mqtt.mosq);
         global_mqtt.mosq = NULL;
     }
     mosquitto_lib_cleanup();
-#endif
+    
     global_mqtt.initialized = 0;
     global_mqtt.connected = 0;
+    
+    pthread_mutex_unlock(&mqtt_mutex);
+    pthread_mutex_destroy(&mqtt_mutex);
+#endif
     printf("[MQTT] Cleaned up\n");
 }
 
