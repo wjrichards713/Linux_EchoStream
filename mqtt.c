@@ -25,6 +25,12 @@ static void generate_uuid(char* uuid, size_t size) {
              (unsigned long)(now_time % 1000000000000UL));
 }
 
+#ifdef HAVE_MOSQUITTO
+// Forward declarations for static functions used by init_mqtt
+static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size);
+static int find_certificates(char* ca_path, char* cert_path, char* key_path, size_t path_size);
+#endif
+
 // Initialize MQTT connection
 int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
 #ifdef HAVE_MOSQUITTO
@@ -186,6 +192,7 @@ void cleanup_mqtt(void) {
     printf("[MQTT] Cleaned up\n");
 }
 
+#ifdef HAVE_MOSQUITTO
 // Get AWS IoT endpoint from config
 static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
     const char* config_path = "/home/will/.an/config.json";
@@ -230,7 +237,9 @@ static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
     json_object_put(json);
     return 0;
 }
+#endif
 
+#ifdef HAVE_MOSQUITTO
 // Find certificate paths
 static int find_certificates(char* ca_path, char* cert_path, char* key_path, size_t path_size) {
     // Common certificate locations
@@ -280,6 +289,7 @@ static int find_certificates(char* ca_path, char* cert_path, char* key_path, siz
     
     return 0;
 }
+#endif
 
 // Get device ID from config.json
 int get_device_id_from_config(char* device_id, size_t device_id_size) {

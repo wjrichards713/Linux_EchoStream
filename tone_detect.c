@@ -751,8 +751,6 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
     int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
                             (now.tv_nsec - start_time.tv_nsec) / 1000000);
     
-    const int HIT_REQUIRED = 1;
-    const int MISS_REQUIRED = 3;
     const int GRACE_MS = 500;
     
     // First, check all peaks for unknown frequencies
@@ -877,7 +875,7 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                 
                 // Reset if grace period exceeded and enough misses
                 if ((current_time - global_tone_detection.new_tone_tracking[t].last_seen_ms) > GRACE_MS &&
-                    global_tone_detection.new_tone_tracking[t].miss_streak >= MISS_REQUIRED) {
+                    global_tone_detection.new_tone_tracking[t].miss_streak >= 3) {
                     // Reset this tracking slot
                     global_tone_detection.new_tone_tracking[t].is_tracking = 0;
                     global_tone_detection.new_tone_tracking[t].tracking_start = 0;
