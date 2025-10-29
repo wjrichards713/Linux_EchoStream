@@ -126,9 +126,6 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
 // Publish MQTT message
 int mqtt_publish(const char* topic, const char* payload) {
 #ifdef HAVE_MOSQUITTO
-    printf("[MQTT DEBUG] mqtt_publish called: topic=%s, initialized=%d, mosq=%p, connected=%d\n",
-           topic ? topic : "NULL", global_mqtt.initialized, global_mqtt.mosq, global_mqtt.connected);
-    
     if (!global_mqtt.initialized || !global_mqtt.mosq) {
         printf("[MQTT] Not initialized, skipping publish to %s\n", topic ? topic : "NULL");
         return 0;
@@ -141,7 +138,6 @@ int mqtt_publish(const char* topic, const char* payload) {
     
     // Try to reconnect if not connected
     if (!global_mqtt.connected) {
-        printf("[MQTT DEBUG] Not connected, attempting reconnect...\n");
         int rc = mosquitto_reconnect(global_mqtt.mosq);
         if (rc == MOSQ_ERR_SUCCESS) {
             global_mqtt.connected = 1;
@@ -343,12 +339,8 @@ int get_device_id_from_config(char* device_id, size_t device_id_size) {
 
 // Publish new tone detection message
 int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
-    printf("[MQTT DEBUG] publish_new_tone_detection called: freq=%.1f Hz, duration=%d ms, range=%d Hz\n",
-           frequency, duration_ms, range_hz);
 #ifdef HAVE_MOSQUITTO
-    printf("[MQTT DEBUG] HAVE_MOSQUITTO is defined\n");
     if (!global_mqtt.initialized || !global_mqtt.mosq) {
-        printf("[MQTT DEBUG] MQTT not initialized yet, attempting initialization...\n");
         // Try to initialize if we have device_id
         char device_id[64];
         if (get_device_id_from_config(device_id, sizeof(device_id))) {
@@ -375,17 +367,12 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
                 printf("[MQTT]   2. Rebuild the application\n");
                 printf("[MQTT]   3. For AWS IoT: Set aws_endpoint in config.json and provide certificates\n");
                 return 0;
-            } else {
-                printf("[MQTT DEBUG] MQTT initialization succeeded\n");
             }
         } else {
             printf("[MQTT] Cannot publish: MQTT not initialized and device_id not available\n");
             printf("[MQTT] Check that 'unique_id' exists in config.json root level\n");
             return 0;
         }
-    } else {
-        printf("[MQTT DEBUG] MQTT already initialized (device_id=%s, connected=%d)\n", 
-               global_mqtt.device_id, global_mqtt.connected);
     }
 #else
     // MQTT not available, but tone was still detected
@@ -424,8 +411,6 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
     char topic[256];
     snprintf(topic, sizeof(topic), "from/device/%s/tone_detection", global_mqtt.device_id);
     
-    printf("[MQTT DEBUG] Attempting to publish to topic: %s\n", topic);
-    printf("[MQTT DEBUG] Payload length: %zu bytes\n", strlen(json_string));
     int result = mqtt_publish(topic, json_string);
     
     if (result) {
@@ -435,7 +420,6 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
     } else {
         printf("[MQTT] ✗ Failed to publish new tone detection to '%s' (tone logged but not sent)\n", topic);
         printf("[MQTT]   Check connection status and broker availability\n");
-        printf("[MQTT DEBUG] mqtt_publish returned 0 - connection may be down\n");
     }
     
     json_object_put(json);
