@@ -39,8 +39,32 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     }
     
     strncpy(global_mqtt.device_id, device_id, sizeof(global_mqtt.device_id) - 1);
-    strncpy(global_mqtt.broker_host, broker_host, sizeof(global_mqtt.broker_host) - 1);
-    global_mqtt.broker_port = broker_port;
+    
+    // Try to get AWS IoT endpoint from config, fallback to provided broker_host
+    char aws_endpoint[256];
+    if (get_aws_iot_endpoint(aws_endpoint, sizeof(aws_endpoint))) {
+        strncpy(global_mqtt.broker_host, aws_endpoint, sizeof(global_mqtt.broker_host) - 1);
+        global_mqtt.broker_port = 8883; // AWS IoT always uses 8883
+        printf("[MQTT] Using AWS IoT endpoint from config: %s:%d\n", aws_endpoint, global_mqtt.broker_port);
+    } else {
+        strncpy(global_mqtt.broker_host, broker_host, sizeof(global_mqtt.broker_host) - 1);
+        global_mqtt.broker_port = broker_port;
+        printf("[MQTT] Using provided broker: %s:%d\n", broker_host, broker_port);
+    }
+    
+    // Try to find certificates
+    if (!find_certificates(global_mqtt.ca_cert_path, global_mqtt.client_cert_path, 
+                          global_mqtt.client_key_path, sizeof(global_mqtt.ca_cert_path))) {
+        printf("[MQTT] WARNING: Certificates not found. Will try plain connection (may fail for AWS IoT)\n");
+        global_mqtt.ca_cert_path[0] = '\0';
+        global_mqtt.client_cert_path[0] = '\0';
+        global_mqtt.client_key_path[0] = '\0';
+    } else {
+        printf("[MQTT] Found certificates:\n");
+        printf("  CA: %s\n", global_mqtt.ca_cert_path);
+        printf("  Cert: %s\n", global_mqtt.client_cert_path);
+        printf("  Key: %s\n", global_mqtt.client_key_path);
+    }
     
     // Initialize mosquitto library
     mosquitto_lib_init();
@@ -53,14 +77,32 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
         return 0;
     }
     
+    // Set TLS if certificates found and port is 8883 (AWS IoT)
+    if (global_mqtt.broker_port == 8883 && global_mqtt.ca_cert_path[0] != '\0') {
+        int rc_tls = mosquitto_tls_set(global_mqtt.mosq, 
+                                       global_mqtt.ca_cert_path,
+                                       NULL,  // CA path (directory)
+                                       global_mqtt.client_cert_path,
+                                       global_mqtt.client_key_path,
+                                       NULL); // Password callback
+        if (rc_tls != MOSQ_ERR_SUCCESS) {
+            printf("[MQTT] WARNING: Failed to set TLS (rc=%d), will try without TLS\n", rc_tls);
+        } else {
+            printf("[MQTT] TLS configured successfully\n");
+            mosquitto_tls_opts_set(global_mqtt.mosq, 1, NULL, NULL);
+        }
+    }
+    
     // Connect to broker
-    int rc = mosquitto_connect(global_mqtt.mosq, broker_host, broker_port, 60);
+    int rc = mosquitto_connect(global_mqtt.mosq, global_mqtt.broker_host, global_mqtt.broker_port, 60);
     if (rc != MOSQ_ERR_SUCCESS) {
-        printf("[MQTT] WARNING: Failed to connect to broker at %s:%d (rc=%d). Will retry on first publish.\n", 
-               broker_host, broker_port, rc);
+        const char* error_str = mosquitto_strerror(rc);
+        printf("[MQTT] ERROR: Failed to connect to broker at %s:%d (rc=%d: %s)\n", 
+               global_mqtt.broker_host, global_mqtt.broker_port, rc, error_str ? error_str : "unknown error");
+        printf("[MQTT] Check: 1) Broker is running/accessible, 2) Port is correct, 3) Certificates are valid (for AWS IoT)\n");
         global_mqtt.connected = 0;
     } else {
-        printf("[MQTT] Connected to broker at %s:%d\n", broker_host, broker_port);
+        printf("[MQTT] Connected to broker at %s:%d\n", global_mqtt.broker_host, global_mqtt.broker_port);
         global_mqtt.connected = 1;
     }
     
@@ -102,13 +144,18 @@ int mqtt_publish(const char* topic, const char* payload) {
     // Publish message
     int rc = mosquitto_publish(global_mqtt.mosq, NULL, topic, strlen(payload), payload, 1, false);
     if (rc != MOSQ_ERR_SUCCESS) {
-        printf("[MQTT] ERROR: Failed to publish to %s (rc=%d)\n", topic, rc);
+        const char* error_str = mosquitto_strerror(rc);
+        printf("[MQTT] ERROR: Failed to publish to '%s' (rc=%d: %s)\n", 
+               topic, rc, error_str ? error_str : "unknown error");
         // Try to reconnect for next time
         global_mqtt.connected = 0;
+        
+        // Process network to see if there are any pending errors
+        mosquitto_loop(global_mqtt.mosq, 0, 1);
         return 0;
     }
     
-    // Process network traffic (required for mosquitto)
+    // Process network traffic (required for mosquitto to actually send)
     mosquitto_loop(global_mqtt.mosq, 0, 1);
     
     return 1;
@@ -133,6 +180,101 @@ void cleanup_mqtt(void) {
     global_mqtt.initialized = 0;
     global_mqtt.connected = 0;
     printf("[MQTT] Cleaned up\n");
+}
+
+// Get AWS IoT endpoint from config
+static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
+    const char* config_path = "/home/will/.an/config.json";
+    FILE *file = fopen(config_path, "r");
+    if (!file) {
+        return 0;
+    }
+    
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    char *json_string = malloc(file_size + 1);
+    if (!json_string) {
+        fclose(file);
+        return 0;
+    }
+    
+    fread(json_string, 1, file_size, file);
+    json_string[file_size] = '\0';
+    fclose(file);
+    
+    struct json_object *json = json_tokener_parse(json_string);
+    free(json_string);
+    
+    if (!json) {
+        return 0;
+    }
+    
+    // Try to find AWS endpoint (might be in various locations)
+    struct json_object *aws_endpoint_obj;
+    if (json_object_object_get_ex(json, "aws_endpoint", &aws_endpoint_obj)) {
+        const char* endpoint_str = json_object_get_string(aws_endpoint_obj);
+        if (endpoint_str && strlen(endpoint_str) < endpoint_size) {
+            strncpy(endpoint, endpoint_str, endpoint_size - 1);
+            endpoint[endpoint_size - 1] = '\0';
+            json_object_put(json);
+            return 1;
+        }
+    }
+    
+    json_object_put(json);
+    return 0;
+}
+
+// Find certificate paths
+static int find_certificates(char* ca_path, char* cert_path, char* key_path, size_t path_size) {
+    // Common certificate locations
+    const char* base_paths[] = {
+        "/home/will/.an/cert/",
+        "/home/will/.an/certs/",
+        "/home/will/.aws-iot/",
+        "./cert/",
+        "./certs/",
+    };
+    
+    const char* ca_files[] = { "AmazonRootCA1.pem", "root-CA.crt", "ca-cert.pem", "ca.pem" };
+    const char* cert_files[] = { "certificate.pem.crt", "cert.pem", "device-cert.pem" };
+    const char* key_files[] = { "private.pem.key", "private-key.pem", "device-private.pem.key" };
+    
+    for (int i = 0; i < 5; i++) {
+        for (int j = 0; j < 4; j++) {
+            char test_path[512];
+            snprintf(test_path, sizeof(test_path), "%s%s", base_paths[i], ca_files[j]);
+            FILE* f = fopen(test_path, "r");
+            if (f) {
+                fclose(f);
+                strncpy(ca_path, test_path, path_size - 1);
+                
+                // Try to find cert and key in same directory
+                for (int k = 0; k < 3; k++) {
+                    snprintf(test_path, sizeof(test_path), "%s%s", base_paths[i], cert_files[k]);
+                    f = fopen(test_path, "r");
+                    if (f) {
+                        fclose(f);
+                        strncpy(cert_path, test_path, path_size - 1);
+                        
+                        for (int l = 0; l < 3; l++) {
+                            snprintf(test_path, sizeof(test_path), "%s%s", base_paths[i], key_files[l]);
+                            f = fopen(test_path, "r");
+                            if (f) {
+                                fclose(f);
+                                strncpy(key_path, test_path, path_size - 1);
+                                return 1; // Found all three
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return 0;
 }
 
 // Get device ID from config.json
@@ -192,11 +334,28 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
         // Try to initialize if we have device_id
         char device_id[64];
         if (get_device_id_from_config(device_id, sizeof(device_id))) {
-            // Try to connect to local MQTT broker (default port 1883)
-            // For AWS IoT, this would need certificate-based connection, 
-            // but for now we'll try local broker
-            if (!init_mqtt(device_id, "localhost", 1883)) {
+            // Try AWS IoT first, then fallback to localhost
+            // init_mqtt will try to get AWS endpoint from config
+            char broker[256] = "localhost";
+            int port = 1883;
+            
+            // Check if we can get AWS endpoint from config
+            char aws_endpoint[256];
+            if (get_aws_iot_endpoint(aws_endpoint, sizeof(aws_endpoint))) {
+                strncpy(broker, aws_endpoint, sizeof(broker) - 1);
+                port = 8883;
+                printf("[MQTT] Attempting to connect to AWS IoT Core: %s:%d\n", broker, port);
+            } else {
+                printf("[MQTT] AWS IoT endpoint not found in config, trying localhost:1883\n");
+                printf("[MQTT] For AWS IoT, add 'aws_endpoint' to config.json\n");
+            }
+            
+            if (!init_mqtt(device_id, broker, port)) {
                 printf("[MQTT] Failed to initialize MQTT connection - tone detection logged but not published\n");
+                printf("[MQTT] To enable MQTT publishing:\n");
+                printf("[MQTT]   1. Ensure libmosquitto is installed: sudo apt-get install libmosquitto-dev\n");
+                printf("[MQTT]   2. Rebuild the application\n");
+                printf("[MQTT]   3. For AWS IoT: Set aws_endpoint in config.json and provide certificates\n");
                 return 0;
             }
         } else {
@@ -242,10 +401,12 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
     int result = mqtt_publish(topic, json_string);
     
     if (result) {
-        printf("[MQTT] Published new tone detection: %.1f Hz (duration: %d ms, range: ±%d Hz)\n",
-               frequency, duration_ms, range_hz);
+        printf("[MQTT] ✓ Published new tone detection to topic '%s': %.1f Hz (duration: %d ms, range: ±%d Hz)\n",
+               topic, frequency, duration_ms, range_hz);
+        printf("[MQTT]   Message payload: %s\n", json_string);
     } else {
-        printf("[MQTT] Failed to publish new tone detection (tone logged but not sent via MQTT)\n");
+        printf("[MQTT] ✗ Failed to publish new tone detection to '%s' (tone logged but not sent)\n", topic);
+        printf("[MQTT]   Check connection status and broker availability\n");
     }
     
     json_object_put(json);

@@ -12,6 +12,10 @@ struct mqtt_state {
     int broker_port;
     int connected;
     int initialized;
+    // AWS IoT Core certificate paths
+    char ca_cert_path[512];
+    char client_cert_path[512];
+    char client_key_path[512];
 };
 
 // Initialize MQTT connection
