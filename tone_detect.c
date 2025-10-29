@@ -415,6 +415,16 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                tone_def->tone_a_freq, tone_def->tone_id,
                                current_time - global_tone_detection.tone_a_tracking_start);
                         global_tone_detection.tone_a_detections++;
+                        
+                        // Start recording timer if configured
+                        if (tone_def->record_length_ms > 0) {
+                            printf("[DEBUG] About to start recording timer for %d ms\n", tone_def->record_length_ms);
+                            start_recording_timer(tone_def->record_length_ms);
+                            printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
+                        }
+                        
+                        // Trigger tone passthrough/alert playback if configured
+                        trigger_tone_passthrough();
                     }
                 }
             } else {

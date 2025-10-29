@@ -222,12 +222,18 @@ static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
     struct json_object *aws_endpoint_obj;
     if (json_object_object_get_ex(json, "aws_endpoint", &aws_endpoint_obj)) {
         const char* endpoint_str = json_object_get_string(aws_endpoint_obj);
-        if (endpoint_str && strlen(endpoint_str) < endpoint_size) {
+        if (endpoint_str && strlen(endpoint_str) > 0 && strlen(endpoint_str) < endpoint_size) {
             strncpy(endpoint, endpoint_str, endpoint_size - 1);
             endpoint[endpoint_size - 1] = '\0';
+            printf("[MQTT] Found AWS endpoint in config: %s\n", endpoint);
             json_object_put(json);
             return 1;
+        } else {
+            printf("[MQTT] AWS endpoint found in config but invalid (length: %zu, max: %zu)\n", 
+                   endpoint_str ? strlen(endpoint_str) : 0, endpoint_size);
         }
+    } else {
+        printf("[MQTT] AWS endpoint 'aws_endpoint' field not found in config.json root level\n");
     }
     
     json_object_put(json);
