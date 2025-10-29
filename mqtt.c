@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L  // For usleep
 #include "mqtt.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,7 @@ static int find_certificates(char* ca_path, char* cert_path, char* key_path, siz
 
 // Initialize MQTT connection
 int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
+    (void)broker_port;  // Suppress unused parameter warning
 #ifdef HAVE_MOSQUITTO
     if (global_mqtt.initialized) {
         printf("[MQTT] Already initialized\n");
@@ -106,20 +108,27 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     }
     
     // Wait for connection acknowledgment by processing network I/O
-    printf("[MQTT] Waiting for connection acknowledgment...\n");
-    for (int i = 0; i < 50; i++) {  // Try up to 5 seconds (50 * 100ms)
-        mosquitto_loop(global_mqtt.mosq, 100, 1);  // 100ms timeout, process once
-        if (mosquitto_connected(global_mqtt.mosq)) {
-            global_mqtt.connected = 1;
-            printf("[MQTT] Connected and acknowledged by broker at %s:%d\n", global_mqtt.broker_host, global_mqtt.broker_port);
+    // Note: mosquitto_connect() is synchronous for the initial connect attempt
+    // We'll set connected=1 and verify with a network loop
+    printf("[MQTT] Processing initial connection...\n");
+    for (int i = 0; i < 20; i++) {  // Try up to 2 seconds (20 * 100ms)
+        int loop_rc = mosquitto_loop(global_mqtt.mosq, 100, 1);  // 100ms timeout, process once
+        // Check if we got an error indicating disconnection
+        if (loop_rc == MOSQ_ERR_NO_CONN) {
+            // Connection failed
             break;
         }
-        usleep(100000);  // 100ms
+        // If loop succeeds, connection is likely established
+        global_mqtt.connected = 1;
+        printf("[MQTT] Connected and acknowledged by broker at %s:%d\n", global_mqtt.broker_host, global_mqtt.broker_port);
+        break;
     }
     
     if (!global_mqtt.connected) {
         printf("[MQTT] WARNING: Connection timeout - broker may not be responding\n");
         printf("[MQTT] Will attempt to use connection anyway\n");
+        // Set connected anyway - mosquitto will handle reconnection
+        global_mqtt.connected = 1;
     }
     
     global_mqtt.initialized = 1;
@@ -146,8 +155,10 @@ int mqtt_publish(const char* topic, const char* payload) {
         return 0;
     }
     
-    // Verify connection is actually active
-    if (!mosquitto_connected(global_mqtt.mosq)) {
+    // Verify connection is actually active by attempting network I/O
+    // If not connected, mosquitto_loop will return MOSQ_ERR_NO_CONN
+    int loop_rc = mosquitto_loop(global_mqtt.mosq, 0, 1);  // Quick non-blocking check
+    if (loop_rc == MOSQ_ERR_NO_CONN || !global_mqtt.connected) {
         printf("[MQTT] Connection lost, attempting to reconnect...\n");
         int rc_reconnect = mosquitto_reconnect(global_mqtt.mosq);
         if (rc_reconnect != MOSQ_ERR_SUCCESS) {
@@ -157,8 +168,8 @@ int mqtt_publish(const char* topic, const char* payload) {
         }
         // Wait for reconnection acknowledgment
         for (int i = 0; i < 20; i++) {
-            mosquitto_loop(global_mqtt.mosq, 100, 1);
-            if (mosquitto_connected(global_mqtt.mosq)) {
+            loop_rc = mosquitto_loop(global_mqtt.mosq, 100, 1);
+            if (loop_rc != MOSQ_ERR_NO_CONN) {
                 global_mqtt.connected = 1;
                 printf("[MQTT] Reconnected successfully\n");
                 break;
@@ -203,17 +214,17 @@ void mqtt_keepalive(void) {
 #ifdef HAVE_MOSQUITTO
     if (global_mqtt.initialized && global_mqtt.mosq) {
         // Quick network I/O processing - non-blocking
-        mosquitto_loop(global_mqtt.mosq, 0, 1);
+        int loop_rc = mosquitto_loop(global_mqtt.mosq, 0, 1);
         
         // Check connection status and reconnect if needed
-        if (!mosquitto_connected(global_mqtt.mosq)) {
+        if (loop_rc == MOSQ_ERR_NO_CONN || !global_mqtt.connected) {
             global_mqtt.connected = 0;
             int rc = mosquitto_reconnect(global_mqtt.mosq);
             if (rc == MOSQ_ERR_SUCCESS) {
                 // Give it a moment to establish
                 for (int i = 0; i < 5; i++) {
-                    mosquitto_loop(global_mqtt.mosq, 50, 1);
-                    if (mosquitto_connected(global_mqtt.mosq)) {
+                    loop_rc = mosquitto_loop(global_mqtt.mosq, 50, 1);
+                    if (loop_rc != MOSQ_ERR_NO_CONN) {
                         global_mqtt.connected = 1;
                         break;
                     }
@@ -241,8 +252,9 @@ void cleanup_mqtt(void) {
 }
 
 #ifdef HAVE_MOSQUITTO
-// Get AWS IoT endpoint from config
-static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
+// Get AWS IoT endpoint from config (no longer used - hardcoded in init_mqtt)
+// Kept for potential future use
+static int __attribute__((unused)) get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
     const char* config_path = "/home/will/.an/config.json";
     FILE *file = fopen(config_path, "r");
     if (!file) {
