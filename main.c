@@ -5,6 +5,7 @@
 #include "udp.h"
 #include "config.h"
 #include "crypto.h"
+#include "mqtt.h"
 
 // Global state
 volatile int global_interrupted = 0;
@@ -53,6 +54,9 @@ static void handle_interrupt(int sig) {
     
     // Stop tone detection
     stop_tone_detection();
+    
+    // Cleanup MQTT
+    cleanup_mqtt();
 }
 
 int main(int argc, char *argv[]) {
@@ -228,6 +232,7 @@ int main(int argc, char *argv[]) {
     stop_tone_passthrough();
     stop_audio_passthrough();
     cleanup_audio_devices();  // Restore audio devices to normal state
+    cleanup_mqtt();
     curl_global_cleanup();
     Pa_Terminate();
     return 0;

@@ -779,6 +779,11 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                             printf("[NEW TONE] Detected unknown frequency: %.1f Hz (duration: %d ms, range: ±%d Hz)\n", 
                                    freq, global_tone_detection.config.new_tone_length_ms, 
                                    global_tone_detection.config.new_tone_range_hz);
+                            
+                            // Send MQTT message for new tone detection
+                            extern int publish_new_tone_detection(float frequency, int duration_ms, int range_hz);
+                            publish_new_tone_detection(freq, global_tone_detection.config.new_tone_length_ms, 
+                                                      global_tone_detection.config.new_tone_range_hz);
                         }
                         free(tone_segment);
                     }
