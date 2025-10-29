@@ -2,6 +2,7 @@
 #define MQTT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // MQTT connection state
 struct mqtt_state {

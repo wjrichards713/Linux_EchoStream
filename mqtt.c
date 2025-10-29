@@ -4,8 +4,11 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <mosquitto.h>
 #include <json-c/json.h>
+
+#ifdef HAVE_MOSQUITTO
+#include <mosquitto.h>
+#endif
 
 // Global MQTT state
 static struct mqtt_state global_mqtt = {0};
@@ -24,6 +27,7 @@ static void generate_uuid(char* uuid, size_t size) {
 
 // Initialize MQTT connection
 int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
+#ifdef HAVE_MOSQUITTO
     if (global_mqtt.initialized) {
         printf("[MQTT] Already initialized\n");
         return 1;
@@ -62,10 +66,18 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     
     global_mqtt.initialized = 1;
     return 1;
+#else
+    (void)device_id;
+    (void)broker_host;
+    (void)broker_port;
+    printf("[MQTT] MQTT support not compiled (libmosquitto not available)\n");
+    return 0;
+#endif
 }
 
 // Publish MQTT message
 int mqtt_publish(const char* topic, const char* payload) {
+#ifdef HAVE_MOSQUITTO
     if (!global_mqtt.initialized || !global_mqtt.mosq) {
         printf("[MQTT] Not initialized, skipping publish to %s\n", topic ? topic : "NULL");
         return 0;
@@ -100,16 +112,24 @@ int mqtt_publish(const char* topic, const char* payload) {
     mosquitto_loop(global_mqtt.mosq, 0, 1);
     
     return 1;
+#else
+    (void)topic;
+    (void)payload;
+    printf("[MQTT] MQTT support not compiled (libmosquitto not available)\n");
+    return 0;
+#endif
 }
 
 // Cleanup MQTT
 void cleanup_mqtt(void) {
+#ifdef HAVE_MOSQUITTO
     if (global_mqtt.mosq) {
         mosquitto_disconnect(global_mqtt.mosq);
         mosquitto_destroy(global_mqtt.mosq);
         global_mqtt.mosq = NULL;
     }
     mosquitto_lib_cleanup();
+#endif
     global_mqtt.initialized = 0;
     global_mqtt.connected = 0;
     printf("[MQTT] Cleaned up\n");
