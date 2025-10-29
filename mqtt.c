@@ -187,6 +187,7 @@ int get_device_id_from_config(char* device_id, size_t device_id_size) {
 
 // Publish new tone detection message
 int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
+#ifdef HAVE_MOSQUITTO
     if (!global_mqtt.initialized || !global_mqtt.mosq) {
         // Try to initialize if we have device_id
         char device_id[64];
@@ -195,7 +196,7 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
             // For AWS IoT, this would need certificate-based connection, 
             // but for now we'll try local broker
             if (!init_mqtt(device_id, "localhost", 1883)) {
-                printf("[MQTT] Failed to initialize MQTT connection\n");
+                printf("[MQTT] Failed to initialize MQTT connection - tone detection logged but not published\n");
                 return 0;
             }
         } else {
@@ -203,7 +204,15 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
             return 0;
         }
     }
+#else
+    // MQTT not available, but tone was still detected
+    (void)frequency;
+    (void)duration_ms;
+    (void)range_hz;
+    return 0;
+#endif
     
+#ifdef HAVE_MOSQUITTO
     // Generate message
     char message_id[64];
     generate_uuid(message_id, sizeof(message_id));
@@ -235,9 +244,16 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
     if (result) {
         printf("[MQTT] Published new tone detection: %.1f Hz (duration: %d ms, range: ±%d Hz)\n",
                frequency, duration_ms, range_hz);
+    } else {
+        printf("[MQTT] Failed to publish new tone detection (tone logged but not sent via MQTT)\n");
     }
     
     json_object_put(json);
     return result;
+#else
+    // MQTT not compiled - tone was detected but cannot send MQTT message
+    printf("[MQTT] New tone detected but MQTT not available (libmosquitto not compiled)\n");
+    return 0;
+#endif
 }
 

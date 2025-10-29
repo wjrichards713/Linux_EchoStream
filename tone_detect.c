@@ -78,6 +78,16 @@ int init_tone_detection(void) {
     global_tone_detection.config.gain = 0.4f;
     global_tone_detection.config.db_threshold = -45;
     global_tone_detection.config.detect_new_tones = 1;
+    // Initialize new tone tracking array
+    for (int i = 0; i < 10; i++) {
+        global_tone_detection.new_tone_tracking[i].is_tracking = 0;
+        global_tone_detection.new_tone_tracking[i].tracking_start = 0;
+        global_tone_detection.new_tone_tracking[i].frequency = 0.0f;
+        global_tone_detection.new_tone_tracking[i].hit_streak = 0;
+        global_tone_detection.new_tone_tracking[i].miss_streak = 0;
+        global_tone_detection.new_tone_tracking[i].last_seen_ms = 0;
+    }
+    
     global_tone_detection.config.new_tone_length_ms = 1000;
     global_tone_detection.config.new_tone_range_hz = 3;
     global_tone_detection.config.valid = 1;
@@ -726,17 +736,29 @@ void reset_tone_tracking(void) {
     global_tone_detection.tone_b_tracking_start = 0;
 }
 
-// Detect new tones
+// Detect new tones with proper duration tracking (similar to Tone A/B)
 int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attribute__((unused))) {
     if (!global_tone_detection.config.detect_new_tones) {
         return 0;
     }
     
-    // Enhanced new tone detection with duration and range checking
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    static struct timespec start_time = {0, 0};
+    if (start_time.tv_sec == 0) {
+        start_time = now;
+    }
+    int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
+                            (now.tv_nsec - start_time.tv_nsec) / 1000000);
+    
+    const int HIT_REQUIRED = 1;
+    const int MISS_REQUIRED = 3;
+    const int GRACE_MS = 500;
+    
+    // First, check all peaks for unknown frequencies
     for (int i = 0; i < global_tone_detection.peak_count; i++) {
         float freq = global_tone_detection.peak_frequencies[i];
         int is_known_tone = 0;
-        int is_duplicate = 0;
         
         // Check if this frequency matches any defined tone
         for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
@@ -751,42 +773,116 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
         }
         
         if (!is_known_tone) {
-            // Check if we've already detected this frequency recently (within configured range)
+            // Check if we've already confirmed this frequency before
+            int already_confirmed = 0;
             for (int k = 0; k < global_tone_detection.detected_frequency_count; k++) {
                 if (fabs(global_tone_detection.detected_frequencies[k] - freq) < global_tone_detection.config.new_tone_range_hz) {
-                    is_duplicate = 1;
+                    already_confirmed = 1;
                     break;
                 }
             }
             
-            if (!is_duplicate && global_tone_detection.detected_frequency_count < 100) {
-                // Check if tone duration meets minimum requirement
-                int required_samples = (int)(global_tone_detection.config.new_tone_length_ms * SAMPLE_RATE / 1000.0f);
-                if (audio_buffer_size >= required_samples) {
-                    // Analyze the tone duration by checking if it persists
-                    float* tone_segment = malloc(required_samples * sizeof(float));
-                    if (tone_segment) {
-                        get_audio_segment(required_samples, required_samples, tone_segment);
-                        float detected_freq = freq_from_fft(tone_segment, required_samples, SAMPLE_RATE);
-                        
-                        // Check if the detected frequency is consistent with the peak frequency
-                        if (fabs(detected_freq - freq) < global_tone_detection.config.new_tone_range_hz) {
-                            // This is a genuinely new tone that meets duration requirements
-                            global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = freq;
-                            global_tone_detection.detected_frequency_count++;
-                            global_tone_detection.new_tone_detections++;
-                            
-                            printf("[NEW TONE] Detected unknown frequency: %.1f Hz (duration: %d ms, range: ±%d Hz)\n", 
-                                   freq, global_tone_detection.config.new_tone_length_ms, 
-                                   global_tone_detection.config.new_tone_range_hz);
-                            
-                            // Send MQTT message for new tone detection
-                            extern int publish_new_tone_detection(float frequency, int duration_ms, int range_hz);
-                            publish_new_tone_detection(freq, global_tone_detection.config.new_tone_length_ms, 
-                                                      global_tone_detection.config.new_tone_range_hz);
-                        }
-                        free(tone_segment);
+            if (already_confirmed) {
+                continue; // Skip already confirmed tones
+            }
+            
+            // Find or create tracking slot for this frequency
+            int tracking_idx = -1;
+            for (int t = 0; t < 10; t++) {
+                if (global_tone_detection.new_tone_tracking[t].is_tracking) {
+                    // Check if this frequency matches a tracked tone (within range)
+                    if (fabs(global_tone_detection.new_tone_tracking[t].frequency - freq) < global_tone_detection.config.new_tone_range_hz) {
+                        tracking_idx = t;
+                        break;
                     }
+                } else if (tracking_idx == -1) {
+                    // Empty slot available
+                    tracking_idx = t;
+                }
+            }
+            
+            if (tracking_idx >= 0) {
+                // Update or start tracking
+                if (!global_tone_detection.new_tone_tracking[tracking_idx].is_tracking) {
+                    // Start new tracking
+                    global_tone_detection.new_tone_tracking[tracking_idx].frequency = freq;
+                    global_tone_detection.new_tone_tracking[tracking_idx].is_tracking = 1;
+                    global_tone_detection.new_tone_tracking[tracking_idx].tracking_start = current_time;
+                    global_tone_detection.new_tone_tracking[tracking_idx].hit_streak = 1;
+                    global_tone_detection.new_tone_tracking[tracking_idx].miss_streak = 0;
+                    global_tone_detection.new_tone_tracking[tracking_idx].last_seen_ms = current_time;
+                } else {
+                    // Update existing tracking - frequency detected
+                    global_tone_detection.new_tone_tracking[tracking_idx].hit_streak++;
+                    global_tone_detection.new_tone_tracking[tracking_idx].miss_streak = 0;
+                    global_tone_detection.new_tone_tracking[tracking_idx].last_seen_ms = current_time;
+                    
+                    // Update frequency to average for stability
+                    float avg_freq = (global_tone_detection.new_tone_tracking[tracking_idx].frequency + freq) / 2.0f;
+                    if (fabs(avg_freq - global_tone_detection.new_tone_tracking[tracking_idx].frequency) < global_tone_detection.config.new_tone_range_hz) {
+                        global_tone_detection.new_tone_tracking[tracking_idx].frequency = avg_freq;
+                    }
+                    
+                    // Check if duration requirement is met
+                    int elapsed = current_time - global_tone_detection.new_tone_tracking[tracking_idx].tracking_start;
+                    if (elapsed >= global_tone_detection.config.new_tone_length_ms) {
+                        // New tone confirmed! It has been present for the required duration
+                        printf("[NEW TONE] Detected unknown frequency: %.1f Hz (duration: %d ms, range: ±%d Hz)\n", 
+                               global_tone_detection.new_tone_tracking[tracking_idx].frequency,
+                               global_tone_detection.config.new_tone_length_ms, 
+                               global_tone_detection.config.new_tone_range_hz);
+                        
+                        // Add to confirmed list
+                        if (global_tone_detection.detected_frequency_count < 100) {
+                            global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = 
+                                global_tone_detection.new_tone_tracking[tracking_idx].frequency;
+                            global_tone_detection.detected_frequency_count++;
+                        }
+                        
+                        global_tone_detection.new_tone_detections++;
+                        
+                        // Send MQTT message for new tone detection
+                        extern int publish_new_tone_detection(float frequency, int duration_ms, int range_hz);
+                        publish_new_tone_detection(global_tone_detection.new_tone_tracking[tracking_idx].frequency,
+                                                  global_tone_detection.config.new_tone_length_ms, 
+                                                  global_tone_detection.config.new_tone_range_hz);
+                        
+                        // Reset tracking for this slot
+                        global_tone_detection.new_tone_tracking[tracking_idx].is_tracking = 0;
+                        global_tone_detection.new_tone_tracking[tracking_idx].tracking_start = 0;
+                        global_tone_detection.new_tone_tracking[tracking_idx].hit_streak = 0;
+                        global_tone_detection.new_tone_tracking[tracking_idx].miss_streak = 0;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Process misses and cleanup stale tracking slots
+    for (int t = 0; t < 10; t++) {
+        if (global_tone_detection.new_tone_tracking[t].is_tracking) {
+            // Check if any current peak matches this tracked frequency
+            int found = 0;
+            for (int i = 0; i < global_tone_detection.peak_count; i++) {
+                float freq = global_tone_detection.peak_frequencies[i];
+                if (fabs(global_tone_detection.new_tone_tracking[t].frequency - freq) < global_tone_detection.config.new_tone_range_hz) {
+                    found = 1;
+                    break;
+                }
+            }
+            
+            if (!found) {
+                // Frequency not found in current peaks - increment miss streak
+                global_tone_detection.new_tone_tracking[t].miss_streak++;
+                
+                // Reset if grace period exceeded and enough misses
+                if ((current_time - global_tone_detection.new_tone_tracking[t].last_seen_ms) > GRACE_MS &&
+                    global_tone_detection.new_tone_tracking[t].miss_streak >= MISS_REQUIRED) {
+                    // Reset this tracking slot
+                    global_tone_detection.new_tone_tracking[t].is_tracking = 0;
+                    global_tone_detection.new_tone_tracking[t].tracking_start = 0;
+                    global_tone_detection.new_tone_tracking[t].hit_streak = 0;
+                    global_tone_detection.new_tone_tracking[t].miss_streak = 0;
                 }
             }
         }

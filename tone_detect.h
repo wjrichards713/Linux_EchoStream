@@ -83,6 +83,16 @@ struct tone_detection_state {
     float detected_frequencies[100];  // Buffer for detected frequencies
     int detected_frequency_count;
     
+    // New tone tracking state (for duration validation)
+    struct {
+        float frequency;
+        int tracking_start;      // Start time when tracking began
+        int is_tracking;         // 1 if currently tracking this frequency
+        int hit_streak;          // Consecutive hits
+        int miss_streak;         // Consecutive misses
+        int last_seen_ms;        // Last time this frequency was seen
+    } new_tone_tracking[10];    // Track up to 10 potential new tones simultaneously
+    
     // Thread control
     int active;
     pthread_t thread;
