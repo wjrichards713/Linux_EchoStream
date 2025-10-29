@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "websocket.h"
 #include "tone_detect.h"
+#include "mqtt.h"
 #include <unistd.h>
 
 // GPIO state variables
@@ -142,11 +143,19 @@ void* gpio_monitor_worker(void* arg) {
     printf("GPIO Status will be displayed every 10 seconds\n");
 
     int status_counter = 0;
+    int mqtt_keepalive_counter = 0;
     while (!global_interrupted) {
         int curr_val_38 = read_gpio_pin(gpio_pin_38);
         int curr_val_40 = read_gpio_pin(gpio_pin_40);
         int curr_val_16 = read_gpio_pin(gpio_pin_16);
         int curr_val_18 = read_gpio_pin(gpio_pin_18);
+
+        // Keep MQTT connection alive - call every 1 second (10 iterations * 100ms)
+        mqtt_keepalive_counter++;
+        if (mqtt_keepalive_counter >= 10) {
+            mqtt_keepalive();
+            mqtt_keepalive_counter = 0;
+        }
 
         pthread_mutex_lock(&gpio_mutex);
 

@@ -101,9 +101,25 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
                global_mqtt.broker_host, global_mqtt.broker_port, rc, error_str ? error_str : "unknown error");
         printf("[MQTT] Check: 1) Broker is running/accessible, 2) Port is correct, 3) Certificates are valid (for AWS IoT)\n");
         global_mqtt.connected = 0;
-    } else {
-        printf("[MQTT] Connected to broker at %s:%d\n", global_mqtt.broker_host, global_mqtt.broker_port);
-        global_mqtt.connected = 1;
+        global_mqtt.initialized = 1;
+        return 0;
+    }
+    
+    // Wait for connection acknowledgment by processing network I/O
+    printf("[MQTT] Waiting for connection acknowledgment...\n");
+    for (int i = 0; i < 50; i++) {  // Try up to 5 seconds (50 * 100ms)
+        mosquitto_loop(global_mqtt.mosq, 100, 1);  // 100ms timeout, process once
+        if (mosquitto_connected(global_mqtt.mosq)) {
+            global_mqtt.connected = 1;
+            printf("[MQTT] Connected and acknowledged by broker at %s:%d\n", global_mqtt.broker_host, global_mqtt.broker_port);
+            break;
+        }
+        usleep(100000);  // 100ms
+    }
+    
+    if (!global_mqtt.connected) {
+        printf("[MQTT] WARNING: Connection timeout - broker may not be responding\n");
+        printf("[MQTT] Will attempt to use connection anyway\n");
     }
     
     global_mqtt.initialized = 1;
@@ -130,33 +146,47 @@ int mqtt_publish(const char* topic, const char* payload) {
         return 0;
     }
     
-    // Try to reconnect if not connected
-    if (!global_mqtt.connected) {
-        int rc = mosquitto_reconnect(global_mqtt.mosq);
-        if (rc == MOSQ_ERR_SUCCESS) {
-            global_mqtt.connected = 1;
-            printf("[MQTT] Reconnected to broker\n");
-        } else {
-            printf("[MQTT] WARNING: Failed to reconnect (rc=%d), attempting to publish anyway\n", rc);
+    // Verify connection is actually active
+    if (!mosquitto_connected(global_mqtt.mosq)) {
+        printf("[MQTT] Connection lost, attempting to reconnect...\n");
+        int rc_reconnect = mosquitto_reconnect(global_mqtt.mosq);
+        if (rc_reconnect != MOSQ_ERR_SUCCESS) {
+            printf("[MQTT] ERROR: Reconnect failed (rc=%d), cannot publish\n", rc_reconnect);
+            global_mqtt.connected = 0;
+            return 0;
+        }
+        // Wait for reconnection acknowledgment
+        for (int i = 0; i < 20; i++) {
+            mosquitto_loop(global_mqtt.mosq, 100, 1);
+            if (mosquitto_connected(global_mqtt.mosq)) {
+                global_mqtt.connected = 1;
+                printf("[MQTT] Reconnected successfully\n");
+                break;
+            }
+            usleep(100000);  // 100ms
+        }
+        if (!global_mqtt.connected) {
+            printf("[MQTT] ERROR: Reconnection timeout\n");
+            return 0;
         }
     }
     
-    // Publish message
-    int rc = mosquitto_publish(global_mqtt.mosq, NULL, topic, strlen(payload), payload, 1, false);
+    // Publish message with QoS 1 (requires acknowledgment)
+    int rc = mosquitto_publish(global_mqtt.mosq, NULL, topic, (int)strlen(payload), payload, 1, false);
     if (rc != MOSQ_ERR_SUCCESS) {
         const char* error_str = mosquitto_strerror(rc);
         printf("[MQTT] ERROR: Failed to publish to '%s' (rc=%d: %s)\n", 
                topic, rc, error_str ? error_str : "unknown error");
-        // Try to reconnect for next time
         global_mqtt.connected = 0;
-        
-        // Process network to see if there are any pending errors
-        mosquitto_loop(global_mqtt.mosq, 0, 1);
         return 0;
     }
     
-    // Process network traffic (required for mosquitto to actually send)
-    mosquitto_loop(global_mqtt.mosq, 0, 1);
+    // Process network traffic to ensure message is sent
+    // For QoS 1, we need to process network I/O to send the message (PUBACK will come later)
+    // Don't block too long - just ensure the publish packet is sent
+    for (int i = 0; i < 3; i++) {
+        mosquitto_loop(global_mqtt.mosq, 50, 1);  // 50ms timeout, quick processing
+    }
     
     return 1;
 #else
@@ -164,6 +194,34 @@ int mqtt_publish(const char* topic, const char* payload) {
     (void)payload;
     printf("[MQTT] MQTT support not compiled (libmosquitto not available)\n");
     return 0;
+#endif
+}
+
+// Keep MQTT connection alive by processing network I/O
+// Call this periodically (e.g., every few seconds) from a main loop or worker thread
+void mqtt_keepalive(void) {
+#ifdef HAVE_MOSQUITTO
+    if (global_mqtt.initialized && global_mqtt.mosq) {
+        // Quick network I/O processing - non-blocking
+        mosquitto_loop(global_mqtt.mosq, 0, 1);
+        
+        // Check connection status and reconnect if needed
+        if (!mosquitto_connected(global_mqtt.mosq)) {
+            global_mqtt.connected = 0;
+            int rc = mosquitto_reconnect(global_mqtt.mosq);
+            if (rc == MOSQ_ERR_SUCCESS) {
+                // Give it a moment to establish
+                for (int i = 0; i < 5; i++) {
+                    mosquitto_loop(global_mqtt.mosq, 50, 1);
+                    if (mosquitto_connected(global_mqtt.mosq)) {
+                        global_mqtt.connected = 1;
+                        break;
+                    }
+                    usleep(50000);  // 50ms
+                }
+            }
+        }
+    }
 #endif
 }
 

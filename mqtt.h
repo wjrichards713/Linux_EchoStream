@@ -33,5 +33,8 @@ int get_device_id_from_config(char* device_id, size_t device_id_size);
 // Publish new tone detection message
 int publish_new_tone_detection(float frequency, int duration_ms, int range_hz);
 
+// Keep MQTT connection alive (call periodically)
+void mqtt_keepalive(void);
+
 #endif // MQTT_H
 
