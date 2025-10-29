@@ -46,17 +46,11 @@ int init_mqtt(const char* device_id, const char* broker_host, int broker_port) {
     
     strncpy(global_mqtt.device_id, device_id, sizeof(global_mqtt.device_id) - 1);
     
-    // Try to get AWS IoT endpoint from config, fallback to provided broker_host
-    char aws_endpoint[256];
-    if (get_aws_iot_endpoint(aws_endpoint, sizeof(aws_endpoint))) {
-        strncpy(global_mqtt.broker_host, aws_endpoint, sizeof(global_mqtt.broker_host) - 1);
-        global_mqtt.broker_port = 8883; // AWS IoT always uses 8883
-        printf("[MQTT] Using AWS IoT endpoint from config: %s:%d\n", aws_endpoint, global_mqtt.broker_port);
-    } else {
-        strncpy(global_mqtt.broker_host, broker_host, sizeof(global_mqtt.broker_host) - 1);
-        global_mqtt.broker_port = broker_port;
-        printf("[MQTT] Using provided broker: %s:%d\n", broker_host, broker_port);
-    }
+    // Hardcoded AWS IoT Core endpoint
+    const char* aws_endpoint = "a1d6e0zlehb0v9-ats.iot.us-west-2.amazonaws.com";
+    strncpy(global_mqtt.broker_host, aws_endpoint, sizeof(global_mqtt.broker_host) - 1);
+    global_mqtt.broker_port = 8883; // AWS IoT always uses 8883
+    printf("[MQTT] Using AWS IoT Core endpoint: %s:%d\n", aws_endpoint, global_mqtt.broker_port);
     
     // Try to find certificates
     if (!find_certificates(global_mqtt.ca_cert_path, global_mqtt.client_cert_path, 
@@ -346,21 +340,10 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
         // Try to initialize if we have device_id
         char device_id[64];
         if (get_device_id_from_config(device_id, sizeof(device_id))) {
-            // Try AWS IoT first, then fallback to localhost
-            // init_mqtt will try to get AWS endpoint from config
-            char broker[256] = "localhost";
-            int port = 1883;
-            
-            // Check if we can get AWS endpoint from config
-            char aws_endpoint[256];
-            if (get_aws_iot_endpoint(aws_endpoint, sizeof(aws_endpoint))) {
-                strncpy(broker, aws_endpoint, sizeof(broker) - 1);
-                port = 8883;
-                printf("[MQTT] Attempting to connect to AWS IoT Core: %s:%d\n", broker, port);
-            } else {
-                printf("[MQTT] AWS IoT endpoint not found in config, trying localhost:1883\n");
-                printf("[MQTT] For AWS IoT, add 'aws_endpoint' to config.json\n");
-            }
+            // Use hardcoded AWS IoT Core endpoint
+            const char* broker = "a1d6e0zlehb0v9-ats.iot.us-west-2.amazonaws.com";
+            int port = 8883;
+            printf("[MQTT] Attempting to connect to AWS IoT Core: %s:%d\n", broker, port);
             
             if (!init_mqtt(device_id, broker, port)) {
                 printf("[MQTT] Failed to initialize MQTT connection - tone detection logged but not published\n");
