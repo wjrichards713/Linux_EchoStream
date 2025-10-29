@@ -3,13 +3,23 @@ CFLAGS = -Wall -Wextra -std=c99 -O2 -g
 LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lfftw3 -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod
 
 # Check if mosquitto header exists and enable MQTT support
-MOSQUITTO_HEADER := $(shell test -f /usr/include/mosquitto.h && echo "yes" || test -f /usr/local/include/mosquitto.h && echo "yes" || echo "no")
-ifeq ($(MOSQUITTO_HEADER),yes)
-    CFLAGS += -DHAVE_MOSQUITTO
-    LDFLAGS += -lmosquitto
-    $(info MQTT support enabled (mosquitto.h found))
+# Try multiple methods to detect mosquitto
+MOSQUITTO_CHECK := $(shell pkg-config --exists libmosquitto && echo "yes" || echo "no")
+ifeq ($(MOSQUITTO_CHECK),yes)
+    CFLAGS += -DHAVE_MOSQUITTO $(shell pkg-config --cflags libmosquitto)
+    LDFLAGS += $(shell pkg-config --libs libmosquitto)
+    $(info MQTT support enabled (via pkg-config))
 else
-    $(info MQTT support disabled (mosquitto.h not found - install libmosquitto-dev to enable))
+    # Fallback: check for header file directly
+    MOSQUITTO_HEADER := $(shell [ -f /usr/include/mosquitto.h ] && echo "yes" || [ -f /usr/local/include/mosquitto.h ] && echo "yes" || echo "no")
+    ifeq ($(MOSQUITTO_HEADER),yes)
+        CFLAGS += -DHAVE_MOSQUITTO
+        LDFLAGS += -lmosquitto
+        $(info MQTT support enabled (mosquitto.h found))
+    else
+        $(info MQTT support disabled (libmosquitto-dev not found))
+        $(info Run: sudo apt-get install libmosquitto-dev)
+    endif
 endif
 
 # Source files

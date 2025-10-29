@@ -47,6 +47,7 @@ sudo apt install -y build-essential cmake git pkg-config wget curl make
 # Install MQTT dependencies
 print_status "Installing MQTT dependencies..."
 sudo apt install -y libmosquitto-dev
+sudo apt-get install -y libmosquitto-dev
 
 # Install audio dependencies
 print_status "Installing audio libraries..."
