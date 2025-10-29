@@ -2,18 +2,14 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -O2 -g
 LDFLAGS = -lportaudio -lopus -lcurl -lwebsockets -lfftw3 -lm -lpthread -lcrypto -lssl -ljson-c -lgpiod
 
-# Check if libmosquitto is available and add if so
-MOSQUITTO_CFLAGS := $(shell pkg-config --cflags libmosquitto 2>/dev/null || echo "")
-MOSQUITTO_LDFLAGS := $(shell pkg-config --libs libmosquitto 2>/dev/null || echo "-lmosquitto")
-
-# Try to detect if mosquitto header exists
-ifneq ($(wildcard /usr/include/mosquitto.h),)
+# Check if mosquitto header exists and enable MQTT support
+MOSQUITTO_HEADER := $(shell test -f /usr/include/mosquitto.h && echo "yes" || test -f /usr/local/include/mosquitto.h && echo "yes" || echo "no")
+ifeq ($(MOSQUITTO_HEADER),yes)
     CFLAGS += -DHAVE_MOSQUITTO
     LDFLAGS += -lmosquitto
-endif
-ifneq ($(wildcard /usr/local/include/mosquitto.h),)
-    CFLAGS += -DHAVE_MOSQUITTO
-    LDFLAGS += -lmosquitto
+    $(info MQTT support enabled (mosquitto.h found))
+else
+    $(info MQTT support disabled (mosquitto.h not found - install libmosquitto-dev to enable))
 endif
 
 # Source files

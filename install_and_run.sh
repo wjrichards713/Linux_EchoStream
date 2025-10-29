@@ -44,6 +44,10 @@ sudo apt upgrade -y
 print_status "Installing build essentials..."
 sudo apt install -y build-essential cmake git pkg-config wget curl make
 
+# Install MQTT dependencies
+print_status "Installing MQTT dependencies..."
+sudo apt install -y libmosquitto-dev
+
 # Install audio dependencies
 print_status "Installing audio libraries..."
 sudo apt install -y libportaudio2 libportaudiocpp0 portaudio19-dev alsa-utils pulseaudio pulseaudio-utils
