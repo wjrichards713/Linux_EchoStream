@@ -238,20 +238,16 @@ static int get_aws_iot_endpoint(char* endpoint, size_t endpoint_size) {
 #ifdef HAVE_MOSQUITTO
 // Find certificate paths
 static int find_certificates(char* ca_path, char* cert_path, char* key_path, size_t path_size) {
-    // Common certificate locations
+    // Common certificate locations (check parent directory first, then subdirectories)
     const char* base_paths[] = {
-        "/home/will/.an/cert/",
-        "/home/will/.an/certs/",
-        "/home/will/.aws-iot/",
-        "./cert/",
-        "./certs/",
+        "/home/will/.an/"
     };
     
     const char* ca_files[] = { "AmazonRootCA1.pem", "root-CA.crt", "ca-cert.pem", "ca.pem" };
     const char* cert_files[] = { "certificate.pem.crt", "cert.pem", "device-cert.pem" };
     const char* key_files[] = { "private.pem.key", "private-key.pem", "device-private.pem.key" };
     
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 1; i++) {
         for (int j = 0; j < 4; j++) {
             char test_path[512];
             snprintf(test_path, sizeof(test_path), "%s%s", base_paths[i], ca_files[j]);
