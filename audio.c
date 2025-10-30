@@ -446,58 +446,55 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     
     
     if (passthrough_mode) {
-        // Configured passthrough target - should ONLY play alerts, not passthrough audio
-        // First, find the current channel index
-        extern char global_channel_ids[MAX_CHANNELS][CHANNEL_ID_LEN];
-        extern int global_channel_count;
-        int current_channel_index = -1;
-        for (int i = 0; i < global_channel_count; i++) {
-            if (strcmp(audio_stream->channel_id, global_channel_ids[i]) == 0) {
-                current_channel_index = i;
-                break;
-            }
-        }
+        // Configured passthrough target - route actual input audio when recording is active
+        // Check if recording is active (tone detected and timer running)
+        extern int is_recording_active(void);
+        int recording = is_recording_active();
         
         // Initialize output buffer to silence
         for (unsigned long i = 0; i < frames; i++) {
             out[i] = 0.0f;
         }
         
-        // Only play alert if one is active
-    if (should_play_alert_on_channel(current_channel_index)) {
-        // Debug: Check actual sample rate of the output stream
-        static int sample_rate_debug_count = 0;
-        if (++sample_rate_debug_count % 1000 == 0) {
-            const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->output_stream);
-            if (stream_info) {
-                printf("[DEBUG] Output stream actual sample rate: %.1f Hz (requested: 48000 Hz)\n", stream_info->sampleRate);
+        if (recording) {
+            // Recording active - passthrough actual input audio from source channel
+            pthread_mutex_lock(&global_shared_buffer.mutex);
+            
+            static int passthrough_log_count = 0;
+            if (passthrough_log_count++ % 1000 == 0) {
+                printf("[PASSTHROUGH] Routing input audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
             }
-        }
-        
-        // Track alert state to log only once when it starts
-        static int was_playing_alert = 0;
-        
-        int alert_samples = get_alert_audio_samples(out, frames);
-        if (alert_samples > 0) {
-            // Only log once when alert starts playing (not every callback)
-            if (!was_playing_alert) {
-                printf("[ALERT PLAYBACK] Playing alert tone on passthrough target (channel: %s)\n", audio_stream->channel_id);
-                was_playing_alert = 1;
+            
+            // Copy audio from shared buffer (contains input from source channel)
+            if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+                unsigned long samples_to_copy = frames;
+                if (samples_to_copy > (unsigned long)global_shared_buffer.sample_count) {
+                    samples_to_copy = (unsigned long)global_shared_buffer.sample_count;
+                }
+                
+                // Copy input audio samples to output
+                for (unsigned long i = 0; i < samples_to_copy; i++) {
+                    out[i] = global_shared_buffer.samples[i];
+                }
+                
+                // If we didn't fill the entire buffer, pad with silence
+                for (unsigned long i = samples_to_copy; i < frames; i++) {
+                    out[i] = 0.0f;
+                }
+                
+                // Mark buffer as consumed (don't clear valid flag yet - let next callback handle it)
+            } else {
+                // No input audio available yet - output silence
             }
-            // Alert is playing directly - replaces silence
+            
+            pthread_mutex_unlock(&global_shared_buffer.mutex);
         } else {
-            // Alert finished, reset flag for next time
-            if (was_playing_alert) {
-                was_playing_alert = 0;
+            // No recording active - output silence
+            static int silence_count = 0;
+            if (silence_count++ % 10000 == 0) {
+                printf("[PASSTHROUGH] No recording active - outputting silence (channel: %s)\n", audio_stream->channel_id);
             }
         }
-    } else {
-        // No alert playing - output should be silence (already set above)
-        static int silence_count = 0;
-        if (silence_count++ % 10000 == 0) {
-            printf("[DEBUG] Passthrough target channel %s: No alert playing, outputting silence\n", audio_stream->channel_id);
-        }
-    }
 
         return paContinue;
     }

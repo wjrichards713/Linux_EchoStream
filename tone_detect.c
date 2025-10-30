@@ -555,8 +555,9 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     // Apply frequency filters to audio samples if any are configured
     apply_audio_frequency_filters(audio_samples, sample_count);
     
-    // Check for single tone detection for passthrough
-    detect_single_tone_for_passthrough(audio_samples, sample_count);
+    // NOTE: detect_single_tone_for_passthrough() removed - passthrough only starts after tone CONFIRMATION
+    // Confirmation happens in detect_tone_sequence() which calls trigger_tone_passthrough()
+    // This ensures passthrough only starts AFTER the tone meets duration requirements
     
     // Recording timer expiration is now checked in is_recording_active() with proper mutex protection
     // This old check is no longer needed - using the centralized function instead
@@ -1025,6 +1026,7 @@ static struct {
     int current_phase; // 0 = playing tone A, 1 = playing tone B
     int tone_a_samples_played;
     int tone_b_samples_played;
+    char playing_tone_id[64]; // Track which tone_id is currently playing to prevent restarting same tone
 } global_alert_playback = {0};
 
 // Play detected Tone A and Tone B sequence through target channel output
@@ -1222,6 +1224,7 @@ void stop_alert_playback(void) {
         global_alert_playback.active = 0;
         global_alert_playback.samples_played = 0;
         global_alert_playback.total_samples = 0;
+        global_alert_playback.playing_tone_id[0] = '\0'; // Clear tone_id when stopping
     }
 }
 
@@ -1260,33 +1263,12 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
     printf("[TONE PASSTHROUGH] Source channel %d detected known tone (ID: %s), target: %s\n", 
            source_channel_idx + 1, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
     
-    // Check if the target channel has a working output stream
-    int target_channel_idx = get_passthrough_target_channel_index();
-    printf("[DEBUG] Target channel index: %d\n", target_channel_idx);
-    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
-        if (channel_has_output_stream(target_channel_idx)) {
-            printf("[TONE PASSTHROUGH] Known tone detected, playing alert locally on channel %d\n", 
-                   target_channel_idx + 1);
-            
-            // Use the confirmed tone definition's frequencies and record_length
-            float tone_a_freq = confirmed_tone_def->tone_a_freq;
-            float tone_b_freq = confirmed_tone_def->tone_b_freq;
-            float alert_duration = (float)confirmed_tone_def->record_length_ms;
-            
-            printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz (record_length from config)\n",
-                   alert_duration / 1000.0f, tone_a_freq);
-            
-            // Play alert tone with duration from config.json
-            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, alert_duration, 0);
-            
-        } else {
-            printf("[TONE PASSTHROUGH] Tone detected but target channel %d has no output stream - alert playback disabled\n", 
-                   target_channel_idx + 1);
-        }
-    } else {
-        printf("[TONE PASSTHROUGH] Tone detected but invalid target channel index %d - alert playback disabled\n", 
-               target_channel_idx);
-    }
+    // Passthrough routing is handled in audio.c output callback
+    // The recording timer controls the duration - passthrough will route input audio
+    // as long as is_recording_active() returns true
+    // No need to generate alert tones - actual input audio will be routed instead
+    printf("[TONE PASSTHROUGH] Passthrough enabled - input audio will be routed to target channel for %d ms\n",
+           confirmed_tone_def->record_length_ms);
 }
 
 // Configuration functions
@@ -1588,32 +1570,12 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                     int tone_a_match = (fabs(tone_a_freq - tone_def->tone_a_freq) < tone_a_tolerance);
                     
                     if (tone_a_match) {
-                        printf("\n🎯 [SINGLE TONE DETECTED] Tone A: %.1f Hz (ID: %s)\n", 
-                               tone_a_freq, tone_def->tone_id);
-                        
-                        // Start or extend recording
-                        if (tone_def->record_length_ms > 0) {
-                            start_recording_timer(tone_def->record_length_ms);
-                        }
-                        
-                        // Play alert tone with duration from config.json record_length
-                        extern int get_passthrough_target_channel_index(void);
-                        extern int channel_has_output_stream(int channel_index);
-                        int target_channel_idx = get_passthrough_target_channel_index();
-                        if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
-                            float alert_duration = (float)tone_def->record_length_ms;
-                            if (global_alert_playback.active) {
-                                printf("[ALERT] Interrupting current alert to play new %.1f-second tone at %.1f Hz\n", 
-                                       alert_duration / 1000.0f, tone_a_freq);
-                            } else {
-                                printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz\n", 
-                                       alert_duration / 1000.0f, tone_a_freq);
-                            }
-                            play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_a_freq, alert_duration, 0);
-                        }
-                        
+                        // Tone A frequency matches - but don't start passthrough yet
+                        // Passthrough will only start after tone is CONFIRMED (meets duration requirement)
+                        // Confirmation happens in detect_tone_sequence() which calls trigger_tone_passthrough()
+                        // This function just detects the frequency match, confirmation is done elsewhere
                         free(tone_a_segment);
-                        return 1; // Tone detected
+                        return 1; // Tone frequency detected (but not confirmed yet)
                     }
                     free(tone_a_segment);
                 }
@@ -1633,32 +1595,12 @@ int detect_single_tone_for_passthrough(const float* samples, int sample_count) {
                     int tone_b_match = (fabs(tone_b_freq - tone_def->tone_b_freq) < tone_b_tolerance);
                     
                     if (tone_b_match) {
-                        printf("\n🎯 [SINGLE TONE DETECTED] Tone B: %.1f Hz (ID: %s)\n", 
-                               tone_b_freq, tone_def->tone_id);
-                        
-                        // Start or extend recording
-                        if (tone_def->record_length_ms > 0) {
-                            start_recording_timer(tone_def->record_length_ms);
-                        }
-                        
-                        // Play alert tone with duration from config.json record_length
-                        extern int get_passthrough_target_channel_index(void);
-                        extern int channel_has_output_stream(int channel_index);
-                        int target_channel_idx = get_passthrough_target_channel_index();
-                        if (target_channel_idx >= 0 && channel_has_output_stream(target_channel_idx)) {
-                            float alert_duration = (float)tone_def->record_length_ms;
-                            if (global_alert_playback.active) {
-                                printf("[ALERT] Interrupting current alert to play new %.1f-second tone at %.1f Hz\n", 
-                                       alert_duration / 1000.0f, tone_b_freq);
-                            } else {
-                                printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz\n", 
-                                       alert_duration / 1000.0f, tone_b_freq);
-                            }
-                            play_alert_tone_locally(target_channel_idx, tone_b_freq, tone_b_freq, alert_duration, 0);
-                        }
-                        
+                        // Tone B frequency matches - but don't start passthrough yet
+                        // Passthrough will only start after tone is CONFIRMED (meets duration requirement)
+                        // Confirmation happens in detect_tone_sequence() which calls trigger_tone_passthrough()
+                        // This function just detects the frequency match, confirmation is done elsewhere
                         free(tone_b_segment);
-                        return 1; // Tone detected
+                        return 1; // Tone frequency detected (but not confirmed yet)
                     }
                     free(tone_b_segment);
                 }
