@@ -474,10 +474,22 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             }
         }
         
+        // Track alert state to log only once when it starts
+        static int was_playing_alert = 0;
+        
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
-            printf("[ALERT PLAYBACK] Playing alert tone directly on passthrough target - %d samples\n", alert_samples);
+            // Only log once when alert starts playing (not every callback)
+            if (!was_playing_alert) {
+                printf("[ALERT PLAYBACK] Playing alert tone on passthrough target (channel: %s)\n", audio_stream->channel_id);
+                was_playing_alert = 1;
+            }
             // Alert is playing directly - replaces silence
+        } else {
+            // Alert finished, reset flag for next time
+            if (was_playing_alert) {
+                was_playing_alert = 0;
+            }
         }
     } else {
         // No alert playing - output should be silence (already set above)
@@ -553,14 +565,23 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
     }
     
     if (should_play_alert_on_channel(current_channel_index)) {
-        printf("[DEBUG] Alert should play on channel %s (index %d), calling get_alert_audio_samples\n", audio_stream->channel_id, current_channel_index);
+        // Track alert state to log only once when it starts
+        static int was_playing_alert_2 = 0;
+        
         int alert_samples = get_alert_audio_samples(out, frames);
         if (alert_samples > 0) {
-            printf("[ALERT PLAYBACK] Playing alert tone directly on target channel - %d samples\n", alert_samples);
+            // Only log once when alert starts playing (not every callback)
+            if (!was_playing_alert_2) {
+                printf("[ALERT PLAYBACK] Playing alert tone on channel %s (index %d)\n", audio_stream->channel_id, current_channel_index);
+                was_playing_alert_2 = 1;
+            }
             // Alert is playing directly - no need to mix with EchoStream
             // The alert audio has already been written to the output buffer
         } else {
-            printf("[DEBUG] Alert playing but no samples returned - frames=%lu\n", frames);
+            // Alert finished, reset flag for next time
+            if (was_playing_alert_2) {
+                was_playing_alert_2 = 0;
+            }
         }
     } else {
         // Debug: Log when alert is not playing - but only for the target channel
