@@ -141,7 +141,11 @@ void print_tone_detection_stats(void);
 void reset_tone_detection_stats(void);
 
 // Tone passthrough integration
-void trigger_tone_passthrough(void);
+// Only trigger for known tones (not new/unknown tones)
+void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def);
+
+// Stop alert playback
+void stop_alert_playback(void);
 
 // Audio filtering and duration detection functions
 int apply_audio_frequency_filters(float* audio_samples, int sample_count);

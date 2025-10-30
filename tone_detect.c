@@ -423,8 +423,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                             printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
                         }
                         
-                        // Trigger tone passthrough/alert playback if configured
-                        trigger_tone_passthrough();
+                        // Trigger tone passthrough/alert playback if configured (only for known tones)
+                        trigger_tone_passthrough(tone_def);
                     }
                 }
             } else {
@@ -502,8 +502,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         start_recording_timer(tone_def->record_length_ms);
                         printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
                         
-                        // Trigger tone passthrough if configured
-                        trigger_tone_passthrough();
+                        // Trigger tone passthrough if configured (only for known tones)
+                        trigger_tone_passthrough(tone_def);
                         
                         global_tone_detection.total_detections++;
                     }
@@ -1122,6 +1122,14 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
         return 0; // No alert playing
     }
     
+    // Stop alert if recording has expired (recording_active = 0 means timer expired)
+    extern int is_recording_active(void);
+    if (!is_recording_active()) {
+        // Recording expired, stop alert playback
+        stop_alert_playback();
+        return 0;
+    }
+    
     // Only log occasionally to reduce spam
     static int sample_log_counter = 0;
     if (++sample_log_counter % 50 == 0) {
@@ -1173,9 +1181,8 @@ int get_alert_audio_samples(float* output_buffer, int max_samples) {
     // Check if alert is finished
     if (global_alert_playback.samples_played >= global_alert_playback.total_samples) {
         printf("\n✅ [ALERT COMPLETE] Alert sequence finished playing\n");
-        global_alert_playback.active = 0;
-        free(global_alert_playback.alert_buffer);
-        global_alert_playback.alert_buffer = NULL;
+        stop_alert_playback();
+        return samples_to_copy; // Return what we already copied
     }
     
     return samples_to_copy;
@@ -1192,7 +1199,28 @@ int should_play_alert_on_channel(int channel_index) {
 }
 
 // Trigger tone passthrough when tones are detected
-void trigger_tone_passthrough(void) {
+// Stop alert playback
+void stop_alert_playback(void) {
+    if (global_alert_playback.active) {
+        printf("[ALERT PLAYBACK] Stopping alert playback\n");
+        if (global_alert_playback.alert_buffer) {
+            free(global_alert_playback.alert_buffer);
+            global_alert_playback.alert_buffer = NULL;
+        }
+        global_alert_playback.active = 0;
+        global_alert_playback.samples_played = 0;
+        global_alert_playback.total_samples = 0;
+    }
+}
+
+void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
+    // Only trigger passthrough for known tones (confirmed_tone_def should be non-NULL)
+    if (!confirmed_tone_def || !confirmed_tone_def->valid) {
+        // This is a new/unknown tone - don't trigger passthrough, only MQTT/recording
+        printf("[TONE PASSTHROUGH] Skipping passthrough - unknown/new tone detected (MQTT and recording handled separately)\n");
+        return;
+    }
+    
     // Find which channel has tone detection enabled and get its config
     struct tone_detect_config* tone_config = NULL;
     int source_channel_idx = -1;
@@ -1217,34 +1245,24 @@ void trigger_tone_passthrough(void) {
         return;
     }
     
-    printf("[TONE PASSTHROUGH] Source channel %d detected tone, target: %s\n", 
-           source_channel_idx + 1, tone_config->passthrough_channel);
+    printf("[TONE PASSTHROUGH] Source channel %d detected known tone (ID: %s), target: %s\n", 
+           source_channel_idx + 1, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
     
     // Check if the target channel has a working output stream
     int target_channel_idx = get_passthrough_target_channel_index();
     printf("[DEBUG] Target channel index: %d\n", target_channel_idx);
     if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS) {
         if (channel_has_output_stream(target_channel_idx)) {
-            printf("[TONE PASSTHROUGH] Tone detected, playing alert locally on channel %d\n", 
+            printf("[TONE PASSTHROUGH] Known tone detected, playing alert locally on channel %d\n", 
                    target_channel_idx + 1);
             
-            // Play alert tone with duration from config.json record_length
-            // Find the tone definition that was detected
-            float tone_a_freq = 1000.0f; // Default frequency
-            float tone_b_freq = 1000.0f; // Default frequency
-            float alert_duration = 20000.0f; // Default 20 seconds
+            // Use the confirmed tone definition's frequencies and record_length
+            float tone_a_freq = confirmed_tone_def->tone_a_freq;
+            float tone_b_freq = confirmed_tone_def->tone_b_freq;
+            float alert_duration = (float)confirmed_tone_def->record_length_ms;
             
-            for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
-                if (global_tone_detection.tone_definitions[i].valid) {
-                    // Use the detected Tone A frequency and record_length from config
-                    tone_a_freq = global_tone_detection.tone_definitions[i].tone_a_freq;
-                    tone_b_freq = global_tone_detection.tone_definitions[i].tone_b_freq;
-                    alert_duration = (float)global_tone_detection.tone_definitions[i].record_length_ms;
-                    printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz (record_length from config)\n",
-                           alert_duration / 1000.0f, tone_a_freq);
-                    break;
-                }
-            }
+            printf("[ALERT] Playing %.1f-second alert tone at %.1f Hz (record_length from config)\n",
+                   alert_duration / 1000.0f, tone_a_freq);
             
             // Play alert tone with duration from config.json
             play_alert_tone_locally(target_channel_idx, tone_a_freq, tone_b_freq, alert_duration, 0);
