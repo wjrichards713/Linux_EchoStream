@@ -318,11 +318,29 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     (void)audio_samples; // Suppress unused parameter warning
     (void)sample_count;  // Suppress unused parameter warning
     
+    // CRITICAL: Check volume level BEFORE processing - don't detect tones if there's no actual audio input
+    float volume = calculate_volume_level();
+    static int had_valid_audio = 0;
+    
+    if (volume < global_tone_detection.config.db_threshold) {
+        // Volume below threshold - no valid audio input, don't process tones
+        if (had_valid_audio) {
+            // Audio was present before but now it's gone - reset tracking
+            printf("[TONE] Audio input lost (volume: %.1f dB < threshold: %d dB) - resetting tone tracking\n", 
+                   volume, global_tone_detection.config.db_threshold);
+            reset_tone_tracking();
+            had_valid_audio = 0;
+        }
+        return 0;
+    }
+    
+    had_valid_audio = 1; // Mark that we have valid audio
+    
     // Debug: Show when tone detection is called
     static int detect_count = 0;
     if (detect_count++ % 500 == 0) {
-        NOISY_LOG("[DEBUG] detect_tone_sequence() called - peak_count=%d\n", 
-               global_tone_detection.peak_count);
+        NOISY_LOG("[DEBUG] detect_tone_sequence() called - peak_count=%d, volume=%.1f dB\n", 
+               global_tone_detection.peak_count, volume);
     }
     
     // Use milliseconds since program start to avoid overflow
@@ -1451,18 +1469,19 @@ int process_audio_python_approach(const float* samples, int sample_count) {
         return 0;
     }
     
-    // Calculate volume level
+    // CRITICAL: Check volume level - don't process tones if there's no actual audio input
     float volume = calculate_volume_level();
-    
-    // Only process if volume is above threshold
-    if (volume < global_tone_detection.config.db_threshold) {
-        return 0;
-    }
     
     // Only log volume occasionally to reduce spam
     static int volume_log_counter = 0;
     if (++volume_log_counter % 100 == 0) {
         printf("[TONE] Volume level: %.1f dB (threshold: %d dB)\n", volume, global_tone_detection.config.db_threshold);
+    }
+    
+    // Only process if volume is above threshold - CRITICAL check to prevent false detections
+    if (volume < global_tone_detection.config.db_threshold) {
+        // Volume below threshold - no valid audio input, don't process tones
+        return 0;
     }
     
     // Process each tone definition
