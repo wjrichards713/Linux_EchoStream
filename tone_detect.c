@@ -1524,8 +1524,8 @@ int process_audio_python_approach(const float* samples, int sample_count) {
                 start_recording_timer(tone_def->record_length_ms);
             }
             
-            // Trigger tone passthrough if configured
-            trigger_tone_passthrough();
+            // Trigger tone passthrough if configured (only for known tones)
+            trigger_tone_passthrough(tone_def);
             
             free(tone_a_segment);
             free(tone_b_segment);
