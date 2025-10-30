@@ -540,14 +540,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
     // Check for single tone detection for passthrough
     detect_single_tone_for_passthrough(audio_samples, sample_count);
     
-    // Check if recording should stop
-    if (global_tone_detection.recording_active) {
-        int elapsed = current_time - global_tone_detection.recording_start_time;
-        if (elapsed >= global_tone_detection.recording_duration_ms) {
-            global_tone_detection.recording_active = 0;
-            printf("[TONE] Recording stopped - %d ms elapsed\n", elapsed);
-        }
-    }
+    // Recording timer expiration is now checked in is_recording_active() with proper mutex protection
+    // This old check is no longer needed - using the centralized function instead
     
     // Reset sequence if tones are too old
     if (global_tone_detection.tone_sequence_active) {
@@ -1701,9 +1695,36 @@ void stop_recording_timer(void) {
 
 int is_recording_active(void) {
     pthread_mutex_lock(&global_tone_detection.mutex);
-    int active = global_tone_detection.recording_active;
+    
+    if (!global_tone_detection.recording_active) {
+        pthread_mutex_unlock(&global_tone_detection.mutex);
+        return 0;
+    }
+    
+    // Check if timer has expired
+    int current_time = get_current_time_ms();
+    int elapsed = current_time - global_tone_detection.recording_start_time;
+    
+    // If elapsed time is negative or way too large, something is wrong - reset
+    if (elapsed < 0 || elapsed > 1000000) { // > 1000 seconds = something wrong
+        printf("[RECORDING] Invalid elapsed time: %d ms (start_time=%d, current_time=%d) - resetting\n",
+               elapsed, global_tone_detection.recording_start_time, current_time);
+        global_tone_detection.recording_active = 0;
+        pthread_mutex_unlock(&global_tone_detection.mutex);
+        return 0;
+    }
+    
+    // Check if timer has expired
+    if (elapsed >= global_tone_detection.recording_duration_ms) {
+        printf("[RECORDING] Timer expired: %d ms elapsed >= %d ms duration\n",
+               elapsed, global_tone_detection.recording_duration_ms);
+        global_tone_detection.recording_active = 0;
+        pthread_mutex_unlock(&global_tone_detection.mutex);
+        return 0;
+    }
+    
     pthread_mutex_unlock(&global_tone_detection.mutex);
-    return active;
+    return 1;
 }
 
 int get_recording_time_remaining_ms(void) {
