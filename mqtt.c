@@ -516,3 +516,64 @@ int publish_new_tone_detection(float frequency, int duration_ms, int range_hz) {
 #endif
 }
 
+#ifdef HAVE_MOSQUITTO
+// Publish a new unknown tone pair (A and B) in one message (no duration/range)
+int publish_new_tone_pair(float tone_a_hz, float tone_b_hz) {
+    if (!global_mqtt.initialized || !global_mqtt.mosq) {
+        // Try to initialize if we have device_id
+        char device_id[64];
+        if (get_device_id_from_config(device_id, sizeof(device_id))) {
+            const char* broker = "a1d6e0zlehb0v9-ats.iot.us-west-2.amazonaws.com";
+            int port = 8883;
+            printf("[MQTT] Attempting to connect to AWS IoT Core: %s:%d\n", broker, port);
+            if (!init_mqtt(device_id, broker, port)) {
+                printf("[MQTT] Failed to initialize MQTT connection - tone pair logged but not published\n");
+                return 0;
+            }
+        } else {
+            printf("[MQTT] Cannot publish: MQTT not initialized and device_id not available\n");
+            return 0;
+        }
+    }
+
+    // Generate message id and timestamp
+    char message_id[64];
+    generate_uuid(message_id, sizeof(message_id));
+    time_t now_time = time(NULL);
+
+    // Build JSON payload
+    struct json_object *json = json_object_new_object();
+    json_object_object_add(json, "message_id", json_object_new_string(message_id));
+    json_object_object_add(json, "timestamp", json_object_new_int((int)now_time ));
+    json_object_object_add(json, "device_id", json_object_new_string(global_mqtt.device_id));
+    json_object_object_add(json, "event_type", json_object_new_string("new_tone_detected"));
+
+    struct json_object *tone_details = json_object_new_object();
+    json_object_object_add(tone_details, "tone_a", json_object_new_double((double)tone_a_hz));
+    json_object_object_add(tone_details, "tone_b", json_object_new_double((double)tone_b_hz));
+    json_object_object_add(json, "tone_details", tone_details);
+
+    const char* json_string = json_object_to_json_string_ext(json, JSON_C_TO_STRING_PLAIN);
+
+    char topic[256];
+    snprintf(topic, sizeof(topic), "from/device/%s/tone_detection", global_mqtt.device_id);
+
+    int result = mqtt_publish(topic, json_string);
+    if (result) {
+        printf("[MQTT] ✓ Published new tone pair to '%s': A=%.1f Hz, B=%.1f Hz\n", topic, tone_a_hz, tone_b_hz);
+        printf("[MQTT]   Message payload: %s\n", json_string);
+    } else {
+        printf("[MQTT] ✗ Failed to publish new tone pair to '%s'\n", topic);
+    }
+
+    json_object_put(json);
+    return result;
+}
+#else
+int publish_new_tone_pair(float tone_a_hz, float tone_b_hz) {
+    (void)tone_a_hz; (void)tone_b_hz;
+    printf("[MQTT] MQTT support not compiled (libmosquitto not available)\n");
+    return 0;
+}
+#endif
+

@@ -855,34 +855,47 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                         // If this is the last peak, evaluate whether to publish
                         if (i == global_tone_detection.peak_count - 1) {
                             if (confirmed_count >= 2) {
-                                // Publish each confirmed tone and finalize tracking
-                                extern int publish_new_tone_detection(float frequency, int duration_ms, int range_hz);
-                                for (int c = 0; c < confirmed_count; c++) {
-                                    float cf = confirmed_freqs[c];
-                                    int cidx = confirmed_indices[c];
-                                    printf("[NEW TONE] Detected unknown frequency: %.1f Hz (duration: %d ms, range: ±%d Hz)\n",
-                                           cf,
-                                           global_tone_detection.config.new_tone_length_ms,
-                                           global_tone_detection.config.new_tone_range_hz);
+                                // Choose the first two confirmed as A and B (ordered by their tracking_start)
+                                int idx_a = confirmed_indices[0];
+                                int idx_b = confirmed_indices[1];
+                                float tone_a = confirmed_freqs[0];
+                                float tone_b = confirmed_freqs[1];
 
-                                    // Add to confirmed list
-                                    if (global_tone_detection.detected_frequency_count < 100) {
-                                        global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count] = cf;
-                                        global_tone_detection.detected_frequency_count++;
-                                    }
-                                    global_tone_detection.new_tone_detections++;
-
-                                    // Publish
-                                    publish_new_tone_detection(cf,
-                                                              global_tone_detection.config.new_tone_length_ms,
-                                                              global_tone_detection.config.new_tone_range_hz);
-
-                                    // Reset tracking for this slot
-                                    global_tone_detection.new_tone_tracking[cidx].is_tracking = 0;
-                                    global_tone_detection.new_tone_tracking[cidx].tracking_start = 0;
-                                    global_tone_detection.new_tone_tracking[cidx].hit_streak = 0;
-                                    global_tone_detection.new_tone_tracking[cidx].miss_streak = 0;
+                                // Ensure ordering by earliest tracking start (A then B)
+                                if (global_tone_detection.new_tone_tracking[idx_b].tracking_start <
+                                    global_tone_detection.new_tone_tracking[idx_a].tracking_start) {
+                                    // swap
+                                    int tmpi = idx_a; idx_a = idx_b; idx_b = tmpi;
+                                    float tmpf = tone_a; tone_a = tone_b; tone_b = tmpf;
                                 }
+
+                                printf("[NEW TONE PAIR] A=%.1f Hz, B=%.1f Hz (each ≥ %d ms, ±%d Hz stable)\n",
+                                       tone_a, tone_b,
+                                       global_tone_detection.config.new_tone_length_ms,
+                                       global_tone_detection.config.new_tone_range_hz);
+
+                                // Add both to confirmed list
+                                if (global_tone_detection.detected_frequency_count < 100) {
+                                    global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count++] = tone_a;
+                                }
+                                if (global_tone_detection.detected_frequency_count < 100) {
+                                    global_tone_detection.detected_frequencies[global_tone_detection.detected_frequency_count++] = tone_b;
+                                }
+                                global_tone_detection.new_tone_detections += 2;
+
+                                // Publish single MQTT message with the pair
+                                extern int publish_new_tone_pair(float tone_a_hz, float tone_b_hz);
+                                publish_new_tone_pair(tone_a, tone_b);
+
+                                // Reset tracking for used slots
+                                global_tone_detection.new_tone_tracking[idx_a].is_tracking = 0;
+                                global_tone_detection.new_tone_tracking[idx_a].tracking_start = 0;
+                                global_tone_detection.new_tone_tracking[idx_a].hit_streak = 0;
+                                global_tone_detection.new_tone_tracking[idx_a].miss_streak = 0;
+                                global_tone_detection.new_tone_tracking[idx_b].is_tracking = 0;
+                                global_tone_detection.new_tone_tracking[idx_b].tracking_start = 0;
+                                global_tone_detection.new_tone_tracking[idx_b].hit_streak = 0;
+                                global_tone_detection.new_tone_tracking[idx_b].miss_streak = 0;
                             } else {
                                 // Fewer than 2 confirmed in this window: do not publish; continue tracking
                             }
