@@ -449,7 +449,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         }
                         
                         // Trigger tone passthrough/alert playback if configured (only for known tones)
-                        trigger_tone_passthrough(tone_def);
+                        // Pass tone_type = 0 for Tone A
+                        trigger_tone_passthrough(tone_def, 0);
                     }
                 }
             } else {
@@ -528,7 +529,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
                         
                         // Trigger tone passthrough if configured (only for known tones)
-                        trigger_tone_passthrough(tone_def);
+                        // Pass tone_type = 1 for Tone B
+                        trigger_tone_passthrough(tone_def, 1);
                         
                         global_tone_detection.total_detections++;
                     }
@@ -994,7 +996,41 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                                 // Publish single MQTT message with the pair
                                 extern int publish_new_tone_pair(float tone_a_hz, float tone_b_hz);
                                 publish_new_tone_pair(tone_a, tone_b);
-
+                                
+                                // Trigger passthrough tone generation for new tones (generate only Tone A)
+                                // Check if passthrough is enabled
+                                struct tone_detect_config* tone_config = NULL;
+                                for (int j = 0; j < MAX_CHANNELS; j++) {
+                                    struct channel_config* channel_config = get_channel_config(j);
+                                    if (channel_config && channel_config->valid && channel_config->tone_detect) {
+                                        tone_config = &channel_config->tone_config;
+                                        break;
+                                    }
+                                }
+                                
+                                if (tone_config && tone_config->tone_passthrough) {
+                                    // Use default record_length for new tones (20 seconds / 20000 ms)
+                                    // Or use the first tone definition's record_length if available
+                                    int record_length_ms = 20000; // Default 20 seconds
+                                    for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
+                                        struct tone_definition* def = &global_tone_detection.tone_definitions[j];
+                                        if (def->valid && def->record_length_ms > 0) {
+                                            record_length_ms = def->record_length_ms;
+                                            break; // Use first valid record_length found
+                                        }
+                                    }
+                                    
+                                    // Start recording timer for new tone passthrough
+                                    start_recording_timer(record_length_ms);
+                                    
+                                    // Trigger passthrough to generate and play Tone A
+                                    extern void trigger_new_tone_passthrough(float tone_freq, int record_length_ms);
+                                    trigger_new_tone_passthrough(tone_a, record_length_ms);
+                                    
+                                    printf("[NEW TONE PASSTHROUGH] Generating tone %.1f Hz on passthrough target for %d ms\n",
+                                           tone_a, record_length_ms);
+                                }
+                                
                                 // Reset tracking for used slots
                                 global_tone_detection.new_tone_tracking[idx_a].is_tracking = 0;
                                 global_tone_detection.new_tone_tracking[idx_a].tracking_start = 0;
@@ -1124,16 +1160,15 @@ static struct {
     char playing_tone_id[64]; // Track which tone_id is currently playing to prevent restarting same tone
 } global_alert_playback = {0};
 
-// Global passthrough tone generator state (generates pure tones at detected frequencies)
+// Global passthrough tone generator state (generates pure tone at detected frequency)
 static struct {
     int active;
-    float tone_a_freq;
-    float tone_b_freq;
+    float detected_freq;  // Frequency of the SINGLE detected tone (either Tone A or Tone B, not both)
+    int is_tone_b;        // 1 if this is Tone B, 0 if Tone A
     int sample_rate;
     int samples_played;  // Total samples generated so far
     int total_samples;   // Total samples needed for record_length duration
-    float phase_a;       // Current phase for Tone A (for continuous generation)
-    float phase_b;       // Current phase for Tone B (for continuous generation)
+    float phase;         // Current phase for tone generation (for continuous generation)
 } global_passthrough_tone = {0};
 
 // Play detected Tone A and Tone B sequence through target channel output
@@ -1335,13 +1370,18 @@ void stop_alert_playback(void) {
     }
 }
 
-void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
+void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int tone_type) {
     // Only trigger passthrough for known tones (confirmed_tone_def should be non-NULL)
+    // tone_type: 0 = Tone A detected, 1 = Tone B detected
     if (!confirmed_tone_def || !confirmed_tone_def->valid) {
         // This is a new/unknown tone - don't trigger passthrough, only MQTT/recording
         printf("[TONE PASSTHROUGH] Skipping passthrough - unknown/new tone detected (MQTT and recording handled separately)\n");
         return;
     }
+    
+    // Get the frequency of the SINGLE detected tone (not both)
+    float detected_freq = (tone_type == 0) ? confirmed_tone_def->tone_a_freq : confirmed_tone_def->tone_b_freq;
+    const char* tone_name = (tone_type == 0) ? "Tone A" : "Tone B";
     
     // Find which channel has tone detection enabled and get its config
     struct tone_detect_config* tone_config = NULL;
@@ -1367,13 +1407,13 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
         return;
     }
     
-    printf("[TONE PASSTHROUGH] Source channel %d detected known tone (ID: %s), target: %s\n", 
-           source_channel_idx + 1, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
+    printf("[TONE PASSTHROUGH] Source channel %d detected known %s: %.1f Hz (ID: %s), target: %s\n", 
+           source_channel_idx + 1, tone_name, detected_freq, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
     
-    // Store detected tone frequencies for passthrough filtering
-    // This tells the passthrough filter to only pass through these specific frequencies
+    // Store detected tone frequency for passthrough (deprecated - using single tone now)
     pthread_mutex_lock(&global_tone_detection.mutex);
     global_tone_detection.passthrough_active = 1;
+    // Keep old fields for backward compatibility (not used anymore)
     global_tone_detection.passthrough_tone_a_freq = confirmed_tone_def->tone_a_freq;
     global_tone_detection.passthrough_tone_a_range = confirmed_tone_def->tone_a_range_hz;
     global_tone_detection.passthrough_tone_b_freq = confirmed_tone_def->tone_b_freq;
@@ -1393,27 +1433,27 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
         }
     }
     
-    // If passthrough is already active, update frequencies (may have changed on new detection)
+    // If passthrough is already active, update frequency (may have changed on new detection)
     // But don't reset phase - continue from where we are (seamless transition)
     if (global_passthrough_tone.active) {
-        printf("[TONE PASSTHROUGH] Updating tone frequencies: A=%.1f Hz, B=%.1f Hz (continuing playback)\n",
-               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
-        global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
-        global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
+        printf("[TONE PASSTHROUGH] Overlapping detection - updating tone frequency: %s=%.1f Hz (continuing playback)\n",
+               tone_name, detected_freq);
+        printf("[TONE PASSTHROUGH] Recording timer extended, tone generation will continue\n");
+        global_passthrough_tone.detected_freq = detected_freq;
+        global_passthrough_tone.is_tone_b = tone_type;
         // Note: recording timer handles duration extension automatically
     } else {
         // Initialize passthrough tone generator state (new passthrough)
         global_passthrough_tone.active = 1;
-        global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
-        global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
+        global_passthrough_tone.detected_freq = detected_freq;
+        global_passthrough_tone.is_tone_b = tone_type;
         global_passthrough_tone.sample_rate = (int)actual_sample_rate;
         global_passthrough_tone.samples_played = 0;
         global_passthrough_tone.total_samples = 0; // Not used - recording timer controls duration
-        global_passthrough_tone.phase_a = 0.0f;
-        global_passthrough_tone.phase_b = 0.0f;
+        global_passthrough_tone.phase = 0.0f;
         
-        printf("[TONE PASSTHROUGH] Passthrough enabled - will generate pure tones: A=%.1f Hz, B=%.1f Hz\n",
-               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
+        printf("[TONE PASSTHROUGH] Passthrough enabled - will generate pure tone: %s=%.1f Hz\n",
+               tone_name, detected_freq);
         printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length, controlled by recording timer)\n",
                confirmed_tone_def->record_length_ms);
     }
@@ -1429,6 +1469,13 @@ int get_passthrough_tone_samples(float* output_buffer, int max_samples, int samp
     extern int is_recording_active(void);
     if (!is_recording_active()) {
         // Recording timer expired (no new detections) - stop passthrough tone generation
+        if (global_passthrough_tone.active) {
+            const char* tone_name = global_passthrough_tone.is_tone_b ? "Tone B" : "Tone A";
+            printf("[PASSTHROUGH] Recording timer expired - stopping tone generation (%s=%.1f Hz, played for %d samples, ~%.1f seconds)\n",
+                   tone_name, global_passthrough_tone.detected_freq,
+                   global_passthrough_tone.samples_played,
+                   (float)global_passthrough_tone.samples_played / (float)global_passthrough_tone.sample_rate);
+        }
         global_passthrough_tone.active = 0;
         global_passthrough_tone.samples_played = 0;
         return 0;
@@ -1438,35 +1485,92 @@ int get_passthrough_tone_samples(float* output_buffer, int max_samples, int samp
     // The recording timer controls the actual duration, not a fixed sample count
     int samples_to_generate = max_samples;
     
-    // Generate pure tones: combine Tone A and Tone B (both play simultaneously)
-    float tone_a_increment = 2.0f * M_PI * global_passthrough_tone.tone_a_freq / (float)global_passthrough_tone.sample_rate;
-    float tone_b_increment = 2.0f * M_PI * global_passthrough_tone.tone_b_freq / (float)global_passthrough_tone.sample_rate;
+    // Generate pure tone: only the SINGLE detected tone (Tone A OR Tone B, not both)
+    float tone_increment = 2.0f * M_PI * global_passthrough_tone.detected_freq / (float)global_passthrough_tone.sample_rate;
     
     for (int i = 0; i < samples_to_generate; i++) {
-        // Generate Tone A
-        float sample_a = sin(global_passthrough_tone.phase_a);
-        global_passthrough_tone.phase_a += tone_a_increment;
-        if (global_passthrough_tone.phase_a > 2.0f * M_PI) {
-            global_passthrough_tone.phase_a -= 2.0f * M_PI;
+        // Generate single tone at detected frequency
+        output_buffer[i] = sin(global_passthrough_tone.phase);
+        global_passthrough_tone.phase += tone_increment;
+        if (global_passthrough_tone.phase > 2.0f * M_PI) {
+            global_passthrough_tone.phase -= 2.0f * M_PI;
         }
-        
-        // Generate Tone B (if frequency > 0)
-        float sample_b = 0.0f;
-        if (global_passthrough_tone.tone_b_freq > 0.0f) {
-            sample_b = sin(global_passthrough_tone.phase_b);
-            global_passthrough_tone.phase_b += tone_b_increment;
-            if (global_passthrough_tone.phase_b > 2.0f * M_PI) {
-                global_passthrough_tone.phase_b -= 2.0f * M_PI;
-            }
-        }
-        
-        // Mix both tones (normalize to prevent clipping)
-        output_buffer[i] = (sample_a + sample_b) * 0.5f;
     }
     
     global_passthrough_tone.samples_played += samples_to_generate;
     
     return samples_to_generate;
+}
+
+// Trigger passthrough for new/unknown tones (not in config)
+void trigger_new_tone_passthrough(float tone_freq, int record_length_ms) {
+    // Find which channel has tone detection enabled and get its config
+    struct tone_detect_config* tone_config = NULL;
+    int source_channel_idx = -1;
+    
+    // Search through all channels to find the one with tone detection enabled
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        struct channel_config* channel_config = get_channel_config(i);
+        if (channel_config && channel_config->valid && channel_config->tone_detect) {
+            tone_config = &channel_config->tone_config;
+            source_channel_idx = i;
+            break;
+        }
+    }
+    
+    if (!tone_config) {
+        printf("[NEW TONE PASSTHROUGH] No tone config found for any channel\n");
+        return;
+    }
+    
+    if (!tone_config->tone_passthrough) {
+        printf("[NEW TONE PASSTHROUGH] Tone passthrough not enabled in config\n");
+        return;
+    }
+    
+    printf("[NEW TONE PASSTHROUGH] Source channel %d detected new/unknown tone: %.1f Hz, target: %s\n", 
+           source_channel_idx + 1, tone_freq, tone_config->passthrough_channel);
+    
+    // Store detected tone frequency for passthrough
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    global_tone_detection.passthrough_active = 1;
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+    
+    // Initialize or update passthrough tone generator
+    // Get the actual sample rate from the target channel
+    extern struct channel_context channels[MAX_CHANNELS];
+    double actual_sample_rate = SAMPLE_RATE; // Default fallback
+    int target_channel_idx = get_passthrough_target_channel_index();
+    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS &&
+        channels[target_channel_idx].audio.output_stream) {
+        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[target_channel_idx].audio.output_stream);
+        if (stream_info) {
+            actual_sample_rate = stream_info->sampleRate;
+        }
+    }
+    
+    // If passthrough is already active, update frequency (may have changed on new detection)
+    // But don't reset phase - continue from where we are (seamless transition)
+    if (global_passthrough_tone.active) {
+        printf("[NEW TONE PASSTHROUGH] Overlapping detection - updating tone frequency: %.1f Hz (continuing playback)\n",
+               tone_freq);
+        printf("[NEW TONE PASSTHROUGH] Recording timer extended, tone generation will continue\n");
+        global_passthrough_tone.detected_freq = tone_freq;
+        global_passthrough_tone.is_tone_b = 0; // New tones are treated as Tone A
+        // Note: recording timer handles duration extension automatically
+    } else {
+        // Initialize passthrough tone generator state (new passthrough)
+        global_passthrough_tone.active = 1;
+        global_passthrough_tone.detected_freq = tone_freq;
+        global_passthrough_tone.is_tone_b = 0; // New tones are treated as Tone A
+        global_passthrough_tone.sample_rate = (int)actual_sample_rate;
+        global_passthrough_tone.samples_played = 0;
+        global_passthrough_tone.total_samples = 0; // Not used - recording timer controls duration
+        global_passthrough_tone.phase = 0.0f;
+        
+        printf("[NEW TONE PASSTHROUGH] Passthrough enabled - will generate pure tone: %.1f Hz\n", tone_freq);
+        printf("[NEW TONE PASSTHROUGH] Passthrough duration: %d ms (controlled by recording timer)\n", record_length_ms);
+    }
 }
 
 // Configuration functions

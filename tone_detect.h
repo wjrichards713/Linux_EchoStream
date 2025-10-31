@@ -71,7 +71,7 @@ struct tone_detection_state {
     int tone_a_start_time;
     int tone_b_start_time;
     
-    // Passthrough filtering - store which tone frequencies to pass through
+    // Passthrough filtering - store which tone frequencies to pass through (deprecated - using single tone)
     float passthrough_tone_a_freq;  // Frequency of Tone A to pass through (0 if not active)
     float passthrough_tone_b_freq;  // Frequency of Tone B to pass through (0 if not active)
     int passthrough_tone_a_range;   // Range for Tone A filtering
@@ -149,10 +149,16 @@ void reset_tone_detection_stats(void);
 
 // Tone passthrough integration
 // Only trigger for known tones (not new/unknown tones)
-void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def);
+// tone_type: 0 = Tone A, 1 = Tone B
+void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int tone_type);
 
 // Get passthrough tone audio samples (generates pure tones at detected frequencies)
 int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate);
+
+// Trigger passthrough for new/unknown tones (not in config)
+// tone_freq: Frequency of the detected new tone
+// record_length_ms: Duration to play the tone (use default or config value)
+void trigger_new_tone_passthrough(float tone_freq, int record_length_ms);
 
 // Stop alert playback
 void stop_alert_playback(void);
