@@ -1124,6 +1124,18 @@ static struct {
     char playing_tone_id[64]; // Track which tone_id is currently playing to prevent restarting same tone
 } global_alert_playback = {0};
 
+// Global passthrough tone generator state (generates pure tones at detected frequencies)
+static struct {
+    int active;
+    float tone_a_freq;
+    float tone_b_freq;
+    int sample_rate;
+    int samples_played;  // Total samples generated so far
+    int total_samples;   // Total samples needed for record_length duration
+    float phase_a;       // Current phase for Tone A (for continuous generation)
+    float phase_b;       // Current phase for Tone B (for continuous generation)
+} global_passthrough_tone = {0};
+
 // Play detected Tone A and Tone B sequence through target channel output
 void play_alert_tone_locally(int target_channel_idx, float tone_a_freq, float tone_b_freq, 
                             float tone_a_duration, float tone_b_duration) {
@@ -1368,10 +1380,125 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
     global_tone_detection.passthrough_tone_b_range = confirmed_tone_def->tone_b_range_hz;
     pthread_mutex_unlock(&global_tone_detection.mutex);
     
-    printf("[TONE PASSTHROUGH] Passthrough enabled - will filter audio to only pass tones: A=%.1f±%d Hz, B=%.1f±%d Hz\n",
-           confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_a_range_hz,
-           confirmed_tone_def->tone_b_freq, confirmed_tone_def->tone_b_range_hz);
-    printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (recording timer)\n", confirmed_tone_def->record_length_ms);
+    // Initialize or update passthrough tone generator
+    // Get the actual sample rate from the target channel
+    extern struct channel_context channels[MAX_CHANNELS];
+    double actual_sample_rate = SAMPLE_RATE; // Default fallback
+    int target_channel_idx = get_passthrough_target_channel_index();
+    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS &&
+        channels[target_channel_idx].audio.output_stream) {
+        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[target_channel_idx].audio.output_stream);
+        if (stream_info) {
+            actual_sample_rate = stream_info->sampleRate;
+        }
+    }
+    
+    // Calculate total samples needed for record_length duration
+    int total_samples = (int)((confirmed_tone_def->record_length_ms / 1000.0f) * actual_sample_rate);
+    
+    // If passthrough is already active, update frequencies (may have changed on new detection)
+    // But don't reset samples_played - continue from where we are
+    if (global_passthrough_tone.active) {
+        printf("[TONE PASSTHROUGH] Updating tone frequencies: A=%.1f Hz, B=%.1f Hz (continuing playback)\n",
+               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
+        global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
+        global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
+        // Update total_samples to reflect new duration (if longer)
+        if (total_samples > global_passthrough_tone.total_samples) {
+            global_passthrough_tone.total_samples = total_samples;
+        }
+    } else {
+        // Initialize passthrough tone generator state (new passthrough)
+        global_passthrough_tone.active = 1;
+        global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
+        global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
+        global_passthrough_tone.sample_rate = (int)actual_sample_rate;
+        global_passthrough_tone.samples_played = 0;
+        global_passthrough_tone.total_samples = total_samples;
+        global_passthrough_tone.phase_a = 0.0f;
+        global_passthrough_tone.phase_b = 0.0f;
+        
+        printf("[TONE PASSTHROUGH] Passthrough enabled - will generate pure tones: A=%.1f Hz, B=%.1f Hz\n",
+               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
+        printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length), %d samples at %.1f Hz\n",
+               confirmed_tone_def->record_length_ms, total_samples, actual_sample_rate);
+    }
+}
+
+// Get passthrough tone audio samples (generates pure tones at detected frequencies in real-time)
+int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate) {
+    if (!global_passthrough_tone.active) {
+        return 0; // Passthrough not active
+    }
+    
+    // Check if recording is still active (timer controls duration)
+    extern int is_recording_active(void);
+    if (!is_recording_active()) {
+        // Recording expired, stop passthrough tone generation
+        global_passthrough_tone.active = 0;
+        global_passthrough_tone.samples_played = 0;
+        return 0;
+    }
+    
+    // Calculate how many samples we should generate
+    int samples_to_generate = max_samples;
+    int remaining_samples = global_passthrough_tone.total_samples - global_passthrough_tone.samples_played;
+    
+    if (samples_to_generate > remaining_samples) {
+        samples_to_generate = remaining_samples;
+    }
+    
+    if (samples_to_generate <= 0) {
+        // All samples generated, but recording timer still active - continue generating
+        // This handles the case where recording timer is extended
+        samples_to_generate = max_samples;
+    }
+    
+    // Generate pure tones: combine Tone A and Tone B (both play simultaneously)
+    float tone_a_increment = 2.0f * M_PI * global_passthrough_tone.tone_a_freq / (float)global_passthrough_tone.sample_rate;
+    float tone_b_increment = 2.0f * M_PI * global_passthrough_tone.tone_b_freq / (float)global_passthrough_tone.sample_rate;
+    
+    for (int i = 0; i < samples_to_generate; i++) {
+        // Generate Tone A
+        float sample_a = sin(global_passthrough_tone.phase_a);
+        global_passthrough_tone.phase_a += tone_a_increment;
+        if (global_passthrough_tone.phase_a > 2.0f * M_PI) {
+            global_passthrough_tone.phase_a -= 2.0f * M_PI;
+        }
+        
+        // Generate Tone B (if frequency > 0)
+        float sample_b = 0.0f;
+        if (global_passthrough_tone.tone_b_freq > 0.0f) {
+            sample_b = sin(global_passthrough_tone.phase_b);
+            global_passthrough_tone.phase_b += tone_b_increment;
+            if (global_passthrough_tone.phase_b > 2.0f * M_PI) {
+                global_passthrough_tone.phase_b -= 2.0f * M_PI;
+            }
+        }
+        
+        // Mix both tones (normalize to prevent clipping)
+        output_buffer[i] = (sample_a + sample_b) * 0.5f;
+    }
+    
+    global_passthrough_tone.samples_played += samples_to_generate;
+    
+    // If we've reached the original total_samples, but recording is still active,
+    // continue generating (recording timer was extended by overlapping detection)
+    // Calculate how many more samples we need based on remaining recording time
+    if (global_passthrough_tone.samples_played >= global_passthrough_tone.total_samples && is_recording_active()) {
+        extern int get_recording_time_remaining_ms(void);
+        int remaining_ms = get_recording_time_remaining_ms();
+        if (remaining_ms > 0) {
+            int additional_samples = (int)((remaining_ms / 1000.0f) * global_passthrough_tone.sample_rate);
+            global_passthrough_tone.total_samples = global_passthrough_tone.samples_played + additional_samples;
+        } else {
+            // Recording timer expired, stop generating
+            global_passthrough_tone.active = 0;
+            return 0;
+        }
+    }
+    
+    return samples_to_generate;
 }
 
 // Configuration functions
@@ -1795,6 +1922,9 @@ int is_recording_active(void) {
         global_tone_detection.passthrough_tone_b_freq = 0.0f;
         global_tone_detection.passthrough_tone_a_range = 0;
         global_tone_detection.passthrough_tone_b_range = 0;
+        // Stop passthrough tone generation
+        global_passthrough_tone.active = 0;
+        global_passthrough_tone.samples_played = 0;
         pthread_mutex_unlock(&global_tone_detection.mutex);
         return 0;
     }

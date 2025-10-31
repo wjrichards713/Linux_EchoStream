@@ -458,71 +458,31 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         
         if (recording) {
-            // Recording active - passthrough actual input audio from source channel
-            // BUT: filter to only pass through detected tone frequencies (remove voice and other frequencies)
-            pthread_mutex_lock(&global_shared_buffer.mutex);
+            // Recording active - generate and play pure tones at detected frequencies
+            // Get the actual sample rate from the stream
+            double actual_sample_rate = SAMPLE_RATE;
+            if (audio_stream->output_stream) {
+                const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->output_stream);
+                if (stream_info) {
+                    actual_sample_rate = stream_info->sampleRate;
+                }
+            }
             
             static int passthrough_log_count = 0;
             if (passthrough_log_count++ % 1000 == 0) {
-                printf("[PASSTHROUGH] Routing filtered tone audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
+                printf("[PASSTHROUGH] Generating and playing detected tones on passthrough target (channel: %s)\n", audio_stream->channel_id);
             }
             
-            // Copy audio from shared buffer (contains input from source channel)
-            if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
-                unsigned long samples_to_copy = frames;
-                if (samples_to_copy > (unsigned long)global_shared_buffer.sample_count) {
-                    samples_to_copy = (unsigned long)global_shared_buffer.sample_count;
-                }
-                
-                // Copy input audio samples to temporary buffer for filtering
-                float* temp_buffer = malloc(samples_to_copy * sizeof(float));
-                if (temp_buffer) {
-                    for (unsigned long i = 0; i < samples_to_copy; i++) {
-                        temp_buffer[i] = global_shared_buffer.samples[i];
-                    }
-                    
-                    // Get passthrough filter parameters (which tone frequencies to pass)
-                    extern struct tone_detection_state global_tone_detection;
-                    pthread_mutex_lock(&global_tone_detection.mutex);
-                    int passthrough_active = global_tone_detection.passthrough_active;
-                    float tone_a_freq = global_tone_detection.passthrough_tone_a_freq;
-                    int tone_a_range = global_tone_detection.passthrough_tone_a_range;
-                    float tone_b_freq = global_tone_detection.passthrough_tone_b_freq;
-                    int tone_b_range = global_tone_detection.passthrough_tone_b_range;
-                    pthread_mutex_unlock(&global_tone_detection.mutex);
-                    
-                    // Apply filter to only pass through detected tone frequencies
-                    if (passthrough_active && (tone_a_freq > 0.0f || tone_b_freq > 0.0f)) {
-                        extern int filter_audio_for_passthrough(float* audio_samples, int sample_count,
-                                                               float tone_a_freq, int tone_a_range,
-                                                               float tone_b_freq, int tone_b_range);
-                        filter_audio_for_passthrough(temp_buffer, (int)samples_to_copy, 
-                                                     tone_a_freq, tone_a_range,
-                                                     tone_b_freq, tone_b_range);
-                    }
-                    
-                    // Copy filtered audio to output
-                    for (unsigned long i = 0; i < samples_to_copy; i++) {
-                        out[i] = temp_buffer[i];
-                    }
-                    
-                    free(temp_buffer);
-                } else {
-                    // Fallback: copy unfiltered (shouldn't happen)
-                    for (unsigned long i = 0; i < samples_to_copy; i++) {
-                        out[i] = global_shared_buffer.samples[i];
-                    }
-                }
-                
-                // If we didn't fill the entire buffer, pad with silence
-                for (unsigned long i = samples_to_copy; i < frames; i++) {
+            // Generate pure tones at detected frequencies
+            extern int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate);
+            int samples_generated = get_passthrough_tone_samples(out, (int)frames, (int)actual_sample_rate);
+            
+            // Fill remaining buffer with silence if needed
+            if (samples_generated < (int)frames) {
+                for (unsigned long i = (unsigned long)samples_generated; i < frames; i++) {
                     out[i] = 0.0f;
                 }
-            } else {
-                // No input audio available yet - output silence
             }
-            
-            pthread_mutex_unlock(&global_shared_buffer.mutex);
         } else {
             // No recording active - output silence
             static int silence_count = 0;

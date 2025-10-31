@@ -151,6 +151,9 @@ void reset_tone_detection_stats(void);
 // Only trigger for known tones (not new/unknown tones)
 void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def);
 
+// Get passthrough tone audio samples (generates pure tones at detected frequencies)
+int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate);
+
 // Stop alert playback
 void stop_alert_playback(void);
 
