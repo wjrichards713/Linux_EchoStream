@@ -6,6 +6,7 @@
 #include "udp.h"
 #include "tone_detect.h"
 #include <math.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 // Global audio state
@@ -458,11 +459,12 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         
         if (recording) {
             // Recording active - passthrough actual input audio from source channel
+            // BUT: filter to only pass through detected tone frequencies (remove voice and other frequencies)
             pthread_mutex_lock(&global_shared_buffer.mutex);
             
             static int passthrough_log_count = 0;
             if (passthrough_log_count++ % 1000 == 0) {
-                printf("[PASSTHROUGH] Routing input audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
+                printf("[PASSTHROUGH] Routing filtered tone audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
             }
             
             // Copy audio from shared buffer (contains input from source channel)
@@ -472,17 +474,50 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     samples_to_copy = (unsigned long)global_shared_buffer.sample_count;
                 }
                 
-                // Copy input audio samples to output
-                for (unsigned long i = 0; i < samples_to_copy; i++) {
-                    out[i] = global_shared_buffer.samples[i];
+                // Copy input audio samples to temporary buffer for filtering
+                float* temp_buffer = malloc(samples_to_copy * sizeof(float));
+                if (temp_buffer) {
+                    for (unsigned long i = 0; i < samples_to_copy; i++) {
+                        temp_buffer[i] = global_shared_buffer.samples[i];
+                    }
+                    
+                    // Get passthrough filter parameters (which tone frequencies to pass)
+                    extern struct tone_detection_state global_tone_detection;
+                    pthread_mutex_lock(&global_tone_detection.mutex);
+                    int passthrough_active = global_tone_detection.passthrough_active;
+                    float tone_a_freq = global_tone_detection.passthrough_tone_a_freq;
+                    int tone_a_range = global_tone_detection.passthrough_tone_a_range;
+                    float tone_b_freq = global_tone_detection.passthrough_tone_b_freq;
+                    int tone_b_range = global_tone_detection.passthrough_tone_b_range;
+                    pthread_mutex_unlock(&global_tone_detection.mutex);
+                    
+                    // Apply filter to only pass through detected tone frequencies
+                    if (passthrough_active && (tone_a_freq > 0.0f || tone_b_freq > 0.0f)) {
+                        extern int filter_audio_for_passthrough(float* audio_samples, int sample_count,
+                                                               float tone_a_freq, int tone_a_range,
+                                                               float tone_b_freq, int tone_b_range);
+                        filter_audio_for_passthrough(temp_buffer, (int)samples_to_copy, 
+                                                     tone_a_freq, tone_a_range,
+                                                     tone_b_freq, tone_b_range);
+                    }
+                    
+                    // Copy filtered audio to output
+                    for (unsigned long i = 0; i < samples_to_copy; i++) {
+                        out[i] = temp_buffer[i];
+                    }
+                    
+                    free(temp_buffer);
+                } else {
+                    // Fallback: copy unfiltered (shouldn't happen)
+                    for (unsigned long i = 0; i < samples_to_copy; i++) {
+                        out[i] = global_shared_buffer.samples[i];
+                    }
                 }
                 
                 // If we didn't fill the entire buffer, pad with silence
                 for (unsigned long i = samples_to_copy; i < frames; i++) {
                     out[i] = 0.0f;
                 }
-                
-                // Mark buffer as consumed (don't clear valid flag yet - let next callback handle it)
             } else {
                 // No input audio available yet - output silence
             }

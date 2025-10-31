@@ -71,6 +71,13 @@ struct tone_detection_state {
     int tone_a_start_time;
     int tone_b_start_time;
     
+    // Passthrough filtering - store which tone frequencies to pass through
+    float passthrough_tone_a_freq;  // Frequency of Tone A to pass through (0 if not active)
+    float passthrough_tone_b_freq;  // Frequency of Tone B to pass through (0 if not active)
+    int passthrough_tone_a_range;   // Range for Tone A filtering
+    int passthrough_tone_b_range;   // Range for Tone B filtering
+    int passthrough_active;         // 1 if passthrough filtering is active
+    
     // Duration tracking for proper tone detection
     int tone_a_tracking;          // 1 if currently tracking tone A
     int tone_b_tracking;          // 1 if currently tracking tone B
@@ -149,6 +156,12 @@ void stop_alert_playback(void);
 
 // Audio filtering and duration detection functions
 int apply_audio_frequency_filters(float* audio_samples, int sample_count);
+
+// Filter audio to only pass through detected tone frequencies (for passthrough)
+// Removes all other frequencies including voice, keeping only tone_a_freq ± tone_a_range and tone_b_freq ± tone_b_range
+int filter_audio_for_passthrough(float* audio_samples, int sample_count, 
+                                 float tone_a_freq, int tone_a_range,
+                                 float tone_b_freq, int tone_b_range);
 int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def);
 void reset_tone_tracking(void);
 

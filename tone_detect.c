@@ -98,6 +98,13 @@ int init_tone_detection(void) {
     global_tone_detection.tone_sequence_active = 0;
     global_tone_detection.recording_active = 0;
     
+    // Initialize passthrough filtering state
+    global_tone_detection.passthrough_active = 0;
+    global_tone_detection.passthrough_tone_a_freq = 0.0f;
+    global_tone_detection.passthrough_tone_b_freq = 0.0f;
+    global_tone_detection.passthrough_tone_a_range = 0;
+    global_tone_detection.passthrough_tone_b_range = 0;
+    
     // Initialize duration tracking
     global_tone_detection.tone_a_tracking = 0;
     global_tone_detection.tone_b_tracking = 0;
@@ -728,6 +735,94 @@ int apply_audio_frequency_filters(float* audio_samples, int sample_count) {
     return 1;
 }
 
+// Filter audio to only pass through detected tone frequencies (for passthrough)
+// Removes all other frequencies including voice, keeping only tone frequencies within their ranges
+int filter_audio_for_passthrough(float* audio_samples, int sample_count, 
+                                 float tone_a_freq, int tone_a_range,
+                                 float tone_b_freq, int tone_b_range) {
+    // This function filters audio to ONLY pass through the detected tone frequencies
+    // All other frequencies (voice, noise, etc.) are removed
+    
+    if (sample_count < FFT_SIZE) {
+        return 1; // Not enough samples for FFT filtering
+    }
+    
+    // Create temporary FFT buffers for filtering
+    static double filter_fft_input[FFT_SIZE];
+    static fftw_complex filter_fft_output[FFT_SIZE];
+    static fftw_plan forward_plan = NULL;
+    static fftw_plan inverse_plan = NULL;
+    
+    // Initialize FFT plans if not already done
+    if (!forward_plan) {
+        forward_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, filter_fft_input, filter_fft_output, FFTW_ESTIMATE);
+        inverse_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, filter_fft_output, filter_fft_input, FFTW_ESTIMATE);
+    }
+    
+    if (!forward_plan || !inverse_plan) {
+        return 0; // FFT plan creation failed
+    }
+    
+    // Calculate frequency bin ranges for tones
+    int tone_a_bin = (int)frequency_to_bin(tone_a_freq);
+    int tone_a_range_bins = (int)lroundf(((float)tone_a_range * (float)FFT_SIZE) / (float)SAMPLE_RATE);
+    
+    int tone_b_bin = (int)frequency_to_bin(tone_b_freq);
+    int tone_b_range_bins = (int)lroundf(((float)tone_b_range * (float)FFT_SIZE) / (float)SAMPLE_RATE);
+    
+    // Process audio in FFT_SIZE chunks with overlap-add for smooth filtering
+    int processed_samples = 0;
+    while (processed_samples < sample_count) {
+        int samples_to_process = (processed_samples + FFT_SIZE <= sample_count) ? FFT_SIZE : (sample_count - processed_samples);
+        
+        // Copy audio samples to FFT input buffer
+        for (int i = 0; i < FFT_SIZE; i++) {
+            if (i < samples_to_process) {
+                filter_fft_input[i] = (double)audio_samples[processed_samples + i];
+            } else {
+                filter_fft_input[i] = 0.0; // Zero-pad
+            }
+        }
+        
+        // Apply window function (Hanning window)
+        for (int i = 0; i < FFT_SIZE; i++) {
+            double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
+            filter_fft_input[i] *= window;
+        }
+        
+        // Forward FFT
+        fftw_execute(forward_plan);
+        
+        // Apply passthrough filter: keep ONLY tone frequencies, remove everything else
+        for (int i = 0; i < FREQ_BINS; i++) {
+            // Check if this bin is within Tone A range
+            int in_tone_a_range = (abs(i - tone_a_bin) <= tone_a_range_bins);
+            // Check if this bin is within Tone B range (only if tone_b_freq > 0)
+            int in_tone_b_range = (tone_b_freq > 0.0f && abs(i - tone_b_bin) <= tone_b_range_bins);
+            
+            // Keep this frequency ONLY if it's within one of the tone ranges
+            if (!in_tone_a_range && !in_tone_b_range) {
+                // Remove this frequency - it's not a detected tone
+                filter_fft_output[i][0] = 0.0;
+                filter_fft_output[i][1] = 0.0;
+            }
+            // Otherwise, keep the frequency (it's within a tone range)
+        }
+        
+        // Inverse FFT
+        fftw_execute(inverse_plan);
+        
+        // Copy filtered samples back to audio buffer with normalization
+        for (int i = 0; i < samples_to_process; i++) {
+            audio_samples[processed_samples + i] = (float)(filter_fft_input[i] / FFT_SIZE);
+        }
+        
+        processed_samples += samples_to_process;
+    }
+    
+    return 1;
+}
+
 // Check if a tone has been present for the minimum required duration
 int check_tone_duration(int tone_type, int current_time, struct tone_definition* tone_def) {
     int required_duration = (tone_type == 0) ? tone_def->tone_a_length_ms : tone_def->tone_b_length_ms;
@@ -1263,12 +1358,20 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
     printf("[TONE PASSTHROUGH] Source channel %d detected known tone (ID: %s), target: %s\n", 
            source_channel_idx + 1, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
     
-    // Passthrough routing is handled in audio.c output callback
-    // The recording timer controls the duration - passthrough will route input audio
-    // as long as is_recording_active() returns true
-    // No need to generate alert tones - actual input audio will be routed instead
-    printf("[TONE PASSTHROUGH] Passthrough enabled - input audio will be routed to target channel for %d ms\n",
-           confirmed_tone_def->record_length_ms);
+    // Store detected tone frequencies for passthrough filtering
+    // This tells the passthrough filter to only pass through these specific frequencies
+    pthread_mutex_lock(&global_tone_detection.mutex);
+    global_tone_detection.passthrough_active = 1;
+    global_tone_detection.passthrough_tone_a_freq = confirmed_tone_def->tone_a_freq;
+    global_tone_detection.passthrough_tone_a_range = confirmed_tone_def->tone_a_range_hz;
+    global_tone_detection.passthrough_tone_b_freq = confirmed_tone_def->tone_b_freq;
+    global_tone_detection.passthrough_tone_b_range = confirmed_tone_def->tone_b_range_hz;
+    pthread_mutex_unlock(&global_tone_detection.mutex);
+    
+    printf("[TONE PASSTHROUGH] Passthrough enabled - will filter audio to only pass tones: A=%.1f±%d Hz, B=%.1f±%d Hz\n",
+           confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_a_range_hz,
+           confirmed_tone_def->tone_b_freq, confirmed_tone_def->tone_b_range_hz);
+    printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (recording timer)\n", confirmed_tone_def->record_length_ms);
 }
 
 // Configuration functions
@@ -1650,6 +1753,12 @@ int start_recording_timer(int record_length_ms) {
 void stop_recording_timer(void) {
     pthread_mutex_lock(&global_tone_detection.mutex);
     global_tone_detection.recording_active = 0;
+    // Clear passthrough filter state when recording stops
+    global_tone_detection.passthrough_active = 0;
+    global_tone_detection.passthrough_tone_a_freq = 0.0f;
+    global_tone_detection.passthrough_tone_b_freq = 0.0f;
+    global_tone_detection.passthrough_tone_a_range = 0;
+    global_tone_detection.passthrough_tone_b_range = 0;
     printf("[RECORDING] Timer stopped\n");
     pthread_mutex_unlock(&global_tone_detection.mutex);
 }
@@ -1680,6 +1789,12 @@ int is_recording_active(void) {
         printf("[RECORDING] Timer expired: %d ms elapsed >= %d ms duration\n",
                elapsed, global_tone_detection.recording_duration_ms);
         global_tone_detection.recording_active = 0;
+        // Clear passthrough filter state when recording stops
+        global_tone_detection.passthrough_active = 0;
+        global_tone_detection.passthrough_tone_a_freq = 0.0f;
+        global_tone_detection.passthrough_tone_b_freq = 0.0f;
+        global_tone_detection.passthrough_tone_a_range = 0;
+        global_tone_detection.passthrough_tone_b_range = 0;
         pthread_mutex_unlock(&global_tone_detection.mutex);
         return 0;
     }
