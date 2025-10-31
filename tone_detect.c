@@ -1461,6 +1461,8 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
 
 // Get passthrough tone audio samples (generates pure tones at detected frequencies in real-time)
 int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate) {
+    (void)sample_rate; // Parameter not used - we use global_passthrough_tone.sample_rate instead
+    
     if (!global_passthrough_tone.active) {
         return 0; // Passthrough not active
     }
@@ -1822,7 +1824,8 @@ int process_audio_python_approach(const float* samples, int sample_count) {
             }
             
             // Trigger tone passthrough if configured (only for known tones)
-            trigger_tone_passthrough(tone_def);
+            // Pass tone_type = 0 for Tone A (since both tones detected, generate Tone A)
+            trigger_tone_passthrough(tone_def, 0);
             
             free(tone_a_segment);
             free(tone_b_segment);
