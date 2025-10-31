@@ -1436,9 +1436,14 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
     // If passthrough is already active, update frequency (may have changed on new detection)
     // But don't reset phase - continue from where we are (seamless transition)
     if (global_passthrough_tone.active) {
+        // Get remaining recording time
+        extern int get_recording_time_remaining_ms(void);
+        int remaining_ms = get_recording_time_remaining_ms();
         printf("[TONE PASSTHROUGH] Overlapping detection - updating tone frequency: %s=%.1f Hz (continuing playback)\n",
                tone_name, detected_freq);
         printf("[TONE PASSTHROUGH] Recording timer extended, tone generation will continue\n");
+        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration remaining=%d ms, Tone Type=%s\n",
+               detected_freq, remaining_ms, tone_name);
         global_passthrough_tone.detected_freq = detected_freq;
         global_passthrough_tone.is_tone_b = tone_type;
         // Note: recording timer handles duration extension automatically
@@ -1456,6 +1461,8 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
                tone_name, detected_freq);
         printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length, controlled by recording timer)\n",
                confirmed_tone_def->record_length_ms);
+        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration=%d ms, Tone Type=%s\n",
+               detected_freq, confirmed_tone_def->record_length_ms, tone_name);
     }
 }
 
@@ -1486,6 +1493,25 @@ int get_passthrough_tone_samples(float* output_buffer, int max_samples, int samp
     // Always generate requested samples as long as recording is active
     // The recording timer controls the actual duration, not a fixed sample count
     int samples_to_generate = max_samples;
+    
+    // Debug logging: Show frequency and remaining duration periodically (every ~1 second)
+    static int last_log_time = 0;
+    extern int get_recording_time_remaining_ms(void);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    static struct timespec start_time = {0, 0};
+    if (start_time.tv_sec == 0) {
+        start_time = now;
+    }
+    int current_time = (int)((now.tv_sec - start_time.tv_sec) * 1000 + 
+                            (now.tv_nsec - start_time.tv_nsec) / 1000000);
+    if (current_time - last_log_time > 1000) { // Log every 1 second
+        int remaining_ms = get_recording_time_remaining_ms();
+        const char* tone_name = global_passthrough_tone.is_tone_b ? "Tone B" : (global_passthrough_tone.detected_freq > 0 ? "Tone A" : "New Tone");
+        printf("[DEBUG] Generating tone: Frequency=%.1f Hz, Duration remaining=%d ms, Tone Type=%s, Samples played=%d\n",
+               global_passthrough_tone.detected_freq, remaining_ms, tone_name, global_passthrough_tone.samples_played);
+        last_log_time = current_time;
+    }
     
     // Generate pure tone: only the SINGLE detected tone (Tone A OR Tone B, not both)
     float tone_increment = 2.0f * M_PI * global_passthrough_tone.detected_freq / (float)global_passthrough_tone.sample_rate;
@@ -1554,9 +1580,14 @@ void trigger_new_tone_passthrough(float tone_freq, int record_length_ms) {
     // If passthrough is already active, update frequency (may have changed on new detection)
     // But don't reset phase - continue from where we are (seamless transition)
     if (global_passthrough_tone.active) {
+        // Get remaining recording time
+        extern int get_recording_time_remaining_ms(void);
+        int remaining_ms = get_recording_time_remaining_ms();
         printf("[NEW TONE PASSTHROUGH] Overlapping detection - updating tone frequency: %.1f Hz (continuing playback)\n",
                tone_freq);
         printf("[NEW TONE PASSTHROUGH] Recording timer extended, tone generation will continue\n");
+        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration remaining=%d ms, Tone Type=New Tone\n",
+               tone_freq, remaining_ms);
         global_passthrough_tone.detected_freq = tone_freq;
         global_passthrough_tone.is_tone_b = 0; // New tones are treated as Tone A
         // Note: recording timer handles duration extension automatically
@@ -1572,6 +1603,8 @@ void trigger_new_tone_passthrough(float tone_freq, int record_length_ms) {
         
         printf("[NEW TONE PASSTHROUGH] Passthrough enabled - will generate pure tone: %.1f Hz\n", tone_freq);
         printf("[NEW TONE PASSTHROUGH] Passthrough duration: %d ms (controlled by recording timer)\n", record_length_ms);
+        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration=%d ms, Tone Type=New Tone\n",
+               tone_freq, record_length_ms);
     }
 }
 
