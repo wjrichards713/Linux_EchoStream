@@ -1393,20 +1393,14 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
         }
     }
     
-    // Calculate total samples needed for record_length duration
-    int total_samples = (int)((confirmed_tone_def->record_length_ms / 1000.0f) * actual_sample_rate);
-    
     // If passthrough is already active, update frequencies (may have changed on new detection)
-    // But don't reset samples_played - continue from where we are
+    // But don't reset phase - continue from where we are (seamless transition)
     if (global_passthrough_tone.active) {
         printf("[TONE PASSTHROUGH] Updating tone frequencies: A=%.1f Hz, B=%.1f Hz (continuing playback)\n",
                confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
         global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
         global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
-        // Update total_samples to reflect new duration (if longer)
-        if (total_samples > global_passthrough_tone.total_samples) {
-            global_passthrough_tone.total_samples = total_samples;
-        }
+        // Note: recording timer handles duration extension automatically
     } else {
         // Initialize passthrough tone generator state (new passthrough)
         global_passthrough_tone.active = 1;
@@ -1414,14 +1408,14 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def) {
         global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
         global_passthrough_tone.sample_rate = (int)actual_sample_rate;
         global_passthrough_tone.samples_played = 0;
-        global_passthrough_tone.total_samples = total_samples;
+        global_passthrough_tone.total_samples = 0; // Not used - recording timer controls duration
         global_passthrough_tone.phase_a = 0.0f;
         global_passthrough_tone.phase_b = 0.0f;
         
         printf("[TONE PASSTHROUGH] Passthrough enabled - will generate pure tones: A=%.1f Hz, B=%.1f Hz\n",
                confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq);
-        printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length), %d samples at %.1f Hz\n",
-               confirmed_tone_def->record_length_ms, total_samples, actual_sample_rate);
+        printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length, controlled by recording timer)\n",
+               confirmed_tone_def->record_length_ms);
     }
 }
 
@@ -1431,28 +1425,18 @@ int get_passthrough_tone_samples(float* output_buffer, int max_samples, int samp
         return 0; // Passthrough not active
     }
     
-    // Check if recording is still active (timer controls duration)
+    // Check if recording is still active (timer controls duration - this is the source of truth)
     extern int is_recording_active(void);
     if (!is_recording_active()) {
-        // Recording expired, stop passthrough tone generation
+        // Recording timer expired (no new detections) - stop passthrough tone generation
         global_passthrough_tone.active = 0;
         global_passthrough_tone.samples_played = 0;
         return 0;
     }
     
-    // Calculate how many samples we should generate
+    // Always generate requested samples as long as recording is active
+    // The recording timer controls the actual duration, not a fixed sample count
     int samples_to_generate = max_samples;
-    int remaining_samples = global_passthrough_tone.total_samples - global_passthrough_tone.samples_played;
-    
-    if (samples_to_generate > remaining_samples) {
-        samples_to_generate = remaining_samples;
-    }
-    
-    if (samples_to_generate <= 0) {
-        // All samples generated, but recording timer still active - continue generating
-        // This handles the case where recording timer is extended
-        samples_to_generate = max_samples;
-    }
     
     // Generate pure tones: combine Tone A and Tone B (both play simultaneously)
     float tone_a_increment = 2.0f * M_PI * global_passthrough_tone.tone_a_freq / (float)global_passthrough_tone.sample_rate;
@@ -1481,22 +1465,6 @@ int get_passthrough_tone_samples(float* output_buffer, int max_samples, int samp
     }
     
     global_passthrough_tone.samples_played += samples_to_generate;
-    
-    // If we've reached the original total_samples, but recording is still active,
-    // continue generating (recording timer was extended by overlapping detection)
-    // Calculate how many more samples we need based on remaining recording time
-    if (global_passthrough_tone.samples_played >= global_passthrough_tone.total_samples && is_recording_active()) {
-        extern int get_recording_time_remaining_ms(void);
-        int remaining_ms = get_recording_time_remaining_ms();
-        if (remaining_ms > 0) {
-            int additional_samples = (int)((remaining_ms / 1000.0f) * global_passthrough_tone.sample_rate);
-            global_passthrough_tone.total_samples = global_passthrough_tone.samples_played + additional_samples;
-        } else {
-            // Recording timer expired, stop generating
-            global_passthrough_tone.active = 0;
-            return 0;
-        }
-    }
     
     return samples_to_generate;
 }
