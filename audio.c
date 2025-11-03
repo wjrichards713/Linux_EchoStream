@@ -325,8 +325,9 @@ static int audio_input_callback(const void *input, void *output, unsigned long f
         
         // Debug logging for shared buffer
         static int shared_buffer_count = 0;
-        if (shared_buffer_count++ % 10000 == 0) {
-            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d\n", frames, global_shared_buffer.valid);
+        if (shared_buffer_count++ % 1000 == 0) {
+            printf("[DEBUG] Shared buffer updated: frames=%lu, valid=%d, sample_count=%d\n", 
+                   frames, global_shared_buffer.valid, global_shared_buffer.sample_count);
         }
         
         // Process audio using Python approach (sliding window with FFT on specific time segments)
@@ -473,21 +474,31 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     out[i] = global_shared_buffer.samples[i];
                 }
                 
-                // If we need more samples, fill with silence
-                for (unsigned long i = samples_to_copy; i < frames; i++) {
-                    out[i] = 0.0f;
+                // If we need more samples, repeat the last samples or fill with silence
+                if (samples_to_copy < frames) {
+                    // Repeat last sample or fill with silence
+                    float last_sample = (samples_to_copy > 0) ? global_shared_buffer.samples[samples_to_copy - 1] : 0.0f;
+                    for (unsigned long i = samples_to_copy; i < frames; i++) {
+                        out[i] = last_sample; // Repeat last sample to avoid clicks
+                    }
                 }
                 
-                // Mark buffer as consumed (will be refreshed by input callback)
-                global_shared_buffer.valid = 0;
+                // DON'T mark buffer as invalid - let input callback overwrite it
+                // This ensures continuous audio flow even if input callback is slightly delayed
                 
                 static int passthrough_log_count = 0;
                 if (passthrough_log_count++ % 1000 == 0) {
-                    printf("[PASSTHROUGH] Routing actual input audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
+                    printf("[PASSTHROUGH] Routing actual input audio to passthrough target (channel: %s, samples=%lu, valid=%d)\n", 
+                           audio_stream->channel_id, samples_to_copy, global_shared_buffer.valid);
                 }
             } else {
                 // Buffer not ready yet - output silence for this frame
                 // (input callback will update buffer soon)
+                static int silence_warn_count = 0;
+                if (silence_warn_count++ % 100 == 0) {
+                    printf("[PASSTHROUGH] Buffer not ready - outputting silence (channel: %s, valid=%d, sample_count=%d)\n", 
+                           audio_stream->channel_id, global_shared_buffer.valid, global_shared_buffer.sample_count);
+                }
             }
             
             pthread_mutex_unlock(&global_shared_buffer.mutex);
