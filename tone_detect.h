@@ -21,6 +21,7 @@ struct tone_definition {
     int tone_a_range_hz;      // Frequency range tolerance for tone A
     int tone_b_range_hz;      // Frequency range tolerance for tone B
     int record_length_ms;     // How long to record after detection
+    char detection_tone_alert[256];  // Alert WAV filename (e.g., "alert_001.wav")
     int valid;                // 1 if this definition is valid
 };
 
@@ -125,7 +126,7 @@ void* tone_detection_thread(void* arg);
 int load_tone_config_from_json(const char* filename);
 int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
                        int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
-                       int record_length);
+                       int record_length, const char* detection_tone_alert);
 int add_frequency_filter(const char* filter_id, float frequency, int range, const char* type);
 int set_tone_config(float threshold, float gain, int db_threshold, int detect_new_tones,
                    int new_tone_length, int new_tone_range);

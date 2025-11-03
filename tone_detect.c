@@ -579,6 +579,76 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         if (tone_config && tone_config->tone_passthrough) {
                             // Trigger passthrough routing (will route actual input audio, not generate tones)
                             trigger_tone_passthrough(tone_def, 1);
+                            
+                            // Start alert WAV file playback if detection_tone_alert is set
+                            if (tone_def->detection_tone_alert[0] != '\0') {
+                                extern struct alert_playback_state global_alert_playback;
+                                extern int get_current_time_ms(void);
+                                
+                                // Start alert playback (will be played in passthrough output callback)
+                                pthread_mutex_lock(&global_alert_playback.mutex);
+                                global_alert_playback.last_detect_time_ms = get_current_time_ms();
+                                strncpy(global_alert_playback.current_tone_id, tone_def->tone_id, sizeof(global_alert_playback.current_tone_id) - 1);
+                                
+                                // Build alert file path
+                                snprintf(global_alert_playback.alert_path, sizeof(global_alert_playback.alert_path), 
+                                         "/home/will/.an/alerts/%s", tone_def->detection_tone_alert);
+                                
+                                // Open WAV file
+                                FILE* wav_file = fopen(global_alert_playback.alert_path, "rb");
+                                if (wav_file) {
+                                    // Parse WAV header
+                                    int sample_rate, channels, bits_per_sample, data_offset;
+                                    unsigned char header[44];
+                                    if (fread(header, 1, 44, wav_file) == 44) {
+                                        // Simple WAV header parsing (find fmt and data chunks)
+                                        int offset = 12;
+                                        int found_fmt = 0, found_data = 0;
+                                        while (offset < 44 && !found_data) {
+                                            if (memcmp(header + offset, "fmt ", 4) == 0) {
+                                                int fmt_size = *(int*)(header + offset + 4);
+                                                int audio_format = *(short*)(header + offset + 8);
+                                                channels = *(short*)(header + offset + 10);
+                                                sample_rate = *(int*)(header + offset + 12);
+                                                bits_per_sample = *(short*)(header + offset + 22);
+                                                found_fmt = 1;
+                                                offset += 8 + fmt_size;
+                                            } else if (memcmp(header + offset, "data", 4) == 0) {
+                                                data_offset = offset + 8;
+                                                found_data = 1;
+                                            } else {
+                                                int chunk_size = *(int*)(header + offset + 4);
+                                                offset += 8 + chunk_size;
+                                            }
+                                        }
+                                        
+                                        if (found_fmt && found_data && sample_rate > 0) {
+                                            // Store playback state
+                                            global_alert_playback.wav_file = wav_file;
+                                            global_alert_playback.sample_rate = sample_rate;
+                                            global_alert_playback.channels = channels;
+                                            global_alert_playback.bits_per_sample = bits_per_sample;
+                                            global_alert_playback.data_start_offset = data_offset;
+                                            global_alert_playback.current_position = 0;
+                                            global_alert_playback.is_playing = 1;
+                                            
+                                            printf("[ALERT] Started alert playback: %s (tone_id=%s, sample_rate=%d, channels=%d, bits=%d)\n",
+                                                   tone_def->detection_tone_alert, tone_def->tone_id, sample_rate, channels, bits_per_sample);
+                                        } else {
+                                            fclose(wav_file);
+                                            wav_file = NULL;
+                                            printf("[ALERT] Failed to parse WAV header: %s\n", global_alert_playback.alert_path);
+                                        }
+                                    } else {
+                                        fclose(wav_file);
+                                        wav_file = NULL;
+                                        printf("[ALERT] Failed to read WAV header: %s\n", global_alert_playback.alert_path);
+                                    }
+                                } else {
+                                    printf("[ALERT] Failed to open alert file: %s\n", global_alert_playback.alert_path);
+                                }
+                                pthread_mutex_unlock(&global_alert_playback.mutex);
+                            }
                         } else {
                             printf("[TONE PASSTHROUGH] Passthrough not enabled in config - skipping passthrough\n");
                         }
@@ -1701,7 +1771,7 @@ void trigger_new_tone_passthrough(float tone_freq, int record_length_ms) {
 // Configuration functions
 int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_freq,
                        int tone_a_length, int tone_b_length, int tone_a_range, int tone_b_range,
-                       int record_length) {
+                       int record_length, const char* detection_tone_alert) {
     
     for (int i = 0; i < MAX_TONE_DEFINITIONS; i++) {
         if (!global_tone_detection.tone_definitions[i].valid) {
@@ -1713,6 +1783,11 @@ int add_tone_definition(const char* tone_id, float tone_a_freq, float tone_b_fre
             global_tone_detection.tone_definitions[i].tone_a_range_hz = tone_a_range;
             global_tone_detection.tone_definitions[i].tone_b_range_hz = tone_b_range;
             global_tone_detection.tone_definitions[i].record_length_ms = record_length;
+            if (detection_tone_alert) {
+                strncpy(global_tone_detection.tone_definitions[i].detection_tone_alert, detection_tone_alert, 255);
+            } else {
+                global_tone_detection.tone_definitions[i].detection_tone_alert[0] = '\0';
+            }
             global_tone_detection.tone_definitions[i].valid = 1;
             
             printf("[TONE CONFIG] Added tone definition: %s (A: %.1f Hz ±%d Hz, %d ms, B: %.1f Hz ±%d Hz, %d ms)\n",

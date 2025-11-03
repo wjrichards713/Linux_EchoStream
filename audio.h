@@ -55,9 +55,42 @@ struct shared_audio_buffer {
     pthread_cond_t data_ready;
 };
 
+// Audio passthrough queue (queue-based approach like ToneDetect)
+#define PASSTHROUGH_QUEUE_SIZE 100
+struct passthrough_audio_chunk {
+    float samples[SAMPLES_PER_FRAME];
+    int sample_count;
+    int valid;
+};
+
+struct passthrough_queue {
+    struct passthrough_audio_chunk chunks[PASSTHROUGH_QUEUE_SIZE];
+    int write_index;
+    int read_index;
+    int count;
+    pthread_mutex_t mutex;
+    pthread_cond_t data_ready;
+};
+
+// Alert WAV playback state (for passthrough)
+struct alert_playback_state {
+    FILE* wav_file;
+    char alert_path[512];
+    int is_playing;
+    int sample_rate;
+    int channels;
+    int bits_per_sample;
+    int data_start_offset;
+    long current_position;
+    int last_detect_time_ms;
+    char current_tone_id[64];
+    pthread_mutex_t mutex;
+};
+
 // Audio passthrough context
 struct audio_passthrough {
     struct shared_audio_buffer *shared_buffer;
+    struct passthrough_queue *passthrough_queue;  // Queue-based passthrough
     PaStream *output_stream;
     PaDeviceIndex output_device;
     int active;
@@ -88,6 +121,7 @@ extern int device_assigned;
 
 // Global shared audio buffer and passthrough
 extern struct shared_audio_buffer global_shared_buffer;
+extern struct passthrough_queue global_passthrough_queue;
 extern struct audio_passthrough global_passthrough;
 
 // Global tone detection control

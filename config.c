@@ -219,11 +219,12 @@ int load_complete_config(void) {
                             int num_tones = json_object_array_length(alert_tones_obj);
                             for (int j = 0; j < num_tones && j < MAX_TONE_DEFINITIONS; j++) {
                                 struct json_object *tone_obj = json_object_array_get_idx(alert_tones_obj, j);
-                                struct json_object *tone_id_obj, *tone_a_obj, *tone_b_obj, *tone_a_length_obj, *tone_b_length_obj, *tone_a_range_obj, *tone_b_range_obj, *record_length_obj;
+                                struct json_object *tone_id_obj, *tone_a_obj, *tone_b_obj, *tone_a_length_obj, *tone_b_length_obj, *tone_a_range_obj, *tone_b_range_obj, *record_length_obj, *detection_tone_alert_obj;
                                 
                                 char tone_id[64] = {0};
                                 float tone_a = 0.0f, tone_b = 0.0f;
                                 int tone_a_length = 0, tone_b_length = 0, tone_a_range = 0, tone_b_range = 0, record_length = 0;
+                                char detection_tone_alert[256] = {0};
                                 
                                 if (json_object_object_get_ex(tone_obj, "tone_id", &tone_id_obj)) {
                                     const char* id = json_object_get_string(tone_id_obj);
@@ -253,11 +254,15 @@ int load_complete_config(void) {
                                     // Convert seconds to milliseconds
                                     record_length = json_object_get_int(record_length_obj) * 1000;
                                 }
+                                if (json_object_object_get_ex(tone_obj, "detection_tone_alert", &detection_tone_alert_obj)) {
+                                    const char* alert = json_object_get_string(detection_tone_alert_obj);
+                                    if (alert) strncpy(detection_tone_alert, alert, 255);
+                                }
                                 
                                 // Add tone definition
-                                printf("[CONFIG] Loading tone from JSON: ID=%s, A=%.1f Hz±%d (dur:%dms), B=%.1f Hz±%d (dur:%dms), rec:%dms\n",
-                                       tone_id, tone_a, tone_a_range, tone_a_length, tone_b, tone_b_range, tone_b_length, record_length);
-                                add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length);
+                                printf("[CONFIG] Loading tone from JSON: ID=%s, A=%.1f Hz±%d (dur:%dms), B=%.1f Hz±%d (dur:%dms), rec:%dms, alert:%s\n",
+                                       tone_id, tone_a, tone_a_range, tone_a_length, tone_b, tone_b_range, tone_b_length, record_length, detection_tone_alert[0] ? detection_tone_alert : "(none)");
+                                add_tone_definition(tone_id, tone_a, tone_b, tone_a_length, tone_b_length, tone_a_range, tone_b_range, record_length, detection_tone_alert[0] ? detection_tone_alert : NULL);
                             }
                         }
                         
