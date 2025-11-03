@@ -458,7 +458,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         
         if (recording) {
-            // Recording active - generate and play Tone A + Tone B pair
+            // Recording active - generate and play Tone A then Tone B sequentially
             // Get the actual sample rate from the stream
             double actual_sample_rate = SAMPLE_RATE;
             if (audio_stream->output_stream) {
@@ -470,10 +470,10 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             
             static int passthrough_log_count = 0;
             if (passthrough_log_count++ % 1000 == 0) {
-                printf("[PASSTHROUGH] Generating Tone A + Tone B pair on passthrough target (channel: %s)\n", audio_stream->channel_id);
+                printf("[PASSTHROUGH] Generating Tone A then Tone B sequentially on passthrough target (channel: %s)\n", audio_stream->channel_id);
             }
             
-            // Generate Tone A + Tone B pair
+            // Generate Tone A then Tone B sequentially
             extern int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate);
             int samples_generated = get_passthrough_tone_samples(out, (int)frames, (int)actual_sample_rate);
             
