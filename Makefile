@@ -23,7 +23,7 @@ else
 endif
 
 # Source files
-SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c mqtt.c
+SOURCES = main.c audio.c websocket.c gpio.c udp.c config.c crypto.c tone_detect.c mqtt.c s3_upload.c
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = echostream
 

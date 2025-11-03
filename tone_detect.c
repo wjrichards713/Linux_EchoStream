@@ -2,6 +2,7 @@
 #include "tone_detect.h"
 #include "audio.h"
 #include "config.h"
+#include "s3_upload.h"
 #include <math.h>
 #include <string.h>
 #include <time.h>
@@ -204,10 +205,6 @@ void* tone_detection_thread(void* arg) {
             }
             
             // Write audio samples to S3 recording if active (for both known and new tones)
-            extern int is_new_tone_recording_active(void);
-            extern int write_audio_samples_to_recording(float* samples, int sample_count, int sample_rate);
-            extern int is_known_tone_recording_active(void);
-            extern int write_audio_samples_to_known_recording(float* samples, int sample_count, int sample_rate);
             
             // Record for new/unknown tones
             if (is_new_tone_recording_active()) {
@@ -557,7 +554,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                         
                         // Start recording ALL incoming audio to file for S3 upload
                         printf("[RECORDING] Starting audio recording for known alert (all incoming audio)\n");
-                        extern int start_known_tone_audio_recording(float tone_a_hz, float tone_b_hz, int duration_ms);
                         if (tone_def->record_length_ms > 0) {
                             start_known_tone_audio_recording(tone_def->tone_a_freq, tone_def->tone_b_freq, tone_def->record_length_ms);
                         }
@@ -1070,7 +1066,6 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                                 
                                 // Start recording audio for S3 upload (record for record_length_ms duration)
                                 printf("[NEW TONE] Starting audio recording for S3 upload: %d ms duration\n", record_length_ms);
-                                extern int start_new_tone_audio_recording(float tone_a_hz, float tone_b_hz, int duration_ms);
                                 start_new_tone_audio_recording(tone_a, tone_b, record_length_ms);
                                 
                                 // IMPORTANT: New/unknown tones do NOT passthrough - only tones from config/shadow passthrough
@@ -2017,8 +2012,6 @@ void stop_recording_timer(void) {
     global_tone_detection.passthrough_tone_a_range = 0;
     global_tone_detection.passthrough_tone_b_range = 0;
     // Stop S3 recordings
-    extern void stop_new_tone_audio_recording(void);
-    extern void stop_known_tone_audio_recording(void);
     stop_new_tone_audio_recording();
     stop_known_tone_audio_recording();
     printf("[RECORDING] Timer stopped\n");
@@ -2061,8 +2054,6 @@ int is_recording_active(void) {
         global_passthrough_tone.active = 0;
         global_passthrough_tone.samples_played = 0;
         // Also stop S3 recording if active (both known and new tone recordings)
-        extern void stop_new_tone_audio_recording(void);
-        extern void stop_known_tone_audio_recording(void);
         stop_new_tone_audio_recording();
         stop_known_tone_audio_recording();
         pthread_mutex_unlock(&global_tone_detection.mutex);
