@@ -1498,31 +1498,10 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
         printf("[TONE PASSTHROUGH] Overlapping detection - updating tone pair, recording timer extended\n");
         printf("[TONE PASSTHROUGH] Duration remaining: %d ms\n", remaining_ms);
     } else {
-        // Initialize new passthrough tone generator - will play Tone A then Tone B sequentially
-        global_passthrough_tone.active = 1;
-        global_passthrough_tone.detected_freq = confirmed_tone_def->tone_a_freq; // For backward compatibility
-        global_passthrough_tone.is_tone_b = 0;
-        global_passthrough_tone.tone_a_freq = confirmed_tone_def->tone_a_freq;
-        global_passthrough_tone.tone_b_freq = confirmed_tone_def->tone_b_freq;
-        global_passthrough_tone.tone_a_length_ms = confirmed_tone_def->tone_a_length_ms;
-        global_passthrough_tone.tone_b_length_ms = confirmed_tone_def->tone_b_length_ms;
-        global_passthrough_tone.sample_rate = (int)actual_sample_rate;
-        global_passthrough_tone.samples_played = 0;
-        global_passthrough_tone.tone_a_samples_played = 0;
-        global_passthrough_tone.tone_b_samples_played = 0;
-        // Calculate total samples needed for each tone based on their durations
-        global_passthrough_tone.tone_a_total_samples = (int)((float)confirmed_tone_def->tone_a_length_ms * actual_sample_rate / 1000.0f);
-        global_passthrough_tone.tone_b_total_samples = (int)((float)confirmed_tone_def->tone_b_length_ms * actual_sample_rate / 1000.0f);
-        global_passthrough_tone.current_tone = 0; // Start with Tone A
-        global_passthrough_tone.total_samples = 0; // Not used - recording timer controls duration
-        global_passthrough_tone.phase = 0.0f; // Deprecated
-        global_passthrough_tone.phase_a = 0.0f;
-        global_passthrough_tone.phase_b = 0.0f;
-        
-        printf("[TONE PASSTHROUGH] Passthrough enabled - will generate Tone A then Tone B sequentially\n");
-        printf("[TONE PASSTHROUGH] Tone A=%.1f Hz for %d ms, Tone B=%.1f Hz for %d ms\n", 
-               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_a_length_ms,
-               confirmed_tone_def->tone_b_freq, confirmed_tone_def->tone_b_length_ms);
+        // Enable passthrough routing (will route actual input audio, not generate tones)
+        printf("[TONE PASSTHROUGH] Passthrough enabled - will route actual input audio to passthrough target\n");
+        printf("[TONE PASSTHROUGH] Tone A=%.1f Hz, Tone B=%.1f Hz (ID: %s)\n", 
+               confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq, confirmed_tone_def->tone_id);
         printf("[TONE PASSTHROUGH] Recording duration: %d ms (record_length, controlled by recording timer)\n",
                confirmed_tone_def->record_length_ms);
     }
