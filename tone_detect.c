@@ -1427,9 +1427,7 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
         return;
     }
     
-    // Get the frequency of the SINGLE detected tone (not both)
-    float detected_freq = (tone_type == 0) ? confirmed_tone_def->tone_a_freq : confirmed_tone_def->tone_b_freq;
-    const char* tone_name = (tone_type == 0) ? "Tone A" : "Tone B";
+    // Note: detected_freq and tone_name removed - not used anymore since we route actual audio
     
     // Find which channel has tone detection enabled and get its config
     struct tone_detect_config* tone_config = NULL;

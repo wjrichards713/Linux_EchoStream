@@ -10,6 +10,7 @@
 #include "tone_detect.h"
 
 // Recording state for new tones
+// Note: get_current_time_ms() is defined in tone_detect.c and declared in tone_detect.h
 static struct {
     FILE* recording_file;
     int is_recording;
@@ -29,13 +30,6 @@ static struct {
     .filename = {0},
     .mutex = PTHREAD_MUTEX_INITIALIZER
 };
-
-// Get current time in milliseconds
-static int get_current_time_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
-}
 
 // Write audio samples to recording file (called from audio processing thread)
 // samples: Audio samples (32-bit float)
@@ -80,8 +74,8 @@ int write_audio_samples_to_recording(float* samples, int sample_count, int sampl
     }
     
     // Write samples as raw 32-bit float PCM
-    size_t written = fwrite(samples, sizeof(float), sample_count, recording_state.recording_file);
-    if (written != sample_count) {
+    size_t written = fwrite(samples, sizeof(float), (size_t)sample_count, recording_state.recording_file);
+    if ((int)written != sample_count) {
         printf("[S3] Warning: Failed to write all samples (wrote %zu of %d)\n", written, sample_count);
     }
     
@@ -193,8 +187,8 @@ int write_audio_samples_to_known_recording(float* samples, int sample_count, int
     }
     
     // Write samples as raw 32-bit float PCM
-    size_t written = fwrite(samples, sizeof(float), sample_count, known_recording_state.recording_file);
-    if (written != sample_count) {
+    size_t written = fwrite(samples, sizeof(float), (size_t)sample_count, known_recording_state.recording_file);
+    if ((int)written != sample_count) {
         printf("[S3] Warning: Failed to write all samples to known tone recording (wrote %zu of %d)\n", written, sample_count);
     }
     
