@@ -149,8 +149,9 @@ static struct lws_protocols protocols[] = {
         4096,
         0,  // id field
         NULL,  // user field
+        0,  // tx_packet_size
     },
-    { NULL, NULL, 0, 0, 0, NULL }
+    { NULL, NULL, 0, 0, 0, NULL, 0 }
 };
 
 int parse_websocket_config(const char *json_str, struct server_config *cfg) {
@@ -283,6 +284,7 @@ int connect_global_websocket() {
 }
 
 void* global_websocket_thread(void* arg) {
+    (void)arg;  // Suppress unused parameter warning
     printf("Starting global WebSocket thread\n");
     
     // Reset global_interrupted to ensure it's not corrupted

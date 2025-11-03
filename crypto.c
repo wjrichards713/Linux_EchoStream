@@ -47,10 +47,10 @@ int decode_base64(const char* input, unsigned char* output) {
     if (input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         
@@ -82,10 +82,10 @@ size_t decode_base64_len(const char* input, unsigned char* output) {
     if (input_len > 1 && input[input_len - 2] == '=') output_len--;
     
     for (size_t i = 0, j = 0; i < input_len;) {
-        uint32_t a = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t b = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t c = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
-        uint32_t d = input[i] == '=' ? 0 & i++ : table[(int)input[i++]];
+        uint32_t a = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t b = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t c = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
+        uint32_t d = input[i] == '=' ? (uint32_t)(0 & i++) : (uint32_t)table[(int)input[i++]];
         
         uint32_t triple = (a << 3 * 6) + (b << 2 * 6) + (c << 1 * 6) + (d << 0 * 6);
         

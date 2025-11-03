@@ -74,6 +74,7 @@ struct passthrough_queue {
 
 // Alert WAV playback state (for passthrough)
 struct alert_playback_state {
+    // WAV file playback fields
     FILE* wav_file;
     char alert_path[512];
     int is_playing;
@@ -85,6 +86,21 @@ struct alert_playback_state {
     int last_detect_time_ms;
     char current_tone_id[64];
     pthread_mutex_t mutex;
+    
+    // Generated tone playback fields
+    int active;
+    float tone_a_frequency;
+    float tone_b_frequency;
+    float tone_a_duration_seconds;
+    float tone_b_duration_seconds;
+    int samples_played;
+    int total_samples;
+    float* alert_buffer;
+    int target_channel_idx;
+    int current_phase; // 0 = playing tone A, 1 = playing tone B
+    int tone_a_samples_played;
+    int tone_b_samples_played;
+    char playing_tone_id[64]; // Track which tone_id is currently playing to prevent restarting same tone
 };
 
 // Audio passthrough context

@@ -582,7 +582,6 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                             
                             // Start alert WAV file playback if detection_tone_alert is set
                             if (tone_def->detection_tone_alert[0] != '\0') {
-                                extern struct alert_playback_state global_alert_playback;
                                 extern int get_current_time_ms(void);
                                 
                                 // Start alert playback (will be played in passthrough output callback)
@@ -607,7 +606,7 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                         while (offset < 44 && !found_data) {
                                             if (memcmp(header + offset, "fmt ", 4) == 0) {
                                                 int fmt_size = *(int*)(header + offset + 4);
-                                                int audio_format = *(short*)(header + offset + 8);
+                                                (void)*(short*)(header + offset + 8);  // audio_format - unused but kept for header parsing
                                                 channels = *(short*)(header + offset + 10);
                                                 sample_rate = *(int*)(header + offset + 12);
                                                 bits_per_sample = *(short*)(header + offset + 22);
@@ -1254,21 +1253,7 @@ void generate_alert_tone(float frequency, float duration_seconds, float* output_
 }
 
 // Global alert playback state
-static struct {
-    int active;
-    float tone_a_frequency;
-    float tone_b_frequency;
-    float tone_a_duration_seconds;
-    float tone_b_duration_seconds;
-    int samples_played;
-    int total_samples;
-    float* alert_buffer;
-    int target_channel_idx;
-    int current_phase; // 0 = playing tone A, 1 = playing tone B
-    int tone_a_samples_played;
-    int tone_b_samples_played;
-    char playing_tone_id[64]; // Track which tone_id is currently playing to prevent restarting same tone
-} global_alert_playback = {0};
+struct alert_playback_state global_alert_playback = {0};
 
 // Global passthrough tone generator state (generates Tone A then Tone B sequentially)
 static struct {
@@ -1492,6 +1477,7 @@ void stop_alert_playback(void) {
 }
 
 void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int tone_type) {
+    (void)tone_type;  // Suppress unused parameter warning
     // Only trigger passthrough for known tones (confirmed_tone_def should be non-NULL)
     // tone_type: 0 = Tone A detected, 1 = Tone B detected
     // IMPORTANT: Passthrough should only start after BOTH Tone A and Tone B are confirmed
@@ -1550,15 +1536,8 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
     
     // Initialize passthrough tone generator to play Tone A + Tone B pair
     extern struct channel_context channels[MAX_CHANNELS];
-    double actual_sample_rate = SAMPLE_RATE; // Default fallback
     int target_channel_idx = get_passthrough_target_channel_index();
-    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS &&
-        channels[target_channel_idx].audio.output_stream) {
-        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[target_channel_idx].audio.output_stream);
-        if (stream_info) {
-            actual_sample_rate = stream_info->sampleRate;
-        }
-    }
+    (void)channels;  // May be used for future stream info access
     
     // Initialize or update passthrough tone generator state
     if (global_passthrough_tone.active) {
