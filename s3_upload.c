@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include "s3_upload.h"
 #include "tone_detect.h"
+#include "audio.h"
+#include "echostream.h"
 
 // Recording state for new tones
 // Note: get_current_time_ms() is defined in tone_detect.c and declared in tone_detect.h
@@ -65,6 +67,9 @@ int write_audio_samples_to_recording(float* samples, int sample_count, int sampl
         recording_state.filename[0] = '\0';  // Clear filename
         
         pthread_mutex_unlock(&recording_state.mutex);
+        
+        // Play recorded audio on passthrough channel before uploading
+        play_recorded_audio_on_passthrough(filename);
         
         // Upload to S3 (this will be called outside the mutex to avoid blocking)
         printf("[S3] Recording complete, uploading to S3: %s\n", filename);
@@ -179,6 +184,9 @@ int write_audio_samples_to_known_recording(float* samples, int sample_count, int
         
         pthread_mutex_unlock(&known_recording_state.mutex);
         
+        // Play recorded audio on passthrough channel before uploading
+        play_recorded_audio_on_passthrough(filename);
+        
         // Upload to S3
         printf("[S3] Known tone recording complete, uploading to S3: %s\n", filename);
         upload_audio_to_s3(filename, tone_a, tone_b);
@@ -283,6 +291,88 @@ int is_new_tone_recording_active(void) {
     return active;
 }
 
+// Play recorded audio file on passthrough channel
+// file_path: Path to raw audio file (32-bit float PCM, 48000 Hz)
+void play_recorded_audio_on_passthrough(const char* file_path) {
+    if (!file_path) {
+        printf("[PASSTHROUGH PLAYBACK] Error: Invalid file path\n");
+        return;
+    }
+    
+    FILE* audio_file = fopen(file_path, "rb");
+    if (!audio_file) {
+        printf("[PASSTHROUGH PLAYBACK] Error: Failed to open file: %s\n", file_path);
+        return;
+    }
+    
+    printf("[PASSTHROUGH PLAYBACK] Playing recorded audio: %s\n", file_path);
+    
+    // Get file size
+    fseek(audio_file, 0, SEEK_END);
+    long file_size = ftell(audio_file);
+    fseek(audio_file, 0, SEEK_SET);
+    
+    if (file_size <= 0) {
+        printf("[PASSTHROUGH PLAYBACK] Error: File is empty or invalid\n");
+        fclose(audio_file);
+        return;
+    }
+    
+    // Calculate number of samples (each sample is 4 bytes = sizeof(float))
+    long total_samples = file_size / sizeof(float);
+    printf("[PASSTHROUGH PLAYBACK] File contains %ld samples (%.2f seconds at 48kHz)\n", 
+           total_samples, (float)total_samples / 48000.0f);
+    
+    // Read and play audio in chunks (using SAMPLES_PER_FRAME sized chunks)
+    float buffer[SAMPLES_PER_FRAME];
+    long samples_played = 0;
+    const int sample_rate = 48000; // Recording is at 48kHz
+    
+    while (samples_played < total_samples && !global_interrupted) {
+        // Calculate samples to read in this chunk
+        long samples_to_read = SAMPLES_PER_FRAME;
+        if (samples_played + samples_to_read > total_samples) {
+            samples_to_read = total_samples - samples_played;
+        }
+        
+        // Read samples from file
+        size_t read = fread(buffer, sizeof(float), (size_t)samples_to_read, audio_file);
+        if (read == 0) {
+            break; // End of file or error
+        }
+        
+        // Write to shared buffer for passthrough playback
+        pthread_mutex_lock(&global_shared_buffer.mutex);
+        for (int i = 0; i < (int)read && i < SAMPLES_PER_FRAME; i++) {
+            global_shared_buffer.samples[i] = buffer[i];
+        }
+        global_shared_buffer.sample_count = (int)read;
+        global_shared_buffer.valid = 1;
+        pthread_cond_signal(&global_shared_buffer.data_ready);
+        pthread_mutex_unlock(&global_shared_buffer.mutex);
+        
+        samples_played += (long)read;
+        
+        // Sleep to match playback rate (48kHz = ~21ms per frame of 1024 samples)
+        // For smaller chunks, adjust sleep time proportionally
+        int sleep_us = (int)((read * 1000000) / sample_rate);
+        if (sleep_us > 0) {
+            usleep(sleep_us);
+        }
+    }
+    
+    fclose(audio_file);
+    
+    printf("[PASSTHROUGH PLAYBACK] Finished playing %ld samples (%.2f seconds)\n", 
+           samples_played, (float)samples_played / 48000.0f);
+    
+    // Clear the shared buffer after playback
+    pthread_mutex_lock(&global_shared_buffer.mutex);
+    global_shared_buffer.valid = 0;
+    global_shared_buffer.sample_count = 0;
+    pthread_mutex_unlock(&global_shared_buffer.mutex);
+}
+
 // Upload audio file to AWS S3
 int upload_audio_to_s3(const char* file_path, float tone_a_hz, float tone_b_hz) {
     if (!file_path) {
@@ -326,6 +416,7 @@ int upload_audio_to_s3(const char* file_path, float tone_a_hz, float tone_b_hz) 
         printf("[S3] Successfully uploaded to S3: %s\n", s3_key);
         
         // Delete local file after successful upload
+        // Note: Playback already happened before upload (in recording completion handlers)
         unlink(file_path);
         printf("[S3] Deleted local file: %s\n", file_path);
         return 1;
