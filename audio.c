@@ -450,6 +450,7 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         // Configured passthrough target - route actual input audio when recording is active
         // Check if recording is active (tone detected and timer running)
         extern int is_recording_active(void);
+        extern struct shared_audio_buffer global_shared_buffer;
         int recording = is_recording_active();
         
         // Initialize output buffer to silence
@@ -458,31 +459,38 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
         }
         
         if (recording) {
-            // Recording active - generate and play pure tones at detected frequencies
-            // Get the actual sample rate from the stream
-            double actual_sample_rate = SAMPLE_RATE;
-            if (audio_stream->output_stream) {
-                const PaStreamInfo* stream_info = Pa_GetStreamInfo(audio_stream->output_stream);
-                if (stream_info) {
-                    actual_sample_rate = stream_info->sampleRate;
+            // Recording active - route actual input audio from shared buffer (same as EchoStream)
+            pthread_mutex_lock(&global_shared_buffer.mutex);
+            
+            if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
+                // Copy actual input audio from shared buffer to output
+                unsigned long samples_to_copy = frames;
+                if (samples_to_copy > (unsigned long)global_shared_buffer.sample_count) {
+                    samples_to_copy = global_shared_buffer.sample_count;
                 }
-            }
-            
-            static int passthrough_log_count = 0;
-            if (passthrough_log_count++ % 1000 == 0) {
-                printf("[PASSTHROUGH] Generating and playing detected tones on passthrough target (channel: %s)\n", audio_stream->channel_id);
-            }
-            
-            // Generate pure tones at detected frequencies
-            extern int get_passthrough_tone_samples(float* output_buffer, int max_samples, int sample_rate);
-            int samples_generated = get_passthrough_tone_samples(out, (int)frames, (int)actual_sample_rate);
-            
-            // Fill remaining buffer with silence if needed
-            if (samples_generated < (int)frames) {
-                for (unsigned long i = (unsigned long)samples_generated; i < frames; i++) {
+                
+                for (unsigned long i = 0; i < samples_to_copy; i++) {
+                    out[i] = global_shared_buffer.samples[i];
+                }
+                
+                // If we need more samples, fill with silence
+                for (unsigned long i = samples_to_copy; i < frames; i++) {
                     out[i] = 0.0f;
                 }
+                
+                // Mark buffer as consumed (will be refreshed by input callback)
+                global_shared_buffer.valid = 0;
+                
+                static int passthrough_log_count = 0;
+                if (passthrough_log_count++ % 1000 == 0) {
+                    printf("[PASSTHROUGH] Routing actual input audio to passthrough target (channel: %s)\n", audio_stream->channel_id);
+                }
+            } else {
+                // Buffer not ready yet - output silence for this frame
+                // (input callback will update buffer soon)
             }
+            
+            pthread_mutex_unlock(&global_shared_buffer.mutex);
         } else {
             // No recording active - output silence
             static int silence_count = 0;

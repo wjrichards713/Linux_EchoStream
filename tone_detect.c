@@ -196,11 +196,27 @@ void* tone_detection_thread(void* arg) {
         
         pthread_mutex_unlock(&global_shared_buffer.mutex);
         
-        // Process audio for tone detection
+            // Process audio for tone detection
         if (samples_to_process > 0) {
             // Apply gain
             for (int i = 0; i < samples_to_process; i++) {
                 audio_buffer[i] *= global_tone_detection.config.gain;
+            }
+            
+            // Write audio samples to S3 recording if active (for both known and new tones)
+            extern int is_new_tone_recording_active(void);
+            extern int write_audio_samples_to_recording(float* samples, int sample_count, int sample_rate);
+            extern int is_known_tone_recording_active(void);
+            extern int write_audio_samples_to_known_recording(float* samples, int sample_count, int sample_rate);
+            
+            // Record for new/unknown tones
+            if (is_new_tone_recording_active()) {
+                write_audio_samples_to_recording(audio_buffer, samples_to_process, SAMPLE_RATE);
+            }
+            
+            // Record for known tones (from config/shadow) - records ALL incoming audio
+            if (is_known_tone_recording_active()) {
+                write_audio_samples_to_known_recording(audio_buffer, samples_to_process, SAMPLE_RATE);
             }
             
             // Apply frequency filters to actual audio samples
@@ -392,6 +408,26 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
         
         // Check for tone A
         if (!global_tone_detection.tone_a_confirmed) {
+            // IMPORTANT: Check if Tone B frequency appears before Tone A is confirmed
+            // If so, reset everything - Tone A must come FIRST, then Tone B
+            if (check_tone_definition(tone_def->tone_b_freq, tone_def, 1)) {
+                // Tone B detected before Tone A confirmed - invalid sequence, reset
+                static int last_reset_log = 0;
+                if (current_time - last_reset_log > 2000) { // Debounce reset logs
+                    printf("[TONE] INVALID SEQUENCE: Tone B (%.1f Hz) detected before Tone A confirmed - resetting\n", 
+                           tone_def->tone_b_freq);
+                    last_reset_log = current_time;
+                }
+                reset_tone_tracking();
+                a_present = 0;
+                b_present = 0;
+                a_hit_streak = 0;
+                b_hit_streak = 0;
+                a_miss_streak = 0;
+                b_miss_streak = 0;
+                continue; // Skip processing this tone definition
+            }
+            
             // Debug: Show when we're checking for tone A
             static int tone_a_check_count = 0;
             if (tone_a_check_count++ % 200 == 0) {
@@ -441,16 +477,8 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                current_time - global_tone_detection.tone_a_tracking_start);
                         global_tone_detection.tone_a_detections++;
                         
-                        // Start recording timer if configured
-                        if (tone_def->record_length_ms > 0) {
-                            printf("[DEBUG] About to start recording timer for %d ms\n", tone_def->record_length_ms);
-                            start_recording_timer(tone_def->record_length_ms);
-                            printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
-                        }
-                        
-                        // Trigger tone passthrough/alert playback if configured (only for known tones)
-                        // Pass tone_type = 0 for Tone A
-                        trigger_tone_passthrough(tone_def, 0);
+                        // Do NOT start passthrough or recording timer yet - wait for Tone B confirmation
+                        // Passthrough will only start after BOTH Tone A and Tone B are confirmed
                     }
                 }
             } else {
@@ -523,14 +551,41 @@ int detect_tone_sequence(float* audio_samples, int sample_count) {
                                current_time - global_tone_detection.tone_b_tracking_start);
                         global_tone_detection.tone_b_detections++;
                         
-                        // Start or extend recording
-                        printf("[DEBUG] About to start recording timer for %d ms\n", tone_def->record_length_ms);
-                        start_recording_timer(tone_def->record_length_ms);
-                        printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
+                        // Both Tone A and Tone B are now confirmed - start recording and passthrough
+                        printf("[TONE ALERT] Complete alert pair confirmed: Tone A=%.1f Hz, Tone B=%.1f Hz\n",
+                               tone_def->tone_a_freq, tone_def->tone_b_freq);
                         
-                        // Trigger tone passthrough if configured (only for known tones)
-                        // Pass tone_type = 1 for Tone B
-                        trigger_tone_passthrough(tone_def, 1);
+                        // Start recording ALL incoming audio to file for S3 upload
+                        printf("[RECORDING] Starting audio recording for known alert (all incoming audio)\n");
+                        extern int start_known_tone_audio_recording(float tone_a_hz, float tone_b_hz, int duration_ms);
+                        if (tone_def->record_length_ms > 0) {
+                            start_known_tone_audio_recording(tone_def->tone_a_freq, tone_def->tone_b_freq, tone_def->record_length_ms);
+                        }
+                        
+                        // Start recording timer if configured
+                        if (tone_def->record_length_ms > 0) {
+                            printf("[DEBUG] About to start recording timer for %d ms\n", tone_def->record_length_ms);
+                            start_recording_timer(tone_def->record_length_ms);
+                            printf("[DEBUG] Recording timer started, active=%d\n", global_tone_detection.recording_active);
+                        }
+                        
+                        // Trigger passthrough routing (actual input audio) if enabled
+                        // Check passthrough config before triggering
+                        struct tone_detect_config* tone_config = NULL;
+                        for (int j = 0; j < MAX_CHANNELS; j++) {
+                            struct channel_config* channel_config = get_channel_config(j);
+                            if (channel_config && channel_config->valid && channel_config->tone_detect) {
+                                tone_config = &channel_config->tone_config;
+                                break;
+                            }
+                        }
+                        
+                        if (tone_config && tone_config->tone_passthrough) {
+                            // Trigger passthrough routing (will route actual input audio, not generate tones)
+                            trigger_tone_passthrough(tone_def, 1);
+                        } else {
+                            printf("[TONE PASSTHROUGH] Passthrough not enabled in config - skipping passthrough\n");
+                        }
                         
                         global_tone_detection.total_detections++;
                     }
@@ -983,6 +1038,22 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                                        tone_a, tone_b,
                                        global_tone_detection.config.new_tone_length_ms,
                                        global_tone_detection.config.new_tone_range_hz);
+                                
+                                // Calculate duration for new tones
+                                int record_length_ms = 20000; // Default 20 seconds
+                                for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
+                                    struct tone_definition* def = &global_tone_detection.tone_definitions[j];
+                                    if (def->valid && def->record_length_ms > 0) {
+                                        record_length_ms = def->record_length_ms;
+                                        break; // Use first valid record_length found
+                                    }
+                                }
+                                
+                                printf("[DEBUG] New tone pair detected: Tone A=%.1f Hz, Tone B=%.1f Hz, Duration=%d ms\n",
+                                       tone_a, tone_b, record_length_ms);
+                                printf("[DEBUG] New tone detection criteria: Length=%d ms (each tone), Range=±%d Hz\n",
+                                       global_tone_detection.config.new_tone_length_ms,
+                                       global_tone_detection.config.new_tone_range_hz);
 
                                 // Add both to confirmed list
                                 if (global_tone_detection.detected_frequency_count < 100) {
@@ -997,39 +1068,13 @@ int detect_new_tones(float* magnitudes __attribute__((unused)), int count __attr
                                 extern int publish_new_tone_pair(float tone_a_hz, float tone_b_hz);
                                 publish_new_tone_pair(tone_a, tone_b);
                                 
-                                // Trigger passthrough tone generation for new tones (generate only Tone A)
-                                // Check if passthrough is enabled
-                                struct tone_detect_config* tone_config = NULL;
-                                for (int j = 0; j < MAX_CHANNELS; j++) {
-                                    struct channel_config* channel_config = get_channel_config(j);
-                                    if (channel_config && channel_config->valid && channel_config->tone_detect) {
-                                        tone_config = &channel_config->tone_config;
-                                        break;
-                                    }
-                                }
+                                // Start recording audio for S3 upload (record for record_length_ms duration)
+                                printf("[NEW TONE] Starting audio recording for S3 upload: %d ms duration\n", record_length_ms);
+                                extern int start_new_tone_audio_recording(float tone_a_hz, float tone_b_hz, int duration_ms);
+                                start_new_tone_audio_recording(tone_a, tone_b, record_length_ms);
                                 
-                                if (tone_config && tone_config->tone_passthrough) {
-                                    // Use default record_length for new tones (20 seconds / 20000 ms)
-                                    // Or use the first tone definition's record_length if available
-                                    int record_length_ms = 20000; // Default 20 seconds
-                                    for (int j = 0; j < MAX_TONE_DEFINITIONS; j++) {
-                                        struct tone_definition* def = &global_tone_detection.tone_definitions[j];
-                                        if (def->valid && def->record_length_ms > 0) {
-                                            record_length_ms = def->record_length_ms;
-                                            break; // Use first valid record_length found
-                                        }
-                                    }
-                                    
-                                    // Start recording timer for new tone passthrough
-                                    start_recording_timer(record_length_ms);
-                                    
-                                    // Trigger passthrough to generate and play Tone A
-                                    extern void trigger_new_tone_passthrough(float tone_freq, int record_length_ms);
-                                    trigger_new_tone_passthrough(tone_a, record_length_ms);
-                                    
-                                    printf("[NEW TONE PASSTHROUGH] Generating tone %.1f Hz on passthrough target for %d ms\n",
-                                           tone_a, record_length_ms);
-                                }
+                                // IMPORTANT: New/unknown tones do NOT passthrough - only tones from config/shadow passthrough
+                                printf("[NEW TONE] Passthrough skipped - only known tones (from config/shadow) will passthrough\n");
                                 
                                 // Reset tracking for used slots
                                 global_tone_detection.new_tone_tracking[idx_a].is_tracking = 0;
@@ -1373,9 +1418,17 @@ void stop_alert_playback(void) {
 void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int tone_type) {
     // Only trigger passthrough for known tones (confirmed_tone_def should be non-NULL)
     // tone_type: 0 = Tone A detected, 1 = Tone B detected
+    // IMPORTANT: Passthrough should only start after BOTH Tone A and Tone B are confirmed
     if (!confirmed_tone_def || !confirmed_tone_def->valid) {
         // This is a new/unknown tone - don't trigger passthrough, only MQTT/recording
         printf("[TONE PASSTHROUGH] Skipping passthrough - unknown/new tone detected (MQTT and recording handled separately)\n");
+        return;
+    }
+    
+    // Safety check: Ensure both tones are confirmed before starting passthrough
+    if (!global_tone_detection.tone_a_confirmed || !global_tone_detection.tone_b_confirmed) {
+        printf("[TONE PASSTHROUGH] Waiting for both tones - Tone A confirmed=%d, Tone B confirmed=%d\n",
+               global_tone_detection.tone_a_confirmed, global_tone_detection.tone_b_confirmed);
         return;
     }
     
@@ -1407,62 +1460,31 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
         return;
     }
     
-    printf("[TONE PASSTHROUGH] Source channel %d detected known %s: %.1f Hz (ID: %s), target: %s\n", 
-           source_channel_idx + 1, tone_name, detected_freq, confirmed_tone_def->tone_id, tone_config->passthrough_channel);
+    printf("[TONE PASSTHROUGH] Source channel %d detected known alert: Tone A=%.1f Hz, Tone B=%.1f Hz (ID: %s), target: %s\n", 
+           source_channel_idx + 1, confirmed_tone_def->tone_a_freq, confirmed_tone_def->tone_b_freq, 
+           confirmed_tone_def->tone_id, tone_config->passthrough_channel);
     
-    // Store detected tone frequency for passthrough (deprecated - using single tone now)
+    // Enable passthrough routing (will route actual input audio, not generate tones)
     pthread_mutex_lock(&global_tone_detection.mutex);
     global_tone_detection.passthrough_active = 1;
-    // Keep old fields for backward compatibility (not used anymore)
+    // Store tone frequencies for reference
     global_tone_detection.passthrough_tone_a_freq = confirmed_tone_def->tone_a_freq;
     global_tone_detection.passthrough_tone_a_range = confirmed_tone_def->tone_a_range_hz;
     global_tone_detection.passthrough_tone_b_freq = confirmed_tone_def->tone_b_freq;
     global_tone_detection.passthrough_tone_b_range = confirmed_tone_def->tone_b_range_hz;
     pthread_mutex_unlock(&global_tone_detection.mutex);
     
-    // Initialize or update passthrough tone generator
-    // Get the actual sample rate from the target channel
-    extern struct channel_context channels[MAX_CHANNELS];
-    double actual_sample_rate = SAMPLE_RATE; // Default fallback
-    int target_channel_idx = get_passthrough_target_channel_index();
-    if (target_channel_idx >= 0 && target_channel_idx < MAX_CHANNELS &&
-        channels[target_channel_idx].audio.output_stream) {
-        const PaStreamInfo* stream_info = Pa_GetStreamInfo(channels[target_channel_idx].audio.output_stream);
-        if (stream_info) {
-            actual_sample_rate = stream_info->sampleRate;
-        }
-    }
-    
-    // If passthrough is already active, update frequency (may have changed on new detection)
-    // But don't reset phase - continue from where we are (seamless transition)
-    if (global_passthrough_tone.active) {
-        // Get remaining recording time
+    // Check if overlapping detection (already recording/passthrough active)
+    extern int is_recording_active(void);
+    if (is_recording_active()) {
         extern int get_recording_time_remaining_ms(void);
         int remaining_ms = get_recording_time_remaining_ms();
-        printf("[TONE PASSTHROUGH] Overlapping detection - updating tone frequency: %s=%.1f Hz (continuing playback)\n",
-               tone_name, detected_freq);
-        printf("[TONE PASSTHROUGH] Recording timer extended, tone generation will continue\n");
-        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration remaining=%d ms, Tone Type=%s\n",
-               detected_freq, remaining_ms, tone_name);
-        global_passthrough_tone.detected_freq = detected_freq;
-        global_passthrough_tone.is_tone_b = tone_type;
-        // Note: recording timer handles duration extension automatically
+        printf("[TONE PASSTHROUGH] Overlapping detection - recording timer extended, passthrough continues\n");
+        printf("[TONE PASSTHROUGH] Duration remaining: %d ms\n", remaining_ms);
     } else {
-        // Initialize passthrough tone generator state (new passthrough)
-        global_passthrough_tone.active = 1;
-        global_passthrough_tone.detected_freq = detected_freq;
-        global_passthrough_tone.is_tone_b = tone_type;
-        global_passthrough_tone.sample_rate = (int)actual_sample_rate;
-        global_passthrough_tone.samples_played = 0;
-        global_passthrough_tone.total_samples = 0; // Not used - recording timer controls duration
-        global_passthrough_tone.phase = 0.0f;
-        
-        printf("[TONE PASSTHROUGH] Passthrough enabled - will generate pure tone: %s=%.1f Hz\n",
-               tone_name, detected_freq);
+        printf("[TONE PASSTHROUGH] Passthrough enabled - will route actual input audio to passthrough target\n");
         printf("[TONE PASSTHROUGH] Passthrough duration: %d ms (record_length, controlled by recording timer)\n",
                confirmed_tone_def->record_length_ms);
-        printf("[DEBUG] Generated tone: Frequency=%.1f Hz, Duration=%d ms, Tone Type=%s\n",
-               detected_freq, confirmed_tone_def->record_length_ms, tone_name);
     }
 }
 
@@ -1988,12 +2010,17 @@ int start_recording_timer(int record_length_ms) {
 void stop_recording_timer(void) {
     pthread_mutex_lock(&global_tone_detection.mutex);
     global_tone_detection.recording_active = 0;
-    // Clear passthrough filter state when recording stops
+    // Clear passthrough state when recording stops
     global_tone_detection.passthrough_active = 0;
     global_tone_detection.passthrough_tone_a_freq = 0.0f;
     global_tone_detection.passthrough_tone_b_freq = 0.0f;
     global_tone_detection.passthrough_tone_a_range = 0;
     global_tone_detection.passthrough_tone_b_range = 0;
+    // Stop S3 recordings
+    extern void stop_new_tone_audio_recording(void);
+    extern void stop_known_tone_audio_recording(void);
+    stop_new_tone_audio_recording();
+    stop_known_tone_audio_recording();
     printf("[RECORDING] Timer stopped\n");
     pthread_mutex_unlock(&global_tone_detection.mutex);
 }
@@ -2030,9 +2057,14 @@ int is_recording_active(void) {
         global_tone_detection.passthrough_tone_b_freq = 0.0f;
         global_tone_detection.passthrough_tone_a_range = 0;
         global_tone_detection.passthrough_tone_b_range = 0;
-        // Stop passthrough tone generation
+        // Stop passthrough
         global_passthrough_tone.active = 0;
         global_passthrough_tone.samples_played = 0;
+        // Also stop S3 recording if active (both known and new tone recordings)
+        extern void stop_new_tone_audio_recording(void);
+        extern void stop_known_tone_audio_recording(void);
+        stop_new_tone_audio_recording();
+        stop_known_tone_audio_recording();
         pthread_mutex_unlock(&global_tone_detection.mutex);
         return 0;
     }
