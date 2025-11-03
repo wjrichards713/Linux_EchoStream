@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200112L
+#define _DEFAULT_SOURCE
 #include "gpio.h"
 #include "audio.h"
 #include "websocket.h"

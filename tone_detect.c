@@ -14,6 +14,9 @@
 // Global tone detection state
 struct tone_detection_state global_tone_detection = {0};
 
+// Forward declaration for global_alert_playback (defined later in file)
+extern struct alert_playback_state global_alert_playback;
+
 // Audio buffer for sliding window analysis (following Python approach)
 #define MAX_AUDIO_BUFFER_SAMPLES (10 * SAMPLE_RATE) // 10 seconds max
 static float audio_buffer[MAX_AUDIO_BUFFER_SAMPLES];
@@ -1536,8 +1539,8 @@ void trigger_tone_passthrough(struct tone_definition* confirmed_tone_def, int to
     
     // Initialize passthrough tone generator to play Tone A + Tone B pair
     extern struct channel_context channels[MAX_CHANNELS];
-    int target_channel_idx = get_passthrough_target_channel_index();
     (void)channels;  // May be used for future stream info access
+    (void)get_passthrough_target_channel_index();  // May be used for future channel selection
     
     // Initialize or update passthrough tone generator state
     if (global_passthrough_tone.active) {
