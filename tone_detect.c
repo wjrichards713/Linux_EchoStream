@@ -2136,12 +2136,14 @@ int start_recording_timer(int record_length_ms) {
             printf("[RECORDING] Timer unchanged: %d ms remaining (current recording longer)\n", 
                    remaining_time);
         }
+        set_passthrough_output_mode(1);
     } else {
         // Start new recording
         printf("[RECORDING] Started: %d ms duration\n", record_length_ms);
         global_tone_detection.recording_active = 1;
         global_tone_detection.recording_start_time = current_time;
         global_tone_detection.recording_duration_ms = record_length_ms;
+        set_passthrough_output_mode(1);
     }
     
     pthread_mutex_unlock(&global_tone_detection.mutex);
@@ -2160,6 +2162,7 @@ void stop_recording_timer(void) {
     // Stop S3 recordings
     stop_new_tone_audio_recording();
     stop_known_tone_audio_recording();
+    set_passthrough_output_mode(0);
     printf("[RECORDING] Timer stopped\n");
     pthread_mutex_unlock(&global_tone_detection.mutex);
 }
@@ -2205,6 +2208,7 @@ int is_recording_active(void) {
         // Also stop S3 recording if active (both known and new tone recordings)
         stop_new_tone_audio_recording();
         stop_known_tone_audio_recording();
+        set_passthrough_output_mode(0);
         pthread_mutex_unlock(&global_tone_detection.mutex);
         return 0;
     }

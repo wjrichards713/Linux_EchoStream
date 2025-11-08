@@ -53,7 +53,7 @@ void stop_known_tone_audio_recording(void);
 int is_known_tone_recording_active(void);
 
 // Play recorded audio file on passthrough channel
-// file_path: Path to raw audio file (32-bit float PCM, 48000 Hz)
+// file_path: Path to WAV audio file
 void play_recorded_audio_on_passthrough(const char* file_path);
 
 #endif // S3_UPLOAD_H
