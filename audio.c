@@ -87,6 +87,86 @@ int channel_has_output_stream(int channel_index) {
     return is_active;
 }
 
+static int start_passthrough_fallback_output_stream(int target_channel_index) {
+    if (target_channel_index < 0 || target_channel_index >= MAX_CHANNELS) {
+        printf("[WARNING] Invalid target channel index %d for passthrough fallback\n", target_channel_index);
+        return 0;
+    }
+
+    if (global_passthrough.active) {
+        return 1;
+    }
+
+    PaDeviceIndex device = channels[target_channel_index].audio.device_index;
+    const PaDeviceInfo* device_info = NULL;
+
+    if (device != paNoDevice) {
+        device_info = Pa_GetDeviceInfo(device);
+        if (!device_info || device_info->maxOutputChannels == 0) {
+            printf("[WARNING] Assigned device %d for channel %s has no output channels; using default output device\n",
+                   (int)device, channels[target_channel_index].audio.channel_id);
+            device = Pa_GetDefaultOutputDevice();
+            device_info = Pa_GetDeviceInfo(device);
+        }
+    } else {
+        device = Pa_GetDefaultOutputDevice();
+        device_info = Pa_GetDeviceInfo(device);
+    }
+
+    if (device == paNoDevice || !device_info) {
+        printf("[ERROR] No suitable output device available for passthrough fallback\n");
+        return 0;
+    }
+
+    PaStreamParameters output_params;
+    memset(&output_params, 0, sizeof(output_params));
+    output_params.device = device;
+    output_params.channelCount = 1;
+    output_params.sampleFormat = paFloat32;
+    output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+    output_params.hostApiSpecificStreamInfo = NULL;
+
+    PaError err = Pa_OpenStream(&global_passthrough.output_stream,
+                                NULL,
+                                &output_params,
+                                48000,
+                                1024,
+                                paClipOff,
+                                NULL,
+                                NULL);
+    if (err != paNoError) {
+        printf("[ERROR] Failed to open passthrough fallback output stream on device %d (%s): %s\n",
+               (int)device, device_info->name, Pa_GetErrorText(err));
+        return 0;
+    }
+
+    err = Pa_StartStream(global_passthrough.output_stream);
+    if (err != paNoError) {
+        printf("[ERROR] Failed to start passthrough fallback output stream: %s\n", Pa_GetErrorText(err));
+        Pa_CloseStream(global_passthrough.output_stream);
+        global_passthrough.output_stream = NULL;
+        return 0;
+    }
+
+    global_passthrough.output_device = device;
+    global_passthrough.active = 1;
+    global_passthrough.using_fallback_output = 1;
+
+    if (pthread_create(&global_passthrough.thread, NULL, audio_passthrough_thread, NULL) != 0) {
+        printf("[ERROR] Failed to create passthrough fallback thread\n");
+        Pa_StopStream(global_passthrough.output_stream);
+        Pa_CloseStream(global_passthrough.output_stream);
+        global_passthrough.output_stream = NULL;
+        global_passthrough.active = 0;
+        global_passthrough.using_fallback_output = 0;
+        return 0;
+    }
+
+    printf("[INFO] Passthrough fallback output stream started on device %d (%s)\n",
+           (int)device, device_info->name);
+    return 1;
+}
+
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
 static int is_configured_passthrough_channel_id(const char* channel_id) {
     struct tone_detect_config* tone_cfg = get_tone_detect_config(0);
@@ -241,6 +321,25 @@ int set_passthrough_output_mode(int passthrough_mode) {
     global_tone_detect.passthrough_mode = passthrough_mode;
     pthread_mutex_unlock(&global_tone_detect.mutex);
     printf("[INFO] Passthrough output mode set to %s for configured target\n", passthrough_mode ? "PASSTHROUGH" : "ECHOSTREAM");
+
+    if (passthrough_mode) {
+        int target_index = get_passthrough_target_channel_index();
+        if (target_index >= 0) {
+            if (!channel_has_output_stream(target_index)) {
+                if (!start_passthrough_fallback_output_stream(target_index)) {
+                    printf("[WARNING] Passthrough fallback output could not be started; target channel audio may be silent\n");
+                }
+            } else {
+                global_passthrough.using_fallback_output = 0;
+            }
+        } else {
+            printf("[WARNING] Passthrough mode enabled but no valid target channel index determined\n");
+        }
+    } else {
+        if (global_passthrough.using_fallback_output) {
+            stop_audio_passthrough();
+        }
+    }
     return 1;
 }
 
@@ -716,6 +815,7 @@ int init_audio_passthrough(void) {
     }
     
     global_passthrough.active = 0;
+    global_passthrough.using_fallback_output = 0;
     printf("[INFO] Audio passthrough initialized (callback-based, no extra streams)\n");
     return 1;
 }
@@ -730,6 +830,7 @@ int start_audio_passthrough(void) {
 // Stop audio passthrough
 void stop_audio_passthrough(void) {
     if (!global_passthrough.active) {
+        global_passthrough.using_fallback_output = 0;
         return;
     }
     
@@ -750,6 +851,7 @@ void stop_audio_passthrough(void) {
         global_passthrough.output_stream = NULL;
     }
     
+    global_passthrough.using_fallback_output = 0;
     printf("[INFO] Audio passthrough stopped\n");
 }
 

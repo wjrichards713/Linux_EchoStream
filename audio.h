@@ -110,6 +110,7 @@ struct audio_passthrough {
     PaStream *output_stream;
     PaDeviceIndex output_device;
     int active;
+    int using_fallback_output;
     pthread_t thread;
 };
 
