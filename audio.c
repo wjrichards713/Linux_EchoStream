@@ -97,74 +97,109 @@ static int start_passthrough_fallback_output_stream(int target_channel_index) {
         return 1;
     }
 
-    PaDeviceIndex device = channels[target_channel_index].audio.device_index;
-    const PaDeviceInfo* device_info = NULL;
+    const int max_devices = Pa_GetDeviceCount();
+    PaDeviceIndex tried_devices[64];
+    int tried_count = 0;
 
-    if (device != paNoDevice) {
-        device_info = Pa_GetDeviceInfo(device);
-        if (!device_info || device_info->maxOutputChannels == 0) {
-            printf("[WARNING] Assigned device %d for channel %s has no output channels; using default output device\n",
-                   (int)device, channels[target_channel_index].audio.channel_id);
-            device = Pa_GetDefaultOutputDevice();
-            device_info = Pa_GetDeviceInfo(device);
+    PaDeviceIndex preferred = channels[target_channel_index].audio.device_index;
+    if (preferred != paNoDevice && tried_count < 64) {
+        tried_devices[tried_count++] = preferred;
+    }
+
+    PaDeviceIndex default_device = Pa_GetDefaultOutputDevice();
+    if (default_device != paNoDevice && tried_count < 64) {
+        int already_added = 0;
+        for (int i = 0; i < tried_count; i++) {
+            if (tried_devices[i] == default_device) {
+                already_added = 1;
+                break;
+            }
         }
-    } else {
-        device = Pa_GetDefaultOutputDevice();
-        device_info = Pa_GetDeviceInfo(device);
+        if (!already_added) {
+            tried_devices[tried_count++] = default_device;
+        }
     }
 
-    if (device == paNoDevice || !device_info) {
-        printf("[ERROR] No suitable output device available for passthrough fallback\n");
-        return 0;
+    for (int device_index = 0; device_index < max_devices && tried_count < 64; device_index++) {
+        const PaDeviceInfo* info = Pa_GetDeviceInfo(device_index);
+        if (!info || info->maxOutputChannels <= 0) {
+            continue;
+        }
+        int already_added = 0;
+        for (int i = 0; i < tried_count; i++) {
+            if (tried_devices[i] == device_index) {
+                already_added = 1;
+                break;
+            }
+        }
+        if (!already_added) {
+            tried_devices[tried_count++] = device_index;
+        }
     }
 
-    PaStreamParameters output_params;
-    memset(&output_params, 0, sizeof(output_params));
-    output_params.device = device;
-    output_params.channelCount = 1;
-    output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = device_info->defaultLowOutputLatency;
-    output_params.hostApiSpecificStreamInfo = NULL;
+    for (int i = 0; i < tried_count; i++) {
+        PaDeviceIndex device = tried_devices[i];
+        const PaDeviceInfo* device_info = Pa_GetDeviceInfo(device);
+        if (!device_info || device_info->maxOutputChannels <= 0) {
+            continue;
+        }
 
-    PaError err = Pa_OpenStream(&global_passthrough.output_stream,
-                                NULL,
-                                &output_params,
-                                48000,
-                                1024,
-                                paClipOff,
-                                NULL,
-                                NULL);
-    if (err != paNoError) {
-        printf("[ERROR] Failed to open passthrough fallback output stream on device %d (%s): %s\n",
-               (int)device, device_info->name, Pa_GetErrorText(err));
-        return 0;
+        printf("[INFO] Passthrough fallback attempting device %d (%s)\n",
+               (int)device, device_info->name);
+
+        PaStreamParameters output_params;
+        memset(&output_params, 0, sizeof(output_params));
+        output_params.device = device;
+        output_params.channelCount = 1;
+        output_params.sampleFormat = paFloat32;
+        output_params.suggestedLatency = device_info->defaultLowOutputLatency;
+        output_params.hostApiSpecificStreamInfo = NULL;
+
+        PaError err = Pa_OpenStream(&global_passthrough.output_stream,
+                                    NULL,
+                                    &output_params,
+                                    48000,
+                                    1024,
+                                    paClipOff,
+                                    NULL,
+                                    NULL);
+        if (err != paNoError) {
+            printf("[WARNING] Passthrough fallback failed to open device %d (%s): %s\n",
+                   (int)device, device_info->name, Pa_GetErrorText(err));
+            continue;
+        }
+
+        err = Pa_StartStream(global_passthrough.output_stream);
+        if (err != paNoError) {
+            printf("[WARNING] Passthrough fallback failed to start device %d (%s): %s\n",
+                   (int)device, device_info->name, Pa_GetErrorText(err));
+            Pa_CloseStream(global_passthrough.output_stream);
+            global_passthrough.output_stream = NULL;
+            continue;
+        }
+
+        global_passthrough.output_device = device;
+        global_passthrough.active = 1;
+        global_passthrough.using_fallback_output = 1;
+
+        if (pthread_create(&global_passthrough.thread, NULL, audio_passthrough_thread, NULL) != 0) {
+            printf("[ERROR] Failed to create passthrough fallback thread for device %d (%s)\n",
+                   (int)device, device_info->name);
+            Pa_StopStream(global_passthrough.output_stream);
+            Pa_CloseStream(global_passthrough.output_stream);
+            global_passthrough.output_stream = NULL;
+            global_passthrough.active = 0;
+            global_passthrough.using_fallback_output = 0;
+            continue;
+        }
+
+        printf("[INFO] Passthrough fallback output stream started on device %d (%s)\n",
+               (int)device, device_info->name);
+        return 1;
     }
 
-    err = Pa_StartStream(global_passthrough.output_stream);
-    if (err != paNoError) {
-        printf("[ERROR] Failed to start passthrough fallback output stream: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(global_passthrough.output_stream);
-        global_passthrough.output_stream = NULL;
-        return 0;
-    }
-
-    global_passthrough.output_device = device;
-    global_passthrough.active = 1;
-    global_passthrough.using_fallback_output = 1;
-
-    if (pthread_create(&global_passthrough.thread, NULL, audio_passthrough_thread, NULL) != 0) {
-        printf("[ERROR] Failed to create passthrough fallback thread\n");
-        Pa_StopStream(global_passthrough.output_stream);
-        Pa_CloseStream(global_passthrough.output_stream);
-        global_passthrough.output_stream = NULL;
-        global_passthrough.active = 0;
-        global_passthrough.using_fallback_output = 0;
-        return 0;
-    }
-
-    printf("[INFO] Passthrough fallback output stream started on device %d (%s)\n",
-           (int)device, device_info->name);
-    return 1;
+    printf("[WARNING] Passthrough fallback could not open any available output device\n");
+    return 0;
 }
 
 // Helper: check if a channel_id matches the configured passthrough_channel from JSON
