@@ -4,16 +4,36 @@
 #include "crypto.h"
 #include "websocket.h"
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <errno.h>
 
 // Global UDP state
 int global_udp_socket = -1;
 struct sockaddr_in global_server_addr;
 pthread_t heartbeat_thread;
 pthread_t udp_listener_thread;
+
+static int udp_debug_enabled(void) {
+    static int initialized = 0;
+    static int enabled = 0;
+    if (!initialized) {
+        const char* env = getenv("UDP_DEBUG");
+        if (env && strcmp(env, "0") != 0) {
+            enabled = 1;
+        }
+        initialized = 1;
+    }
+    return enabled;
+}
+
+static int zero_key_warned[MAX_CHANNELS] = {0};
+static unsigned long jitter_drop_count[MAX_CHANNELS] = {0};
+static unsigned long decrypt_fail_count[MAX_CHANNELS] = {0};
 
 int setup_global_udp(struct server_config* config) {
     if (global_udp_socket >= 0) {
@@ -174,23 +194,27 @@ void* udp_listener_worker(void* arg) {
                     
                     // Find the channel
                     struct audio_stream* target_stream = NULL;
+                    int target_index = -1;
                     for (int i = 0; i < 4; i++) {
                         if (channels[i].active && strcmp(channels[i].audio.channel_id, channel_id) == 0) {
                             target_stream = &channels[i].audio;
+                            target_index = i;
                             // printf("UDP Listener: Found target channel %s at index %d\n", channel_id, i);
                             break;
                         }
                     }
                     
                     if (!target_stream) {
-                        printf("UDP Listener: No active channel found for '%s'\n", channel_id);
-                        printf("UDP Listener: Active channels: ");
-                        for (int i = 0; i < 4; i++) {
-                            if (channels[i].active) {
-                                printf("'%s' ", channels[i].audio.channel_id);
+                        if (udp_debug_enabled()) {
+                            printf("UDP Listener: No active channel found for '%s'\n", channel_id);
+                            printf("UDP Listener: Active channels: ");
+                            for (int i = 0; i < 4; i++) {
+                                if (channels[i].active) {
+                                    printf("'%s' ", channels[i].audio.channel_id);
+                                }
                             }
+                            printf("\n");
                         }
-                        printf("\n");
                     }
                     
                     if (target_stream) {
@@ -201,20 +225,35 @@ void* udp_listener_worker(void* arg) {
                         size_t encrypted_len = decode_base64_len(data, encrypted_data);
                         
                         if (encrypted_len > 0) {
-                            printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
-                            
-                            // Debug: Print first few bytes of encrypted data and key
-                            printf("UDP Listener: Encrypted data (first 16 bytes): ");
-                            for (int k = 0; k < 16 && k < (int)encrypted_len; k++) {
-                                printf("%02x ", encrypted_data[k]);
+                            if (udp_debug_enabled()) {
+                                printf("UDP Listener: Base64 decoded successfully (%zu bytes)\n", encrypted_len);
+                                
+                                // Debug: Print first few bytes of encrypted data and key
+                                printf("UDP Listener: Encrypted data (first 16 bytes): ");
+                                for (int k = 0; k < 16 && k < (int)encrypted_len; k++) {
+                                    printf("%02x ", encrypted_data[k]);
+                                }
+                                printf("\n");
+                                
+                                printf("UDP Listener: Using key (first 16 bytes): ");
+                                for (int k = 0; k < 16; k++) {
+                                    printf("%02x ", target_stream->key[k]);
+                                }
+                                printf("\n");
                             }
-                            printf("\n");
-                            
-                            printf("UDP Listener: Using key (first 16 bytes): ");
-                            for (int k = 0; k < 16; k++) {
-                                printf("%02x ", target_stream->key[k]);
+
+                            int key_is_zero = 1;
+                            if (target_index >= 0) {
+                                for (int k = 0; k < 32; k++) {
+                                    if (target_stream->key[k] != 0) {
+                                        key_is_zero = 0;
+                                        break;
+                                    }
+                                }
+                                if (!key_is_zero) {
+                                    zero_key_warned[target_index] = 0;
+                                }
                             }
-                            printf("\n");
                             
                             // Decrypt the data
                             size_t decrypted_len;
@@ -222,7 +261,9 @@ void* udp_listener_worker(void* arg) {
                                                                   target_stream->key, &decrypted_len);
                             
                             if (decrypted) {
-                                printf("UDP Listener: Data decrypted successfully (%zu bytes)\n", decrypted_len);
+                                if (udp_debug_enabled()) {
+                                    printf("UDP Listener: Data decrypted successfully (%zu bytes)\n", decrypted_len);
+                                }
                                 
                                 // Decode Opus audio
                                 short pcm_data[1920];
@@ -230,17 +271,19 @@ void* udp_listener_worker(void* arg) {
                                                         pcm_data, 1920, 0);
                                 
                                 if (samples > 0) {
-                                    printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
-                                    
-                                    // Debug: Check audio levels
-                                    short max_sample = 0;
-                                    for (int s = 0; s < samples; s++) {
-                                        if (abs(pcm_data[s]) > max_sample) {
-                                            max_sample = abs(pcm_data[s]);
+                                    if (udp_debug_enabled()) {
+                                        printf("UDP Listener: Opus decoded successfully (%d samples)\n", samples);
+                                        
+                                        // Debug: Check audio levels
+                                        short max_sample = 0;
+                                        for (int s = 0; s < samples; s++) {
+                                            if (abs(pcm_data[s]) > max_sample) {
+                                                max_sample = abs(pcm_data[s]);
+                                            }
                                         }
+                                        printf("UDP Listener: Audio level check - max sample: %d (%.2f%%)\n", 
+                                               max_sample, (float)max_sample / 32767.0f * 100.0f);
                                     }
-                                    printf("UDP Listener: Audio level check - max sample: %d (%.2f%%)\n", 
-                                           max_sample, (float)max_sample / 32767.0f * 100.0f);
                                     
                                     // Add audio frame to jitter buffer
                                     struct jitter_buffer *jitter = &target_stream->output_jitter;
@@ -268,14 +311,15 @@ void* udp_listener_worker(void* arg) {
                                         frame->sample_count = samples;
                                         frame->valid = 1;
                                         
-                                        printf("UDP: Audio frame queued for %s - %d samples, max level: %.4f\n", 
-                                               channel_id, samples, max_sample);
-                                        
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
                                         
-                                        printf("UDP: Audio queued for %s (buffer=%d)\n", 
-                                               channel_id, jitter->frame_count);
+                                        if (udp_debug_enabled()) {
+                                            printf("UDP: Audio frame queued for %s - %d samples, max level: %.4f\n", 
+                                                   channel_id, samples, max_sample);
+                                            printf("UDP: Audio queued for %s (buffer=%d)\n", 
+                                                   channel_id, jitter->frame_count);
+                                        }
                                     } else {
                                         // Buffer full, drop oldest frame and add new one
                                         jitter->read_index = (jitter->read_index + 1) % JITTER_BUFFER_SIZE;
@@ -302,7 +346,16 @@ void* udp_listener_worker(void* arg) {
                                         jitter->write_index = (jitter->write_index + 1) % JITTER_BUFFER_SIZE;
                                         jitter->frame_count++;
                                         
-                                        printf("UDP: Buffer full, dropped frame for %s\n", channel_id);
+                                        if (udp_debug_enabled()) {
+                                            printf("UDP: Buffer full, dropped frame for %s\n", channel_id);
+                                        } else if (target_index >= 0) {
+                                            jitter_drop_count[target_index]++;
+                                            if (jitter_drop_count[target_index] == 1 ||
+                                                jitter_drop_count[target_index] % 100 == 0) {
+                                                printf("UDP: Buffer full for %s (drops=%lu)\n",
+                                                       channel_id, jitter_drop_count[target_index]);
+                                            }
+                                        }
                                     }
                                     
                                     pthread_mutex_unlock(&jitter->mutex);
@@ -312,17 +365,40 @@ void* udp_listener_worker(void* arg) {
                                 
                                 free(decrypted);
                             } else {
-                                printf("UDP Listener: Decryption failed\n");
+                                if (key_is_zero && target_index >= 0) {
+                                    if (!zero_key_warned[target_index]) {
+                                        printf("UDP Listener: AES key not set for channel %s; dropping encrypted audio until key is provisioned\n",
+                                               channel_id);
+                                        zero_key_warned[target_index] = 1;
+                                    }
+                                } else {
+                                    if (target_index >= 0) {
+                                        decrypt_fail_count[target_index]++;
+                                        if (udp_debug_enabled() ||
+                                            decrypt_fail_count[target_index] == 1 ||
+                                            decrypt_fail_count[target_index] % 50 == 0) {
+                                            printf("UDP Listener: Decryption failed for channel %s\n", channel_id);
+                                        }
+                                    } else {
+                                        printf("UDP Listener: Decryption failed\n");
+                                    }
+                                }
                             }
                         } else {
-                            printf("UDP Listener: Base64 decode failed\n");
+                            if (udp_debug_enabled()) {
+                                printf("UDP Listener: Base64 decode failed\n");
+                            }
                         }
                     }
                 } else {
-                    printf("UDP Listener: Non-audio message type '%s', ignoring\n", type);
+                    if (udp_debug_enabled()) {
+                        printf("UDP Listener: Non-audio message type '%s', ignoring\n", type);
+                    }
                 }
             } else {
-                printf("UDP Listener: JSON missing required fields (channel_id, type, data)\n");
+                if (udp_debug_enabled()) {
+                    printf("UDP Listener: JSON missing required fields (channel_id, type, data)\n");
+                }
             }
             
             json_object_put(json);
