@@ -80,9 +80,20 @@ sudo apt install -y libc6-dev
 # Install AWS CLI (via pip for latest features)
 print_status "Installing AWS CLI..."
 if ! command -v aws >/dev/null 2>&1; then
-    sudo apt install -y python3-pip
-    python3 -m pip install --upgrade pip
-    python3 -m pip install awscli
+    if sudo apt install -y awscli; then
+        print_success "AWS CLI installed via apt"
+    else
+        print_warning "apt install awscli failed; attempting install via python virtual environment"
+        sudo apt install -y python3-venv python3-pip
+        AWS_VENV="$HOME/.local/share/awscli-venv"
+        python3 -m venv "$AWS_VENV"
+        source "$AWS_VENV/bin/activate"
+        python -m pip install --upgrade pip
+        python -m pip install awscli
+        deactivate
+        ln -sf "$AWS_VENV/bin/aws" "$HOME/.local/bin/aws"
+        print_success "AWS CLI installed in virtual environment"
+    fi
 else
     print_success "AWS CLI already installed"
 fi
