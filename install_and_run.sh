@@ -77,6 +77,16 @@ sudo apt install -y libwebsockets-dev
 print_status "Ensuring pthread support..."
 sudo apt install -y libc6-dev
 
+# Install AWS CLI (via pip for latest features)
+print_status "Installing AWS CLI..."
+if ! command -v aws >/dev/null 2>&1; then
+    sudo apt install -y python3-pip
+    python3 -m pip install --upgrade pip
+    python3 -m pip install awscli
+else
+    print_success "AWS CLI already installed"
+fi
+
 # Install GPIO utilities for RPi 5
 print_status "Installing GPIO utilities for RPi 5..."
 sudo apt install -y raspi-gpio gpiod libgpiod-dev

@@ -255,6 +255,9 @@ int initialize_audio_devices(void) {
     system("pkill -f arecord 2>/dev/null || true");
     system("pkill -f aplay 2>/dev/null || true");
 
+    // Ensure PulseAudio daemon is running for shared output access
+    system("pulseaudio --check 2>/dev/null || pulseaudio --start 2>/dev/null || true");
+
     // Wait a moment for processes to terminate
     usleep(500000); // 500ms
 
@@ -975,38 +978,62 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     
     // Setup output stream for other channels
     // Use the assigned device for this channel to avoid conflicts
-    output_params.device = audio_stream->device_index;
+    int is_passthrough_target = is_configured_passthrough_channel_id(audio_stream->channel_id);
+    PaDeviceIndex preferred_output = audio_stream->device_index;
+    if (is_passthrough_target) {
+        PaDeviceIndex default_device = Pa_GetDefaultOutputDevice();
+        if (default_device != paNoDevice) {
+            preferred_output = default_device;
+        } else {
+            // Fall back to any device with output channels
+            int device_count = Pa_GetDeviceCount();
+            for (int i = 0; i < device_count; i++) {
+                const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+                if (info && info->maxOutputChannels > 0) {
+                    preferred_output = i;
+                    break;
+                }
+            }
+        }
+        printf("[DEBUG] Passthrough target %s preferring output device %d\n",
+               audio_stream->channel_id, (int)preferred_output);
+    }
+    output_params.device = preferred_output;
     output_params.channelCount = 1;
     
     // Check if this device is already in use by another channel
     static int used_devices[MAX_CHANNELS] = {-1, -1, -1, -1};
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (used_devices[i] == output_params.device) {
-            printf("[DEBUG] Device %d already in use, trying next available device\n", output_params.device);
-            // Try to find an unused device
-            for (int j = 0; j < Pa_GetDeviceCount(); j++) {
-                int device_in_use = 0;
-                for (int k = 0; k < MAX_CHANNELS; k++) {
-                    if (used_devices[k] == j) {
-                        device_in_use = 1;
+    if (!is_passthrough_target) {
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            if (used_devices[i] == output_params.device) {
+                printf("[DEBUG] Device %d already in use, trying next available device\n", output_params.device);
+                // Try to find an unused device
+                for (int j = 0; j < Pa_GetDeviceCount(); j++) {
+                    int device_in_use = 0;
+                    for (int k = 0; k < MAX_CHANNELS; k++) {
+                        if (used_devices[k] == j) {
+                            device_in_use = 1;
+                            break;
+                        }
+                    }
+                    if (!device_in_use) {
+                        output_params.device = j;
+                        printf("[DEBUG] Switching to unused device %d\n", j);
                         break;
                     }
                 }
-                if (!device_in_use) {
-                    output_params.device = j;
-                    printf("[DEBUG] Switching to unused device %d\n", j);
-                    break;
-                }
+                break;
             }
-            break;
         }
     }
     
     // Mark this device as used
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        if (used_devices[i] == -1) {
-            used_devices[i] = output_params.device;
-            break;
+    if (!is_passthrough_target) {
+        for (int i = 0; i < MAX_CHANNELS; i++) {
+            if (used_devices[i] == -1) {
+                used_devices[i] = output_params.device;
+                break;
+            }
         }
     }
     output_params.sampleFormat = paFloat32;
