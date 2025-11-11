@@ -254,6 +254,14 @@ int initialize_audio_devices(void) {
     system("pkill -f audio 2>/dev/null || true");
     system("pkill -f arecord 2>/dev/null || true");
     system("pkill -f aplay 2>/dev/null || true");
+    
+    // Kill processes using ALSA devices directly
+    printf("[AUDIO INIT] Killing processes using ALSA devices...\n");
+    system("fuser -k /dev/snd/* 2>/dev/null || true");
+    system("lsof -t /dev/snd/* 2>/dev/null | xargs kill -9 2>/dev/null || true");
+    
+    // Wait for processes to fully terminate
+    usleep(300000); // 300ms
 
     // Ensure PulseAudio daemon is running for shared output access
     system("pulseaudio --check 2>/dev/null || pulseaudio --start 2>/dev/null || true");
@@ -612,14 +620,20 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
             pthread_mutex_lock(&global_shared_buffer.mutex);
             
             if (global_shared_buffer.valid && global_shared_buffer.sample_count > 0) {
-                // Copy actual input audio from shared buffer to output
+                // Copy actual input audio from shared buffer to output with gain boost
                 unsigned long samples_to_copy = frames;
                 if (samples_to_copy > (unsigned long)global_shared_buffer.sample_count) {
                     samples_to_copy = global_shared_buffer.sample_count;
                 }
                 
+                // Apply gain boost for passthrough audio (make it louder and clearer)
+                const float passthrough_gain = 15.0f; // 15x gain for passthrough
                 for (unsigned long i = 0; i < samples_to_copy; i++) {
-                    out[i] = global_shared_buffer.samples[i];
+                    float sample = global_shared_buffer.samples[i] * passthrough_gain;
+                    // Clamp to prevent distortion
+                    if (sample > 1.0f) sample = 1.0f;
+                    if (sample < -1.0f) sample = -1.0f;
+                    out[i] = sample;
                 }
                 
                 // If we need more samples, repeat the last samples or fill with silence
@@ -680,9 +694,14 @@ int audio_output_callback(const void *input, void *output, unsigned long frames,
                     frames_to_copy = (unsigned long)remaining_in_frame;
                 }
                 
-                // Copy samples from current frame
+                // Copy samples from current frame with gain boost for clarity
+                const float output_gain = 1.5f; // 1.5x gain for EchoStream output (already has 10x from UDP)
                 for (unsigned long i = 0; i < frames_to_copy; i++) {
-                    out[frames_filled + i] = current_frame->samples[audio_stream->current_output_frame_pos + i];
+                    float sample = current_frame->samples[audio_stream->current_output_frame_pos + i] * output_gain;
+                    // Clamp to prevent distortion
+                    if (sample > 1.0f) sample = 1.0f;
+                    if (sample < -1.0f) sample = -1.0f;
+                    out[frames_filled + i] = sample;
                 }
                 
                 frames_filled += frames_to_copy;
@@ -996,6 +1015,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     input_params.suggestedLatency = input_device_info->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
 
+    // Kill any processes using ALSA devices before opening
+    // Try to kill processes on all possible ALSA capture devices
+    printf("[DEBUG] Killing processes using ALSA capture devices...\n");
+    system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
+    system("fuser -k /dev/snd/controlC* 2>/dev/null || true");
+    usleep(100000); // 100ms delay after killing processes
+    
     // Retry logic for opening input stream (ALSA devices sometimes need a moment)
     PaError err = paNoError;
     int max_retries = 3;
@@ -1007,6 +1033,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                    retry, max_retries, retry_delay_ms);
             usleep(retry_delay_ms * 1000);
             retry_delay_ms *= 2; // Exponential backoff
+            
+            // Try killing processes again on retry
+            system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
+            usleep(50000); // 50ms
         }
         
         printf("[DEBUG] Attempting to open input stream (attempt %d/%d)...\n", 
@@ -1027,7 +1057,8 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         if (err == paDeviceUnavailable) {
             printf("[WARNING] Device %d unavailable, checking for conflicting streams...\n",
                    (int)input_params.device);
-            // PortAudio should handle this, but we log it
+            // Try killing processes again
+            system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
         }
     }
     

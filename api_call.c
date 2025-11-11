@@ -1560,8 +1560,8 @@ void* udp_listener_worker(void* arg) {
                                         float max_sample = 0.0f;
                                         for (int j = 0; j < samples && j < SAMPLES_PER_FRAME; j++) {
                                             float sample = (float)pcm_data[j] / 32767.0f;
-                                            // Apply 10x gain boost for very quiet audio
-                                            sample *= 10.0f;
+                                            // Apply 20x gain boost for louder, clearer audio
+                                            sample *= 20.0f;
                                             // Clamp to prevent distortion
                                             if (sample > 1.0f) sample = 1.0f;
                                             if (sample < -1.0f) sample = -1.0f;
