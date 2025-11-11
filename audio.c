@@ -257,8 +257,8 @@ int initialize_audio_devices(void) {
     
     // Kill processes using ALSA devices directly
     printf("[AUDIO INIT] Killing processes using ALSA devices...\n");
-    system("fuser -k /dev/snd/* 2>/dev/null || true");
-    system("lsof -t /dev/snd/* 2>/dev/null | xargs kill -9 2>/dev/null || true");
+    system("fuser -k /dev/snd/* >/dev/null 2>&1 || true");
+    system("lsof -t /dev/snd/* 2>/dev/null | xargs kill -9 >/dev/null 2>&1 || true");
     
     // Wait for processes to fully terminate
     usleep(300000); // 300ms
@@ -1015,13 +1015,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     input_params.suggestedLatency = input_device_info->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
 
-    // Kill any processes using ALSA devices before opening
-    // Try to kill processes on all possible ALSA capture devices
-    printf("[DEBUG] Killing processes using ALSA capture devices...\n");
-    system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
-    system("fuser -k /dev/snd/controlC* 2>/dev/null || true");
-    usleep(100000); // 100ms delay after killing processes
-    
     // Retry logic for opening input stream (ALSA devices sometimes need a moment)
     PaError err = paNoError;
     int max_retries = 3;
@@ -1033,10 +1026,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                    retry, max_retries, retry_delay_ms);
             usleep(retry_delay_ms * 1000);
             retry_delay_ms *= 2; // Exponential backoff
-            
-            // Try killing processes again on retry
-            system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
-            usleep(50000); // 50ms
         }
         
         printf("[DEBUG] Attempting to open input stream (attempt %d/%d)...\n", 
@@ -1051,14 +1040,6 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
             printf("[DEBUG] Successfully opened input stream on device %d\n", 
                    (int)input_params.device);
             break;
-        }
-        
-        // If device is unavailable, try to close any existing streams on this device
-        if (err == paDeviceUnavailable) {
-            printf("[WARNING] Device %d unavailable, checking for conflicting streams...\n",
-                   (int)input_params.device);
-            // Try killing processes again
-            system("fuser -k /dev/snd/pcmC*D*c 2>/dev/null || true");
         }
     }
     
