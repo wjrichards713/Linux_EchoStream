@@ -293,6 +293,13 @@ int initialize_audio_devices(void) {
         pclose(fp);
     }
 
+    // Wait longer for ALSA devices to be fully ready after module reload
+    printf("[AUDIO INIT] Waiting for ALSA devices to stabilize...\n");
+    usleep(1500000); // 1.5 seconds - ALSA devices need time after module reload
+    
+    // Note: PortAudio should already be initialized by initialize_portaudio()
+    // We don't need to re-initialize it, just wait for devices to be ready
+    
     // Verify PortAudio can see all devices
     printf("[AUDIO INIT] Verifying PortAudio device enumeration...\n");
     int device_count = Pa_GetDeviceCount();
@@ -305,6 +312,10 @@ int initialize_audio_devices(void) {
                    i, device_info->name, device_info->maxInputChannels, device_info->maxOutputChannels);
         }
     }
+    
+    // Additional wait to ensure devices are fully ready
+    printf("[AUDIO INIT] Final device readiness check...\n");
+    usleep(500000); // 500ms
 
     printf("[AUDIO INIT] Audio device initialization completed\n");
     return 1;
@@ -961,18 +972,73 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         return 0;
     }
     
+    // Validate device before attempting to open
+    const PaDeviceInfo* input_device_info = Pa_GetDeviceInfo(input_params.device);
+    if (!input_device_info) {
+        fprintf(stderr, "Invalid device index %d for channel %s\n", 
+                (int)input_params.device, audio_stream->channel_id);
+        return 0;
+    }
+    
+    if (input_device_info->maxInputChannels == 0) {
+        fprintf(stderr, "Device %d (%s) does not support input for channel %s\n",
+                (int)input_params.device, input_device_info->name, audio_stream->channel_id);
+        return 0;
+    }
+    
+    printf("[DEBUG] Opening input stream on device %d (%s) for channel %s\n",
+           (int)input_params.device, input_device_info->name, audio_stream->channel_id);
+    printf("[DEBUG] Device capabilities: maxInputChannels=%d, maxOutputChannels=%d\n",
+           input_device_info->maxInputChannels, input_device_info->maxOutputChannels);
+    
     input_params.channelCount = 1;
     input_params.sampleFormat = paFloat32;
-    input_params.suggestedLatency = Pa_GetDeviceInfo(input_params.device)->defaultLowInputLatency;
+    input_params.suggestedLatency = input_device_info->defaultLowInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
 
-    printf("[DEBUG] About to call Pa_OpenStream for input stream...\n");
-    PaError err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
-                                paClipOff, audio_input_callback, audio_stream);
-    printf("[DEBUG] Pa_OpenStream for input stream returned: %s\n", Pa_GetErrorText(err));
+    // Retry logic for opening input stream (ALSA devices sometimes need a moment)
+    PaError err = paNoError;
+    int max_retries = 3;
+    int retry_delay_ms = 200;
+    
+    for (int retry = 0; retry < max_retries; retry++) {
+        if (retry > 0) {
+            printf("[DEBUG] Retry %d/%d: Waiting %dms before retry...\n", 
+                   retry, max_retries, retry_delay_ms);
+            usleep(retry_delay_ms * 1000);
+            retry_delay_ms *= 2; // Exponential backoff
+        }
+        
+        printf("[DEBUG] Attempting to open input stream (attempt %d/%d)...\n", 
+               retry + 1, max_retries);
+        
+        err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024, 
+                            paClipOff, audio_input_callback, audio_stream);
+        
+        printf("[DEBUG] Pa_OpenStream returned: %s\n", Pa_GetErrorText(err));
+        
+        if (err == paNoError) {
+            printf("[DEBUG] Successfully opened input stream on device %d\n", 
+                   (int)input_params.device);
+            break;
+        }
+        
+        // If device is unavailable, try to close any existing streams on this device
+        if (err == paDeviceUnavailable) {
+            printf("[WARNING] Device %d unavailable, checking for conflicting streams...\n",
+                   (int)input_params.device);
+            // PortAudio should handle this, but we log it
+        }
+    }
     
     if (err != paNoError) {
-        fprintf(stderr, "PortAudio input stream error: %s\n", Pa_GetErrorText(err));
+        fprintf(stderr, "PortAudio input stream error after %d attempts: %s\n", 
+                max_retries, Pa_GetErrorText(err));
+        fprintf(stderr, "Device %d (%s) may be in use or not properly configured\n",
+                (int)input_params.device, input_device_info->name);
+        
+        // Try to provide helpful diagnostic info
+        printf("[DEBUG] Diagnostic: Check if device is in use with 'lsof | grep snd' or 'fuser /dev/snd/*'\n");
         return 0;
     }
     
