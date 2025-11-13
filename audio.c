@@ -1173,26 +1173,33 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         fprintf(stderr, "PortAudio output stream error: %s\n", Pa_GetErrorText(err));
         printf("[DEBUG] Failed to create output stream for channel %s on device %d\n", audio_stream->channel_id, output_params.device);
         
-        // Check if this is a device conflict (device already in use)
-        if (err == paDeviceUnavailable) {
-            printf("[DEBUG] Device %d is unavailable (likely in use by another channel)\n", output_params.device);
-        }
+        // Ensure output_stream is NULL if it failed
+        audio_stream->output_stream = NULL;
         
-        // Try alternative approaches for devices that fail with standard parameters
-        printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
-        
-        // Try with different buffer sizes and sample rates
-        int buffer_sizes[] = {512, 256, 1024, 2048};
-        int sample_rates[] = {44100, 48000, 22050};
-        
-        for (int i = 0; i < 3 && err != paNoError; i++) {
-            for (int j = 0; j < 4 && err != paNoError; j++) {
-                printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
-                err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, sample_rates[i], buffer_sizes[j],
-                            paClipOff, audio_output_callback, audio_stream);
-                if (err == paNoError) {
-                    printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
-                    break;
+        // Check if this is a device conflict (device already in use) or simultaneous I/O issue
+        if (err == paDeviceUnavailable || err == paUnanticipatedHostError) {
+            printf("[DEBUG] Device %d may not support simultaneous input+output, trying different output device\n", output_params.device);
+            // Don't try alternative parameters on same device - try different device instead
+        } else {
+            // Try alternative approaches for devices that fail with standard parameters
+            printf("[DEBUG] Device %d failed, trying alternative parameters\n", output_params.device);
+            
+            // Try with different buffer sizes and sample rates
+            int buffer_sizes[] = {512, 256, 1024, 2048};
+            int sample_rates[] = {44100, 48000, 22050};
+            
+            for (int i = 0; i < 3 && err != paNoError; i++) {
+                for (int j = 0; j < 4 && err != paNoError; j++) {
+                    printf("[DEBUG] Trying device %d with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
+                    err = Pa_OpenStream(&audio_stream->output_stream, NULL, &output_params, sample_rates[i], buffer_sizes[j],
+                                paClipOff, audio_output_callback, audio_stream);
+                    if (err == paNoError) {
+                        printf("[DEBUG] Device %d succeeded with sample_rate=%d, buffer_size=%d\n", output_params.device, sample_rates[i], buffer_sizes[j]);
+                        break;
+                    } else {
+                        // Ensure stream is NULL on failure
+                        audio_stream->output_stream = NULL;
+                    }
                 }
             }
         }
@@ -1217,10 +1224,13 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                  } else {
                      printf("[DEBUG] Default device %d also failed for channel %s: %s\n", 
                             (int)defOut, audio_stream->channel_id, Pa_GetErrorText(err));
+                     audio_stream->output_stream = NULL;
                  }
              }
          }
     if (err != paNoError) {
+        // Ensure output_stream is NULL
+        audio_stream->output_stream = NULL;
             printf("WARNING: Output stream failed for channel %s (device %d), trying alternative output devices\n",
                    audio_stream->channel_id, audio_stream->device_index);
 
@@ -1236,6 +1246,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                     printf("[DEBUG] Successfully opened last channel output on Device 0\n");
                 } else {
                     printf("[DEBUG] Device 0 also failed for last channel: %s\n", Pa_GetErrorText(err));
+                    audio_stream->output_stream = NULL;
                 }
             }
 
@@ -1254,6 +1265,7 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                         break;
                     } else {
                         printf("[DEBUG] Alternative device %d also failed: %s\n", usb_devices[i], Pa_GetErrorText(err));
+                        audio_stream->output_stream = NULL;
                     }
                 }
             }
@@ -1277,34 +1289,29 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
                             break;
                         } else {
                             printf("[DEBUG] Device %d (%s) also failed: %s\n", i, device_info->name, Pa_GetErrorText(err));
+                            audio_stream->output_stream = NULL;
                         }
                     }
                 }
             }
             
-            // If all USB devices failed, try input-only mode as last resort
+            // If all output devices failed, use input-only mode (no output)
             if (err != paNoError) {
-                printf("WARNING: All output devices failed for channel %s, trying input-only mode\n",
+                printf("WARNING: All output devices failed for channel %s, running in input-only mode (no audio output)\n",
                        audio_stream->channel_id);
-
-                // Try input-only mode as fallback
-                Pa_CloseStream(audio_stream->input_stream);
-                audio_stream->input_stream = NULL;
-
-                // Reopen input stream
-                err = Pa_OpenStream(&audio_stream->input_stream, &input_params, NULL, 48000, 1024,
-                                    paClipOff, audio_input_callback, audio_stream);
-
-                if (err != paNoError) {
-                    fprintf(stderr, "PortAudio input-only mode also failed: %s\n", Pa_GetErrorText(err));
-                    return 0;
-                }
-
+                
+                // Keep input stream open, just don't have output
+                // This is acceptable - channel can still capture and transmit audio
+                audio_stream->output_stream = NULL;
+                
                 // Start input stream only
                 err = Pa_StartStream(audio_stream->input_stream);
                 if (err != paNoError) {
                     fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-                    Pa_CloseStream(audio_stream->input_stream);
+                    if (audio_stream->input_stream) {
+                        Pa_CloseStream(audio_stream->input_stream);
+                        audio_stream->input_stream = NULL;
+                    }
                     return 0;
                 }
 
@@ -1327,37 +1334,63 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
         }
     }
     
-    // Start both streams
+    // Start both streams (only if both exist)
     err = Pa_StartStream(audio_stream->input_stream);
     if (err != paNoError) {
         fprintf(stderr, "PortAudio input start error: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(audio_stream->input_stream);
-        Pa_CloseStream(audio_stream->output_stream);
+        if (audio_stream->input_stream) {
+            Pa_CloseStream(audio_stream->input_stream);
+            audio_stream->input_stream = NULL;
+        }
+        if (audio_stream->output_stream) {
+            Pa_CloseStream(audio_stream->output_stream);
+            audio_stream->output_stream = NULL;
+        }
         return 0;
     }
 
+    // Only start output stream if it was successfully opened
+    if (audio_stream->output_stream) {
         err = Pa_StartStream(audio_stream->output_stream);
-    if (err != paNoError) {
+        if (err != paNoError) {
             fprintf(stderr, "PortAudio output start error: %s\n", Pa_GetErrorText(err));
-            Pa_CloseStream(audio_stream->input_stream);
-            Pa_CloseStream(audio_stream->output_stream);
+            if (audio_stream->input_stream) {
+                Pa_StopStream(audio_stream->input_stream);
+                Pa_CloseStream(audio_stream->input_stream);
+                audio_stream->input_stream = NULL;
+            }
+            if (audio_stream->output_stream) {
+                Pa_CloseStream(audio_stream->output_stream);
+                audio_stream->output_stream = NULL;
+            }
             return 0;
+        }
+    } else {
+        printf("WARNING: Channel %s has no output stream - running in input-only mode\n", audio_stream->channel_id);
     }
     
     // Check if streams are actually running
-    if (Pa_IsStreamActive(audio_stream->input_stream)) {
+    if (audio_stream->input_stream && Pa_IsStreamActive(audio_stream->input_stream)) {
         printf("Input stream is active for channel %s\n", audio_stream->channel_id);
     } else {
         printf("WARNING: Input stream is NOT active for channel %s\n", audio_stream->channel_id);
     }
     
-    if (Pa_IsStreamActive(audio_stream->output_stream)) {
+    if (audio_stream->output_stream && Pa_IsStreamActive(audio_stream->output_stream)) {
         printf("Output stream is active for channel %s\n", audio_stream->channel_id);
     } else {
-        printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        if (audio_stream->output_stream) {
+            printf("WARNING: Output stream is NOT active for channel %s\n", audio_stream->channel_id);
+        } else {
+            printf("INFO: Channel %s running in input-only mode (no output stream)\n", audio_stream->channel_id);
+        }
     }
 
-        printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+        if (audio_stream->output_stream) {
+            printf("Audio transmission started for channel %s (input + output)\n", audio_stream->channel_id);
+        } else {
+            printf("Audio transmission started for channel %s (input only)\n", audio_stream->channel_id);
+        }
     
     // Special debug for the last channel
     extern int global_channel_count;
@@ -1365,9 +1398,10 @@ int start_transmission_for_channel(struct audio_stream* audio_stream) {
     int is_last_channel_debug = (global_channel_count > 0 && strcmp(audio_stream->channel_id, global_channel_ids[global_channel_count - 1]) == 0);
     
     if (is_last_channel_debug) {
+        int input_active = (audio_stream->input_stream && Pa_IsStreamActive(audio_stream->input_stream)) ? 1 : 0;
+        int output_active = (audio_stream->output_stream && Pa_IsStreamActive(audio_stream->output_stream)) ? 1 : 0;
         printf("[DEBUG] Last channel stream status: input_active=%d, output_active=%d\n", 
-               Pa_IsStreamActive(audio_stream->input_stream), 
-               Pa_IsStreamActive(audio_stream->output_stream));
+               input_active, output_active);
         printf("[DEBUG] Last channel stream pointers: input=%p, output=%p\n", 
                audio_stream->input_stream, audio_stream->output_stream);
     }
